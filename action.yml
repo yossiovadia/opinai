@@ -1,0 +1,48 @@
+name: 'OpinAI Bug Reproduction'
+description: "That's just, like, your opinion, man. Let OpinAI verify it."
+branding:
+  icon: 'search'
+  color: 'orange'
+
+inputs:
+  issue_number:
+    description: 'GitHub issue number to reproduce'
+    required: true
+  server_command:
+    description: 'Command to start the test server'
+    default: 'pip install llm-katan && llm-katan --model test --backend echo --providers openai,anthropic,vertexai,bedrock,azure_openai --port 8000'
+  server_url:
+    description: 'Server base URL'
+    default: 'http://localhost:8000'
+  wait_seconds:
+    description: 'Seconds to wait for server startup'
+    default: '10'
+  github_token:
+    description: 'GitHub token for posting comments'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: |
+        for cmd in curl jq gh; do
+          if ! command -v "$cmd" &>/dev/null; then
+            echo "::error::Required command '$cmd' not found"
+            exit 1
+          fi
+        done
+
+    - name: Reproduce bug
+      shell: bash
+      env:
+        ISSUE_NUMBER: ${{ inputs.issue_number }}
+        SERVER_COMMAND: ${{ inputs.server_command }}
+        SERVER_URL: ${{ inputs.server_url }}
+        WAIT_SECONDS: ${{ inputs.wait_seconds }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+      run: |
+        chmod +x "${{ github.action_path }}/scripts/"*.sh
+        "${{ github.action_path }}/scripts/reproduce.sh"

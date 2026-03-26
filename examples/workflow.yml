@@ -1,0 +1,25 @@
+name: OpinAI Bug Reproduction
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reproduce:
+    if: github.event.label.name == 'needs-reproduction'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run OpinAI
+        uses: yossiovadia/opinai@main
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
