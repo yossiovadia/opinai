@@ -4,7 +4,11 @@
 
 AI-powered infrastructure-level bug reproduction and validation. You *think* it's a bug? Let OpinAI verify it on real infrastructure.
 
-[**→ Watch the Demo**](https://yossiovadia.github.io/reprobot-demo/)
+<p align="center">
+  <img src="assets/demo.svg" alt="OpinAI Demo" width="800">
+</p>
+
+[**→ Watch the Full Interactive Demo**](https://yossiovadia.github.io/reprobot-demo/)
 
 ---
 

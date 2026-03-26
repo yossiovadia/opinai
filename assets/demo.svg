@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 620" width="800" height="620">
+  <style>
+    @keyframes blink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+    @keyframes line1  { 0%, 1% { opacity: 0; } 2% { opacity: 1; } }
+    @keyframes line2  { 0%, 6% { opacity: 0; } 7% { opacity: 1; } }
+    @keyframes line3  { 0%, 10% { opacity: 0; } 11% { opacity: 1; } }
+    @keyframes line4  { 0%, 13% { opacity: 0; } 14% { opacity: 1; } }
+    @keyframes line5  { 0%, 15% { opacity: 0; } 16% { opacity: 1; } }
+    @keyframes line6  { 0%, 17% { opacity: 0; } 18% { opacity: 1; } }
+    @keyframes line7  { 0%, 21% { opacity: 0; } 22% { opacity: 1; } }
+    @keyframes line8  { 0%, 24% { opacity: 0; } 25% { opacity: 1; } }
+    @keyframes line9  { 0%, 27% { opacity: 0; } 28% { opacity: 1; } }
+    @keyframes line10 { 0%, 29% { opacity: 0; } 30% { opacity: 1; } }
+    @keyframes line11 { 0%, 31% { opacity: 0; } 32% { opacity: 1; } }
+    @keyframes line12 { 0%, 34% { opacity: 0; } 35% { opacity: 1; } }
+    @keyframes line13 { 0%, 38% { opacity: 0; } 39% { opacity: 1; } }
+    @keyframes line14 { 0%, 41% { opacity: 0; } 42% { opacity: 1; } }
+    @keyframes line15 { 0%, 44% { opacity: 0; } 45% { opacity: 1; } }
+    @keyframes line16 { 0%, 47% { opacity: 0; } 48% { opacity: 1; } }
+    @keyframes line17 { 0%, 50% { opacity: 0; } 51% { opacity: 1; } }
+    @keyframes line18 { 0%, 55% { opacity: 0; } 56% { opacity: 1; } }
+    @keyframes line19 { 0%, 59% { opacity: 0; } 60% { opacity: 1; } }
+    @keyframes line20 { 0%, 63% { opacity: 0; } 64% { opacity: 1; } }
+    @keyframes line21 { 0%, 68% { opacity: 0; } 69% { opacity: 1; } }
+    @keyframes line22 { 0%, 74% { opacity: 0; } 75% { opacity: 1; } }
+    @keyframes line23 { 0%, 79% { opacity: 0; } 80% { opacity: 1; } }
+    @keyframes line24 { 0%, 85% { opacity: 0; } 86% { opacity: 1; } }
+  </style>
+  <defs>
+    <clipPath id="terminal-clip">
+      <rect x="0" y="36" width="800" height="584"/>
+    </clipPath>
+    <clipPath id="tw1">
+      <rect x="42" y="54" width="0" height="20">
+        <animate attributeName="width" values="0;0;540;540" keyTimes="0;0.013;0.06;1" dur="15s" repeatCount="indefinite"/>
+      </rect>
+    </clipPath>
+  </defs>
+
+  <!-- Terminal window frame -->
+  <rect width="800" height="620" rx="10" ry="10" fill="#0d1117"/>
+  <rect width="800" height="36" rx="10" ry="10" fill="#161b22"/>
+  <rect y="26" width="800" height="10" fill="#161b22"/>
+
+  <!-- Title bar dots -->
+  <circle cx="20" cy="18" r="6" fill="#f85149"/>
+  <circle cx="40" cy="18" r="6" fill="#e3b341"/>
+  <circle cx="60" cy="18" r="6" fill="#3fb950"/>
+
+  <!-- Title bar text -->
+  <text x="400" y="22" fill="#8b949e" font-family="'Courier New', Consolas, monospace" font-size="13" text-anchor="middle">OpinAI — Terminal</text>
+
+  <!-- Terminal border line -->
+  <line x1="0" y1="36" x2="800" y2="36" stroke="#30363d" stroke-width="1"/>
+
+  <!-- All terminal content clipped to terminal area -->
+  <g clip-path="url(#terminal-clip)">
+
+    <!-- Command line with typewriter -->
+    <g opacity="0" style="animation: line1 15s infinite">
+      <text x="18" y="68" fill="#8b949e" font-family="'Courier New', Consolas, monospace" font-size="14">$</text>
+      <g clip-path="url(#tw1)">
+        <text x="42" y="68" fill="#58a6ff" font-family="'Courier New', Consolas, monospace" font-size="14">opinai reproduce --repo vllm-project/semantic-router --issue 1448</text>
+      </g>
+    </g>
+
+    <!-- Reading issue -->
+    <g opacity="0" style="animation: line2 15s infinite">
+      <text x="18" y="100" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F50D; Reading issue #1448: <tspan fill="#e3b341">"Semantic Cache Cross-User Data Leak"</tspan></text>
+    </g>
+
+    <!-- Analysis header -->
+    <g opacity="0" style="animation: line3 15s infinite">
+      <text x="18" y="132" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F4CB; Analysis:</text>
+    </g>
+
+    <!-- Analysis details -->
+    <g opacity="0" style="animation: line4 15s infinite">
+      <text x="42" y="152" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">Type: <tspan fill="#c9d1d9">Security / Data Leak</tspan></text>
+    </g>
+    <g opacity="0" style="animation: line5 15s infinite">
+      <text x="42" y="172" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">Component: <tspan fill="#c9d1d9">Semantic Cache</tspan></text>
+    </g>
+    <g opacity="0" style="animation: line6 15s infinite">
+      <text x="42" y="192" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">Severity: <tspan fill="#f85149">P1</tspan></text>
+    </g>
+
+    <!-- Feasibility header -->
+    <g opacity="0" style="animation: line7 15s infinite">
+      <text x="18" y="224" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F527; Feasibility Check:</text>
+    </g>
+
+    <!-- Feasibility items -->
+    <g opacity="0" style="animation: line8 15s infinite">
+      <text x="42" y="244" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9"><tspan fill="#3fb950">&#x2705;</tspan> Semantic cache (in-memory)</text>
+    </g>
+    <g opacity="0" style="animation: line9 15s infinite">
+      <text x="42" y="264" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9"><tspan fill="#3fb950">&#x2705;</tspan> Embedding model (Qwen3)</text>
+    </g>
+    <g opacity="0" style="animation: line10 15s infinite">
+      <text x="42" y="284" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9"><tspan fill="#3fb950">&#x2705;</tspan> LLM endpoint (Ollama)</text>
+    </g>
+    <g opacity="0" style="animation: line11 15s infinite">
+      <text x="42" y="304" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9"><tspan fill="#3fb950">&#x2705;</tspan> User identity headers</text>
+    </g>
+    <g opacity="0" style="animation: line12 15s infinite">
+      <text x="42" y="324" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">Verdict: <tspan fill="#3fb950" font-weight="bold">FEASIBLE</tspan></text>
+    </g>
+
+    <!-- Provisioning -->
+    <g opacity="0" style="animation: line13 15s infinite">
+      <text x="18" y="356" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F680; Provisioning environment...</text>
+    </g>
+    <g opacity="0" style="animation: line14 15s infinite">
+      <text x="42" y="376" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">[1/4] Starting VSR Router........... <tspan fill="#3fb950">&#x2705;</tspan></text>
+    </g>
+    <g opacity="0" style="animation: line15 15s infinite">
+      <text x="42" y="396" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">[2/4] Starting Envoy Proxy.......... <tspan fill="#3fb950">&#x2705;</tspan></text>
+    </g>
+    <g opacity="0" style="animation: line16 15s infinite">
+      <text x="42" y="416" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">[3/4] Loading model (qwen2.5:14b)... <tspan fill="#3fb950">&#x2705;</tspan></text>
+    </g>
+    <g opacity="0" style="animation: line17 15s infinite">
+      <text x="42" y="436" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">[4/4] Semantic cache enabled........ <tspan fill="#3fb950">&#x2705;</tspan></text>
+    </g>
+
+    <!-- Reproducing -->
+    <g opacity="0" style="animation: line18 15s infinite">
+      <text x="18" y="468" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F9EA; Reproducing bug...</text>
+    </g>
+    <g opacity="0" style="animation: line19 15s infinite">
+      <text x="42" y="488" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">Step 1: Alice asks balance &#x2192; <tspan fill="#3fb950">$12,847.53</tspan> <tspan fill="#8b949e">(cache: MISS &#x2192; stored)</tspan></text>
+    </g>
+    <g opacity="0" style="animation: line20 15s infinite">
+      <text x="42" y="508" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">Step 2: Bob asks balance   &#x2192; <tspan fill="#f85149">$12,847.53</tspan> <tspan fill="#8b949e">(cache: HIT, sim=0.92)</tspan></text>
+    </g>
+
+    <!-- Bug confirmed -->
+    <g opacity="0" style="animation: line21 15s infinite">
+      <text x="42" y="536" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#f85149" font-weight="bold">&#x1F534; BUG CONFIRMED<tspan fill="#c9d1d9" font-weight="normal"> &#x2014; Bob received Alice's data</tspan></text>
+    </g>
+
+    <!-- Posted evidence -->
+    <g opacity="0" style="animation: line22 15s infinite">
+      <text x="18" y="566" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F4DD; Posted evidence to GitHub issue #1448</text>
+    </g>
+    <g opacity="0" style="animation: line23 15s infinite">
+      <text x="18" y="586" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9">&#x1F504; Added to regression suite &#x2014; will re-validate daily</text>
+    </g>
+
+    <!-- Final prompt with blinking cursor -->
+    <g opacity="0" style="animation: line24 15s infinite">
+      <text x="18" y="610" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#8b949e">$</text>
+      <text x="34" y="610" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#c9d1d9" style="animation: blink 1s step-end infinite">&#x2588;</text>
+    </g>
+
+  </g>
+</svg>
