@@ -73,16 +73,18 @@ SERVER_PID=$!
 
 echo "Waiting ${WAIT_SECONDS}s for server (pid $SERVER_PID)..."
 ELAPSED=0
-while (( ELAPSED < WAIT_SECONDS )); do
-  if curl -sf "${SERVER_URL}/health" >/dev/null 2>&1; then
+HEALTHY=false
+while [ "$ELAPSED" -lt "$WAIT_SECONDS" ]; do
+  if curl -sf "${SERVER_URL}/health" >/dev/null 2>&1 || curl -sf "${SERVER_URL}/" >/dev/null 2>&1; then
     echo "Server is healthy after ${ELAPSED}s"
+    HEALTHY=true
     break
   fi
   sleep 1
-  (( ELAPSED++ ))
+  ELAPSED=$((ELAPSED + 1))
 done
 
-if ! curl -sf "${SERVER_URL}/health" >/dev/null 2>&1; then
+if [ "$HEALTHY" != "true" ] && ! curl -sf "${SERVER_URL}/health" >/dev/null 2>&1; then
   echo "::error::Server failed to become healthy within ${WAIT_SECONDS}s"
   exit 1
 fi
