@@ -99,14 +99,32 @@ echo "::endgroup::"
 # 4. Run tests
 # ---------------------------------------------------------------------------
 export RESULTS_DIR SERVER_URL PROVIDER_FILTER TESTS_STREAMING TESTS_AUTH TESTS_TOOLS
+export ISSUE_TITLE ISSUE_BODY
 
-if [[ -n "${TEST_SCRIPT:-}" && -f "$TEST_SCRIPT" ]]; then
-  echo "::group::Running custom test script: $TEST_SCRIPT"
-  chmod +x "$TEST_SCRIPT"
-  "$TEST_SCRIPT"
+if [[ -n "${AI_API_KEY:-}" ]]; then
+  echo "::group::AI-powered analysis"
+  AI_SCRIPT="$("$SCRIPT_DIR/ai_analyze.sh")" || true
+  if [[ -n "${AI_SCRIPT:-}" && -f "$AI_SCRIPT" ]]; then
+    echo "AI generated custom test script"
+    export AI_ANALYSIS_USED=true
+    chmod +x "$AI_SCRIPT"
+    "$AI_SCRIPT"
+  else
+    echo "::warning::AI analysis failed, falling back to deterministic tests"
+    export AI_ANALYSIS_USED=false
+    "$SCRIPT_DIR/test_providers.sh"
+  fi
   echo "::endgroup::"
 else
-  "$SCRIPT_DIR/test_providers.sh"
+  export AI_ANALYSIS_USED=false
+  if [[ -n "${TEST_SCRIPT:-}" && -f "$TEST_SCRIPT" ]]; then
+    echo "::group::Running custom test script: $TEST_SCRIPT"
+    chmod +x "$TEST_SCRIPT"
+    "$TEST_SCRIPT"
+    echo "::endgroup::"
+  else
+    "$SCRIPT_DIR/test_providers.sh"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

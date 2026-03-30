@@ -26,6 +26,18 @@ inputs:
     description: 'Path to a custom test script (overrides built-in tests)'
     required: false
     default: ''
+  ai_api_key:
+    description: 'API key for AI-powered analysis (OpenAI, Anthropic, or compatible). Optional — falls back to deterministic tests without it.'
+    required: false
+    default: ''
+  ai_model:
+    description: 'AI model to use for analysis'
+    required: false
+    default: 'claude-sonnet-4-20250514'
+  ai_base_url:
+    description: 'Base URL for AI API (for custom/self-hosted endpoints)'
+    required: false
+    default: 'https://api.anthropic.com'
   github_token:
     description: 'GitHub token for posting comments on issues'
     required: true
@@ -59,6 +71,9 @@ runs:
         SERVER_URL: ${{ inputs.server_url }}
         WAIT_SECONDS: ${{ inputs.wait_seconds }}
         TEST_SCRIPT: ${{ inputs.test_script }}
+        AI_API_KEY: ${{ inputs.ai_api_key }}
+        AI_MODEL: ${{ inputs.ai_model }}
+        AI_BASE_URL: ${{ inputs.ai_base_url }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |

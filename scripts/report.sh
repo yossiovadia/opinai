@@ -72,10 +72,17 @@ fi
 # Compose the comment
 # ---------------------------------------------------------------------------
 
+if [[ "${AI_ANALYSIS_USED:-false}" == "true" ]]; then
+  ANALYSIS_NOTE="**Analysis:** AI-powered (model: ${AI_MODEL:-claude-sonnet-4-20250514})"
+else
+  ANALYSIS_NOTE="**Analysis:** Deterministic protocol tests"
+fi
+
 COMMENT="## 🎳 OpinAI — Bug Reproduction Report
 
 **Issue:** #${ISSUE_NUMBER}
 **Server:** llm-katan (echo mode)
+${ANALYSIS_NOTE}
 **Timestamp:** ${TIMESTAMP}
 
 ### Results
