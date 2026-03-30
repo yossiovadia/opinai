@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opinai-controller
+  namespace: opinai
+subjects:
+  - kind: ServiceAccount
+    name: opinai-controller
+    namespace: opinai
+roleRef:
+  kind: Role
+  name: opinai-controller
+  apiGroup: rbac.authorization.k8s.io

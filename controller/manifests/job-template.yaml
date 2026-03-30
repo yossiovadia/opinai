@@ -1,0 +1,37 @@
+# This template is read by opinai_controller.py and filled in per-issue.
+# Do NOT apply this directly — the controller creates Jobs programmatically.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "opinai-{repo_safe}-{issue_number}"
+  namespace: opinai
+  labels:
+    app: opinai-runner
+    opinai/repo: "{repo_safe}"
+    opinai/issue: "{issue_number}"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      serviceAccountName: opinai-controller
+      restartPolicy: Never
+      containers:
+        - name: runner
+          image: opinai-controller:latest
+          command: ["python", "opinai_runner.py"]
+          env:
+            - name: REPO
+              value: "{repo}"
+            - name: ISSUE_NUMBER
+              value: "{issue_number}"
+          envFrom:
+            - secretRef:
+                name: opinai-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
