@@ -361,11 +361,12 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
     # Build env with pip bin dirs on PATH
     env = os.environ.copy()
     pip_bin = os.path.dirname(shutil.which("python3") or "/usr/local/bin/python3")
-    env["PATH"] = f"/usr/local/bin:/root/.local/bin:{pip_bin}:{env.get('PATH', '')}"
+    env["PYTHONUSERBASE"] = "/tmp/pip-user"
+    env["PATH"] = f"/tmp/pip-user/bin:/usr/local/bin:/root/.local/bin:{pip_bin}:{env.get('PATH', '')}"
 
-    # Install / build (use python3 -m pip for pip commands)
+    # Install / build (use python3 -m pip for pip commands, --user for writable install)
     if build_cmd:
-        resolved_build_cmd = build_cmd.replace("pip install", "python3 -m pip install")
+        resolved_build_cmd = build_cmd.replace("pip install", "python3 -m pip install --user")
         log.info("Installing: %s", resolved_build_cmd)
         result = subprocess.run(
             resolved_build_cmd,
