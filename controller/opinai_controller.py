@@ -119,6 +119,20 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
 
     repo_safe = repo.replace("/", "-").lower()
 
+    # Volume + mount for GCP credentials (used when AI_PROVIDER=vertex)
+    gcp_volume = client.V1Volume(
+        name="gcp-credentials",
+        secret=client.V1SecretVolumeSource(
+            secret_name="opinai-gcp-credentials",
+            optional=True,
+        ),
+    )
+    gcp_mount = client.V1VolumeMount(
+        name="gcp-credentials",
+        mount_path="/var/run/secrets/gcp",
+        read_only=True,
+    )
+
     job_manifest = client.V1Job(
         api_version="batch/v1",
         kind="Job",
@@ -138,6 +152,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                 spec=client.V1PodSpec(
                     service_account_name="opinai-controller",
                     restart_policy="Never",
+                    volumes=[gcp_volume],
                     containers=[
                         client.V1Container(
                             name="runner",
@@ -148,6 +163,50 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                 client.V1EnvVar(
                                     name="ISSUE_NUMBER", value=str(number)
                                 ),
+                                client.V1EnvVar(
+                                    name="GOOGLE_APPLICATION_CREDENTIALS",
+                                    value="/var/run/secrets/gcp/credentials.json",
+                                ),
+                                client.V1EnvVar(
+                                    name="AI_PROVIDER",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="opinai-credentials",
+                                            key="AI_PROVIDER",
+                                            optional=True,
+                                        )
+                                    ),
+                                ),
+                                client.V1EnvVar(
+                                    name="AI_PROJECT",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="opinai-credentials",
+                                            key="AI_PROJECT",
+                                            optional=True,
+                                        )
+                                    ),
+                                ),
+                                client.V1EnvVar(
+                                    name="AI_REGION",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="opinai-credentials",
+                                            key="AI_REGION",
+                                            optional=True,
+                                        )
+                                    ),
+                                ),
+                                client.V1EnvVar(
+                                    name="AI_MODEL",
+                                    value_from=client.V1EnvVarSource(
+                                        secret_key_ref=client.V1SecretKeySelector(
+                                            name="opinai-credentials",
+                                            key="AI_MODEL",
+                                            optional=True,
+                                        )
+                                    ),
+                                ),
                             ],
                             env_from=[
                                 client.V1EnvFromSource(
@@ -156,6 +215,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                     )
                                 )
                             ],
+                            volume_mounts=[gcp_mount],
                             resources=client.V1ResourceRequirements(
                                 requests={"cpu": "100m", "memory": "256Mi"},
                                 limits={"cpu": "500m", "memory": "512Mi"},

@@ -26,6 +26,9 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 AI_API_KEY = os.environ.get("AI_API_KEY", "")
 AI_MODEL = os.environ.get("AI_MODEL", "claude-sonnet-4-20250514")
 AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.anthropic.com")
+AI_PROVIDER = os.environ.get("AI_PROVIDER", "")
+AI_PROJECT = os.environ.get("AI_PROJECT", "")
+AI_REGION = os.environ.get("AI_REGION", "")
 SERVER_URL = os.environ.get("SERVER_URL", "")
 DONE_LABEL = os.environ.get("DONE_LABEL", "opinai-done")
 
@@ -89,10 +92,17 @@ def fetch_issue() -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _ai_available() -> bool:
+    """Check if any AI provider is configured."""
+    if AI_PROVIDER.lower() == "vertex":
+        return bool(AI_PROJECT and AI_REGION)
+    return bool(AI_API_KEY)
+
+
 def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str | None:
     """Ask the AI to generate a bash test script for the issue. Returns script text."""
-    if not AI_API_KEY:
-        log.warning("No AI_API_KEY — skipping AI analysis")
+    if not _ai_available():
+        log.warning("No AI credentials configured — skipping AI analysis")
         return None
 
     server_context = f"\nThe server is running at {SERVER_URL}." if SERVER_URL else ""
@@ -142,7 +152,7 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
 
 def ai_verdict(title: str, body: str, results: str) -> str | None:
     """Ask the AI to summarize the test results."""
-    if not AI_API_KEY:
+    if not _ai_available():
         return None
 
     prompt = (
@@ -169,8 +179,45 @@ def ai_verdict(title: str, body: str, results: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _get_vertex_access_token() -> str:
+    """Get a Google access token from ADC for Vertex AI. Never log the token."""
+    import google.auth
+    import google.auth.transport.requests as google_requests
+
+    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+    credentials, _ = google.auth.default(scopes=scopes)
+    credentials.refresh(google_requests.Request())
+    return credentials.token
+
+
 def _call_ai(prompt: str) -> str | None:
     """Call the AI API and return the text response."""
+    if AI_PROVIDER.lower() == "vertex":
+        # Google Vertex AI — Claude via rawPredict
+        access_token = _get_vertex_access_token()
+        url = (
+            f"https://{AI_REGION}-aiplatform.googleapis.com/v1/"
+            f"projects/{AI_PROJECT}/locations/{AI_REGION}/"
+            f"publishers/anthropic/models/{AI_MODEL}:rawPredict"
+        )
+        # Credentials are in headers — never log
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "anthropic_version": "vertex-2023-10-16",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 4096,
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        content_blocks = data.get("content", [])
+        if content_blocks:
+            return content_blocks[0].get("text")
+        return None
+
     if "openai" in AI_BASE_URL.lower():
         url = f"{AI_BASE_URL}/v1/chat/completions"
         headers = {
