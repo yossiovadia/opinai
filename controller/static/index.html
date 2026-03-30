@@ -299,6 +299,10 @@ function renderRuns() {
       '<td>' + (r.duration || '--') + '</td>' +
       '<td>' + timeAgo(r.timestamp) + '</td>' +
       '<td>' +
+        (r.posted
+          ? '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button> '
+          : '<button class="btn" id="post-btn-' + i + '" onclick="event.stopPropagation(); postComment(' + i + ')" title="Post to GitHub">&#x1F4DD; Post</button> '
+        ) +
         '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ' +
         '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + r.repo + '\', ' + r.issue + ')">&#x1F504;</button>' +
       '</td>' +
@@ -346,6 +350,27 @@ async function checkNow() {
     }, 2000);
   } catch(e) {
     showToast('Failed to trigger check', 'error');
+  }
+}
+
+async function postComment(index) {
+  var btn = document.getElementById('post-btn-' + index);
+  if (btn) { btn.disabled = true; btn.innerHTML = '&#x23F3; Posting...'; }
+  try {
+    var resp = await fetch(API + '/api/runs/' + index + '/post-comment', { method: 'POST' });
+    var data = await resp.json();
+    if (data.status === 'posted') {
+      showToast('Comment posted to ' + data.repo + '#' + data.issue, 'success');
+      if (btn) { btn.innerHTML = '&#x2705; Posted'; btn.style.color = 'var(--green)'; btn.style.borderColor = 'var(--green)'; }
+      // Update local state
+      if (allRuns[index]) allRuns[index].posted = true;
+    } else {
+      showToast('Failed: ' + (data.message || 'unknown error'), 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F4DD; Post'; }
+    }
+  } catch(e) {
+    showToast('Failed to post comment', 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F4DD; Post'; }
   }
 }
 

@@ -211,6 +211,11 @@ def _create_app() -> Flask:
         reply = _handle_chat(message, context)
         return jsonify({"reply": reply})
 
+    @app.route("/api/runs/<int:index>/post-comment", methods=["POST"])
+    def post_run_comment(index):
+        result = _post_run_comment(index)
+        return jsonify(result)
+
     # ----- Admin routes -----
 
     @app.route("/admin")
@@ -687,6 +692,57 @@ def _admin_update_settings(settings: dict):
     except Exception as exc:
         log.error("Failed to update settings: %s", exc)
         raise
+
+
+def _post_run_comment(index: int) -> dict:
+    """Post a run's report as a GitHub comment."""
+    import requests as req
+
+    with _state_lock:
+        runs = _state.get("runs", [])
+        if index < 0 or index >= len(runs):
+            return {"status": "error", "message": "Invalid run index"}
+        run = runs[index]
+        if run.get("posted"):
+            return {"status": "error", "message": "Already posted"}
+
+    repo = run.get("repo", "")
+    issue = run.get("issue", "")
+    report = run.get("report", "")
+
+    if not repo or not issue or not report:
+        return {"status": "error", "message": "Missing repo, issue, or report"}
+
+    gh_token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {gh_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    # Sanitize report before posting
+    safe_report = report
+    for key in ("AI_API_KEY", "GITHUB_TOKEN"):
+        secret = os.environ.get(key, "")
+        if secret and len(secret) > 8:
+            safe_report = safe_report.replace(secret, "REDACTED")
+
+    try:
+        resp = req.post(
+            f"https://api.github.com/repos/{repo}/issues/{issue}/comments",
+            headers=headers,
+            json={"body": safe_report},
+            timeout=30,
+        )
+        if resp.ok:
+            with _state_lock:
+                _state["runs"][index]["posted"] = True
+            log.info("Posted comment to %s#%s from dashboard", repo, issue)
+            return {"status": "posted", "repo": repo, "issue": issue}
+        return {"status": "error", "message": f"GitHub returned {resp.status_code}"}
+    except Exception as exc:
+        log.error("Failed to post comment for %s#%s: %s", repo, issue, exc)
+        return {"status": "error", "message": str(exc)}
 
 
 def _reproduce_issue(repo: str, issue_number: int) -> dict:

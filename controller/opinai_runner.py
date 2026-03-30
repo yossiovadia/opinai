@@ -311,8 +311,25 @@ def sanitize_output(text: str) -> str:
 
 
 def post_comment(body: str):
-    url = f"{GH_API}/repos/{REPO}/issues/{ISSUE_NUMBER}/comments"
     safe_body = sanitize_output(body)
+    auto_post = os.environ.get("OPINAI_AUTO_POST", "false").lower() in ("true", "1", "yes")
+
+    # Always write suggested comment to file and stdout for dashboard visibility
+    try:
+        with open("/tmp/opinai-suggested-comment.md", "w") as f:
+            f.write(safe_body)
+    except OSError:
+        pass
+
+    print("--- OPINAI SUGGESTED COMMENT ---")
+    print(safe_body)
+    print("--- END SUGGESTED COMMENT ---")
+
+    if not auto_post:
+        log.info("Auto-post disabled — comment saved for review (%s#%s)", REPO, ISSUE_NUMBER)
+        return
+
+    url = f"{GH_API}/repos/{REPO}/issues/{ISSUE_NUMBER}/comments"
     resp = requests.post(
         url, headers=gh_headers(), json={"body": safe_body}, timeout=30
     )

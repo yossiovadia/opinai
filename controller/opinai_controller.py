@@ -216,6 +216,10 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                     name="ISSUE_NUMBER", value=str(number)
                                 ),
                                 client.V1EnvVar(
+                                    name="OPINAI_AUTO_POST",
+                                    value="false",
+                                ),
+                                client.V1EnvVar(
                                     name="GOOGLE_APPLICATION_CREDENTIALS",
                                     value="/var/run/secrets/gcp/credentials.json",
                                 ),
@@ -349,12 +353,21 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
         except Exception:
             pass
 
+        # Extract suggested comment from delimiters
+        suggested_comment = ""
+        start_marker = "--- OPINAI SUGGESTED COMMENT ---"
+        end_marker = "--- END SUGGESTED COMMENT ---"
+        if start_marker in pod_logs and end_marker in pod_logs:
+            start = pod_logs.index(start_marker) + len(start_marker)
+            end = pod_logs.index(end_marker)
+            suggested_comment = pod_logs[start:end].strip()
+
         # Parse verdict from logs
         verdict = "inconclusive"
-        logs_lower = pod_logs.lower()
-        if "bug confirmed" in logs_lower or "tests failed" in logs_lower:
+        check_text = (suggested_comment or pod_logs).lower()
+        if "bug confirmed" in check_text or "tests failed" in check_text:
             verdict = "bug confirmed"
-        elif "all tests passed" in logs_lower or "not a bug" in logs_lower:
+        elif "all tests passed" in check_text or "not a bug" in check_text:
             verdict = "not a bug"
 
         append_run({
@@ -364,12 +377,13 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
             "verdict": verdict,
             "ai": True,
             "duration": duration,
+            "posted": False,
             "timestamp": (
                 job.status.completion_time.isoformat()
                 if job.status.completion_time
                 else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             ),
-            "report": pod_logs[-3000:] if pod_logs else "(no logs)",
+            "report": suggested_comment or pod_logs[-3000:] or "(no logs)",
         })
 
 
