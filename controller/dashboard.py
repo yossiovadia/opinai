@@ -710,12 +710,22 @@ def start_dashboard():
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ssl_ctx.load_cert_chain(cert_path, key_path)
 
-    def _run():
+    def _run_https():
         from werkzeug.serving import make_server
         server = make_server("0.0.0.0", 8443, app, ssl_context=ssl_ctx)
         log.info("Dashboard running on https://0.0.0.0:8443")
         server.serve_forever()
 
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    return thread
+    def _run_http():
+        from werkzeug.serving import make_server
+        server = make_server("0.0.0.0", 8080, app)
+        log.info("Dashboard running on http://0.0.0.0:8080")
+        server.serve_forever()
+
+    https_thread = threading.Thread(target=_run_https, daemon=True)
+    https_thread.start()
+
+    http_thread = threading.Thread(target=_run_http, daemon=True)
+    http_thread.start()
+
+    return https_thread

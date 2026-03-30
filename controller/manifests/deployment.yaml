@@ -21,6 +21,9 @@ spec:
           image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
           imagePullPolicy: Always
           ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
             - containerPort: 8443
               name: https
               protocol: TCP

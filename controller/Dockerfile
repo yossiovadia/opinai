@@ -18,6 +18,6 @@ COPY opinai_controller.py opinai_runner.py dashboard.py /app/
 COPY static/ /app/static/
 WORKDIR /app
 
-EXPOSE 8443
+EXPOSE 8080 8443
 
 CMD ["python", "opinai_controller.py"]
