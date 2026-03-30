@@ -20,6 +20,10 @@ spec:
         - name: controller
           image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
           imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8443
+              name: https
+              protocol: TCP
           envFrom:
             - configMapRef:
                 name: opinai-config

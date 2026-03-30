@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y curl jq git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl jq git openssl && rm -rf /var/lib/apt/lists/*
 
 # Install gh CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -12,7 +12,10 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY opinai_controller.py opinai_runner.py /app/
+COPY opinai_controller.py opinai_runner.py dashboard.py /app/
+COPY static/ /app/static/
 WORKDIR /app
+
+EXPOSE 8443
 
 CMD ["python", "opinai_controller.py"]

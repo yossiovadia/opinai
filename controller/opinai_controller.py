@@ -10,6 +10,14 @@ import requests
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
+from dashboard import (
+    append_run,
+    should_check_now,
+    start_dashboard,
+    update_repo_stats,
+    update_state,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -53,6 +61,19 @@ def gh_headers():
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+
+
+def _count_processed(repo: str) -> int:
+    """Count issues with the DONE_LABEL (already processed)."""
+    url = f"{GH_API}/repos/{repo}/issues"
+    params = {"state": "all", "labels": DONE_LABEL, "per_page": 1}
+    try:
+        resp = requests.get(url, headers=gh_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        # GitHub returns total_count in link header; use len as approximation
+        return len(resp.json())
+    except requests.RequestException:
+        return 0
 
 
 def fetch_open_issues(repo: str) -> list[dict]:
@@ -268,26 +289,42 @@ def main():
     load_k8s()
     batch_api = client.BatchV1Api()
 
+    # Start the web dashboard
+    start_dashboard()
+
     log.info(
         "OpinAI Controller started — watching %s, polling every %ds",
         ", ".join(REPOS),
         POLL_INTERVAL,
     )
 
+    poll_count = 0
+
     while not _shutdown:
+        poll_count += 1
+        update_state("poll_count", poll_count)
+        update_state("last_poll", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+
         for repo in REPOS:
             log.info("Checking %s for new issues...", repo)
             issues = fetch_open_issues(repo)
             log.info("Found %d unprocessed issues in %s", len(issues), repo)
+
+            # Count processed issues (those with done label) for stats
+            processed = _count_processed(repo)
+            update_repo_stats(repo, pending=len(issues), processed=processed)
 
             for issue in issues:
                 create_job(batch_api, repo, issue)
 
         check_completed_jobs(batch_api)
 
-        # Sleep in small increments so we can respond to SIGTERM quickly
+        # Sleep in small increments, but also check for "check now" requests
         elapsed = 0
         while elapsed < POLL_INTERVAL and not _shutdown:
+            if should_check_now():
+                log.info("Manual check triggered from dashboard")
+                break
             time.sleep(min(5, POLL_INTERVAL - elapsed))
             elapsed += 5
 

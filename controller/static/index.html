@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinAI Dashboard</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="refresh-bar" id="refreshBar"></div>
+
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo">&#x1F3B3; OpinAI</div>
+    <div class="header-tagline">Automated Bug Reproduction</div>
+  </div>
+  <div class="header-right">
+    <span>
+      <span class="status-dot green" id="statusDot"></span>
+      <span id="clusterName">Connecting...</span>
+    </span>
+    <span>Uptime: <strong id="uptime">--</strong></span>
+    <span>Polls: <strong id="pollCount">0</strong></span>
+  </div>
+</header>
+
+<main class="main">
+
+  <!-- Monitored Repos -->
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">Monitored Repos</h2>
+      <button class="btn btn-primary" onclick="checkNow()">&#x1F50D; Check Now</button>
+    </div>
+    <div class="cards" id="repoCards">
+      <div class="empty">Loading repos...</div>
+    </div>
+  </section>
+
+  <!-- Active Jobs -->
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">Active Jobs</h2>
+    </div>
+    <div id="jobsContainer">
+      <div class="empty">Loading jobs...</div>
+    </div>
+  </section>
+
+  <!-- Recent Runs -->
+  <section class="section">
+    <div class="section-header">
+      <h2 class="section-title">Recent Runs</h2>
+    </div>
+    <div id="runsContainer">
+      <div class="empty">Loading runs...</div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  "That's just, like, your opinion, man." &mdash;
+  <a href="https://github.com/yossiovadia/opinai">OpinAI</a>
+</footer>
+
+<script>
+const API = '';
+let refreshTimer = null;
+const REFRESH_INTERVAL = 30000;
+
+async function fetchJSON(url) {
+  const resp = await fetch(API + url);
+  if (!resp.ok) throw new Error(resp.statusText);
+  return resp.json();
+}
+
+function timeAgo(ts) {
+  if (!ts) return 'never';
+  const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (diff < 60) return Math.floor(diff) + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function verdictBadge(verdict) {
+  if (!verdict) return '<span class="verdict verdict-inconclusive">&#x2753; Unknown</span>';
+  const v = verdict.toLowerCase();
+  if (v.includes('bug') || v.includes('confirmed') || v.includes('fail'))
+    return '<span class="verdict verdict-bug">&#x1F534; BUG CONFIRMED</span>';
+  if (v.includes('pass') || v.includes('not') || v.includes('ok'))
+    return '<span class="verdict verdict-ok">&#x2705; NOT A BUG</span>';
+  return '<span class="verdict verdict-inconclusive">&#x26A0;&#xFE0F; INCONCLUSIVE</span>';
+}
+
+function jobStatusBadge(status) {
+  switch (status) {
+    case 'Completed': return '<span class="verdict verdict-ok">Completed</span>';
+    case 'Failed': return '<span class="verdict verdict-bug">Failed</span>';
+    default: return '<span class="verdict verdict-running">Running</span>';
+  }
+}
+
+// Refresh bar animation
+function animateRefresh() {
+  const bar = document.getElementById('refreshBar');
+  bar.style.width = '100%';
+  setTimeout(() => { bar.style.width = '0'; }, 400);
+}
+
+// --- Status ---
+async function loadStatus() {
+  try {
+    const data = await fetchJSON('/api/status');
+    document.getElementById('uptime').textContent = data.uptime_human;
+    document.getElementById('pollCount').textContent = data.poll_count;
+    document.getElementById('statusDot').className = 'status-dot green';
+    document.getElementById('clusterName').textContent = 'Connected';
+  } catch {
+    document.getElementById('statusDot').className = 'status-dot red';
+    document.getElementById('clusterName').textContent = 'Disconnected';
+  }
+}
+
+// --- Repos ---
+async function loadRepos() {
+  try {
+    const repos = await fetchJSON('/api/repos');
+    const container = document.getElementById('repoCards');
+    if (!repos.length) {
+      container.innerHTML = '<div class="empty">No repos configured</div>';
+      return;
+    }
+    container.innerHTML = repos.map(r => `
+      <div class="card">
+        <div class="card-header">
+          <a class="card-title" href="https://github.com/${escapeHtml(r.name)}" target="_blank">${escapeHtml(r.name)}</a>
+        </div>
+        <div class="card-stats">
+          <div><span class="stat-value">${r.processed || 0}</span> <span class="stat-label">processed</span></div>
+          <div><span class="stat-value">${r.pending || 0}</span> <span class="stat-label">pending</span></div>
+        </div>
+        <div class="card-footer">
+          <span>Last check: ${timeAgo(r.last_check)}</span>
+          <button class="btn" onclick="checkNow()">Check Now</button>
+        </div>
+      </div>
+    `).join('');
+  } catch {
+    document.getElementById('repoCards').innerHTML = '<div class="empty">Failed to load repos</div>';
+  }
+}
+
+// --- Jobs ---
+async function loadJobs() {
+  try {
+    const jobs = await fetchJSON('/api/jobs');
+    const container = document.getElementById('jobsContainer');
+    if (!jobs.length) {
+      container.innerHTML = '<div class="table-wrap"><div class="empty">No active jobs</div></div>';
+      return;
+    }
+    let html = `<div class="table-wrap"><table>
+      <thead><tr><th>Job</th><th>Repo</th><th>Issue</th><th>Status</th><th>Duration</th></tr></thead>
+      <tbody>`;
+    jobs.forEach((j, i) => {
+      const jobId = 'job-' + i;
+      html += `<tr class="expandable" onclick="toggleExpand('${jobId}')">
+        <td>${escapeHtml(j.name)}</td>
+        <td>${escapeHtml(j.repo)}</td>
+        <td>#${escapeHtml(j.issue)}</td>
+        <td>${jobStatusBadge(j.status)}</td>
+        <td>${j.duration || '--'}</td>
+      </tr>
+      <tr class="expand-row" id="${jobId}" style="display:none">
+        <td colspan="5"><div class="expand-content">${escapeHtml(j.logs || '(no logs)')}</div></td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+  } catch {
+    document.getElementById('jobsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load jobs</div></div>';
+  }
+}
+
+// --- Runs ---
+async function loadRuns() {
+  try {
+    const runs = await fetchJSON('/api/runs');
+    const container = document.getElementById('runsContainer');
+    if (!runs.length) {
+      container.innerHTML = '<div class="table-wrap"><div class="empty">No runs yet</div></div>';
+      return;
+    }
+    let html = `<div class="table-wrap"><table>
+      <thead><tr><th>Issue</th><th>Repo</th><th>Verdict</th><th>Analysis</th><th>Duration</th><th>Time</th><th></th></tr></thead>
+      <tbody>`;
+    runs.forEach((r, i) => {
+      const runId = 'run-' + i;
+      const issueUrl = 'https://github.com/' + r.repo + '/issues/' + r.issue;
+      html += `<tr class="expandable" onclick="toggleExpand('${runId}')">
+        <td><a href="${issueUrl}" target="_blank" onclick="event.stopPropagation()">#${r.issue}</a> ${escapeHtml(r.title || '')}</td>
+        <td>${escapeHtml(r.repo)}</td>
+        <td>${verdictBadge(r.verdict)}</td>
+        <td>${r.ai ? 'AI' : 'Deterministic'}</td>
+        <td>${r.duration || '--'}</td>
+        <td>${timeAgo(r.timestamp)}</td>
+        <td><button class="btn" onclick="event.stopPropagation(); rerun('${r.repo}', ${r.issue})">&#x1F504; Re-run</button></td>
+      </tr>
+      <tr class="expand-row" id="${runId}" style="display:none">
+        <td colspan="7"><div class="expand-content">${escapeHtml(r.report || '(no details)')}</div></td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+  } catch {
+    document.getElementById('runsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load runs</div></div>';
+  }
+}
+
+function toggleExpand(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function checkNow() {
+  try {
+    await fetch(API + '/api/check-now', { method: 'POST' });
+    animateRefresh();
+    setTimeout(refreshAll, 2000);
+  } catch { /* ignore */ }
+}
+
+async function rerun(repo, issue) {
+  try {
+    await fetch(API + '/api/rerun/' + repo + '/' + issue, { method: 'POST' });
+    animateRefresh();
+    setTimeout(refreshAll, 2000);
+  } catch { /* ignore */ }
+}
+
+async function refreshAll() {
+  animateRefresh();
+  await Promise.all([loadStatus(), loadRepos(), loadJobs(), loadRuns()]);
+}
+
+// Initial load + auto-refresh
+refreshAll();
+setInterval(refreshAll, REFRESH_INTERVAL);
+</script>
+
+</body>
+</html>
