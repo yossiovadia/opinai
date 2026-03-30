@@ -18,7 +18,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: runner
-          image: opinai-controller:latest
+          image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
           command: ["python", "opinai_runner.py"]
           env:
             - name: REPO

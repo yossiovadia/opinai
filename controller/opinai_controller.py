@@ -141,7 +141,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                     containers=[
                         client.V1Container(
                             name="runner",
-                            image="opinai-controller:latest",
+                            image="image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest",
                             command=["python", "opinai_runner.py"],
                             env=[
                                 client.V1EnvVar(name="REPO", value=repo),
