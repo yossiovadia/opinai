@@ -106,7 +106,9 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
         log.warning("No AI credentials configured — skipping AI analysis")
         return None
 
-    server_context = f"\nThe server is running at {SERVER_URL}." if SERVER_URL else ""
+    # Re-read SERVER_URL — _start_server updates the global after import
+    current_server_url = os.environ.get("SERVER_URL", "") or SERVER_URL
+    server_context = f"\nThe server is already running at {current_server_url}. Do NOT start the server yourself — just test it with curl." if current_server_url else ""
     profile_context = format_profile_context(profile) if profile else ""
 
     prompt = (

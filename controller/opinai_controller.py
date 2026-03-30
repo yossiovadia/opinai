@@ -131,14 +131,28 @@ def job_exists(batch_api: client.BatchV1Api, name: str) -> bool:
         raise
 
 
-def _repo_profile_env_vars(repo: str) -> list:
-    """Build env vars to pass REPO_PROFILE_* for the given repo to the Job pod."""
-    repo_key = repo.replace("/", "_").replace("-", "_").replace(".", "_")
-    env_name = f"REPO_PROFILE_{repo_key}"
-    value = os.environ.get(env_name, "")
-    if not value:
-        return []
-    return [client.V1EnvVar(name=env_name, value=value)]
+def _all_repo_profile_env_vars() -> list:
+    """Read all REPO_PROFILE_* entries from ConfigMap and return as env vars."""
+    try:
+        v1 = client.CoreV1Api()
+        cm = v1.read_namespaced_config_map("opinai-config", NAMESPACE)
+        data = cm.data or {}
+        return [
+            client.V1EnvVar(name=k, value=v)
+            for k, v in data.items()
+            if k.startswith("REPO_PROFILE_")
+        ]
+    except ApiException:
+        # Fallback to env vars
+        return [
+            client.V1EnvVar(name=k, value=v)
+            for k, v in os.environ.items()
+            if k.startswith("REPO_PROFILE_")
+        ]
+
+
+# Track Jobs we've already recorded as runs so we don't duplicate
+_recorded_jobs: set[str] = set()
 
 
 def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
@@ -176,6 +190,10 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                 "app": "opinai-runner",
                 "opinai/repo": repo_safe,
                 "opinai/issue": str(number),
+            },
+            annotations={
+                "opinai/title": issue.get("title", "")[:253],
+                "opinai/repo-full": repo,
             },
         ),
         spec=client.V1JobSpec(
@@ -241,7 +259,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                         )
                                     ),
                                 ),
-                            ] + _repo_profile_env_vars(repo),
+                            ] + _all_repo_profile_env_vars(),
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(
@@ -275,7 +293,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
 
 
 def check_completed_jobs(batch_api: client.BatchV1Api):
-    """Log status of completed Jobs."""
+    """Scan completed Jobs, extract results, and add to dashboard runs."""
     try:
         jobs = batch_api.list_namespaced_job(
             namespace=NAMESPACE, label_selector="app=opinai-runner"
@@ -284,12 +302,75 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
         log.error("Failed to list jobs: %s", exc.reason)
         return
 
+    core_api = client.CoreV1Api()
+
     for job in jobs.items:
         name = job.metadata.name
+        finished = bool(job.status.succeeded or job.status.failed)
+        if not finished:
+            continue
+        if name in _recorded_jobs:
+            continue
+
+        _recorded_jobs.add(name)
+
+        labels = job.metadata.labels or {}
+        annotations = job.metadata.annotations or {}
+        repo = annotations.get("opinai/repo-full", labels.get("opinai/repo", ""))
+        issue = labels.get("opinai/issue", "")
+        title = annotations.get("opinai/title", "")
+
         if job.status.succeeded:
             log.info("Job %s succeeded", name)
-        elif job.status.failed:
+        else:
             log.warning("Job %s failed", name)
+
+        # Compute duration
+        duration = ""
+        if job.status.start_time and job.status.completion_time:
+            delta = (job.status.completion_time - job.status.start_time).total_seconds()
+            mins = int(delta) // 60
+            secs = int(delta) % 60
+            duration = f"{mins}m {secs}s" if mins else f"{secs}s"
+
+        # Read pod logs to extract verdict
+        pod_logs = ""
+        try:
+            pods = core_api.list_namespaced_pod(
+                namespace=NAMESPACE,
+                label_selector=f"job-name={name}",
+            )
+            if pods.items:
+                pod_logs = core_api.read_namespaced_pod_log(
+                    name=pods.items[0].metadata.name,
+                    namespace=NAMESPACE,
+                    tail_lines=100,
+                )
+        except Exception:
+            pass
+
+        # Parse verdict from logs
+        verdict = "inconclusive"
+        logs_lower = pod_logs.lower()
+        if "bug confirmed" in logs_lower or "tests failed" in logs_lower:
+            verdict = "bug confirmed"
+        elif "all tests passed" in logs_lower or "not a bug" in logs_lower:
+            verdict = "not a bug"
+
+        append_run({
+            "repo": repo,
+            "issue": issue,
+            "title": title,
+            "verdict": verdict,
+            "ai": True,
+            "duration": duration,
+            "timestamp": (
+                job.status.completion_time.isoformat()
+                if job.status.completion_time
+                else time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            ),
+            "report": pod_logs[-3000:] if pod_logs else "(no logs)",
+        })
 
 
 # ---------------------------------------------------------------------------
