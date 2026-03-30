@@ -12,6 +12,8 @@ from kubernetes.client.rest import ApiException
 
 from dashboard import (
     append_run,
+    set_check_result,
+    set_reproduce_callback,
     should_check_now,
     start_dashboard,
     update_repo_stats,
@@ -129,6 +131,16 @@ def job_exists(batch_api: client.BatchV1Api, name: str) -> bool:
         raise
 
 
+def _repo_profile_env_vars(repo: str) -> list:
+    """Build env vars to pass REPO_PROFILE_* for the given repo to the Job pod."""
+    repo_key = repo.replace("/", "_").replace("-", "_").replace(".", "_")
+    env_name = f"REPO_PROFILE_{repo_key}"
+    value = os.environ.get(env_name, "")
+    if not value:
+        return []
+    return [client.V1EnvVar(name=env_name, value=value)]
+
+
 def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
     """Create a Kubernetes Job to reproduce the issue."""
     number = issue["number"]
@@ -178,6 +190,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                         client.V1Container(
                             name="runner",
                             image="image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest",
+                            image_pull_policy="Always",
                             command=["python", "opinai_runner.py"],
                             env=[
                                 client.V1EnvVar(name="REPO", value=repo),
@@ -228,13 +241,19 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                         )
                                     ),
                                 ),
-                            ],
+                            ] + _repo_profile_env_vars(repo),
                             env_from=[
                                 client.V1EnvFromSource(
                                     secret_ref=client.V1SecretEnvSource(
                                         name="opinai-credentials"
                                     )
-                                )
+                                ),
+                                client.V1EnvFromSource(
+                                    config_map_ref=client.V1ConfigMapEnvSource(
+                                        name="opinai-config",
+                                        optional=True,
+                                    )
+                                ),
                             ],
                             volume_mounts=[gcp_mount],
                             resources=client.V1ResourceRequirements(
@@ -292,6 +311,18 @@ def main():
     # Start the web dashboard
     start_dashboard()
 
+    # Register reproduce callback so the dashboard can create jobs
+    def _reproduce_from_dashboard(repo: str, issue_number: int):
+        """Fetch issue from GitHub and create a Job."""
+        import requests as req
+        url = f"{GH_API}/repos/{repo}/issues/{issue_number}"
+        resp = req.get(url, headers=gh_headers(), timeout=30)
+        resp.raise_for_status()
+        issue = resp.json()
+        create_job(batch_api, repo, issue)
+
+    set_reproduce_callback(_reproduce_from_dashboard)
+
     log.info(
         "OpinAI Controller started — watching %s, polling every %ds",
         ", ".join(REPOS),
@@ -305,10 +336,12 @@ def main():
         update_state("poll_count", poll_count)
         update_state("last_poll", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
+        total_new = 0
         for repo in REPOS:
             log.info("Checking %s for new issues...", repo)
             issues = fetch_open_issues(repo)
             log.info("Found %d unprocessed issues in %s", len(issues), repo)
+            total_new += len(issues)
 
             # Count processed issues (those with done label) for stats
             processed = _count_processed(repo)
@@ -318,6 +351,7 @@ def main():
                 create_job(batch_api, repo, issue)
 
         check_completed_jobs(batch_api)
+        set_check_result(total_new)
 
         # Sleep in small increments, but also check for "check now" requests
         elapsed = 0

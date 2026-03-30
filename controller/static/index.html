@@ -10,6 +10,9 @@
 
 <div class="refresh-bar" id="refreshBar"></div>
 
+<!-- Toast notifications -->
+<div id="toastContainer" class="toast-container"></div>
+
 <header class="header">
   <div class="header-left">
     <div class="header-logo">&#x1F3B3; OpinAI</div>
@@ -27,11 +30,20 @@
 
 <main class="main">
 
+  <!-- Reproduce input -->
+  <section class="section">
+    <div class="reproduce-bar">
+      <input type="text" id="reproduceInput" class="reproduce-input"
+             placeholder="Paste issue URL (e.g. https://github.com/owner/repo/issues/42)">
+      <button class="btn btn-primary" onclick="reproduceFromUrl()">&#x1F9EA; Reproduce</button>
+    </div>
+  </section>
+
   <!-- Monitored Repos -->
   <section class="section">
     <div class="section-header">
       <h2 class="section-title">Monitored Repos</h2>
-      <button class="btn btn-primary" onclick="checkNow()">&#x1F50D; Check Now</button>
+      <button class="btn btn-primary" onclick="checkNow()">&#x1F50D; Check All</button>
     </div>
     <div class="cards" id="repoCards">
       <div class="empty">Loading repos...</div>
@@ -52,6 +64,7 @@
   <section class="section">
     <div class="section-header">
       <h2 class="section-title">Recent Runs</h2>
+      <div class="filter-bar" id="repoFilter"></div>
     </div>
     <div id="runsContainer">
       <div class="empty">Loading runs...</div>
@@ -65,10 +78,31 @@
   <a href="https://github.com/yossiovadia/opinai">OpinAI</a>
 </footer>
 
+<!-- Chat toggle button -->
+<button class="chat-toggle" id="chatToggle" onclick="toggleChat()" title="Ask OpinAI">&#x1F3B3;</button>
+
+<!-- Chat panel -->
+<div class="chat-panel" id="chatPanel">
+  <div class="chat-panel-header">
+    <div>
+      <div class="chat-panel-title">&#x1F3B3; Ask OpinAI</div>
+      <div class="chat-context-label" id="chatContextLabel">General context</div>
+    </div>
+    <button class="chat-close" onclick="toggleChat()">&times;</button>
+  </div>
+  <div class="chat-messages" id="chatMessages"></div>
+  <div class="chat-suggestions" id="chatSuggestions"></div>
+  <div class="chat-input-area">
+    <textarea class="chat-input" id="chatInput" placeholder="Ask about a bug, issue, or reproduction..." rows="1"></textarea>
+    <button class="chat-send" id="chatSend" onclick="sendChat()">Send</button>
+  </div>
+</div>
+
 <script>
 const API = '';
-let refreshTimer = null;
 const REFRESH_INTERVAL = 30000;
+let activeRepoFilter = null;
+let allRuns = [];
 
 async function fetchJSON(url) {
   const resp = await fetch(API + url);
@@ -86,6 +120,7 @@ function timeAgo(ts) {
 }
 
 function escapeHtml(s) {
+  if (!s) return '';
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
@@ -109,11 +144,28 @@ function jobStatusBadge(status) {
   }
 }
 
+// --- Toast notifications ---
+function showToast(message, type) {
+  type = type || 'info';
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+  // Trigger animation
+  requestAnimationFrame(function() { toast.classList.add('toast-visible'); });
+  setTimeout(function() {
+    toast.classList.remove('toast-visible');
+    toast.classList.add('toast-hiding');
+    setTimeout(function() { toast.remove(); }, 300);
+  }, 4000);
+}
+
 // Refresh bar animation
 function animateRefresh() {
   const bar = document.getElementById('refreshBar');
   bar.style.width = '100%';
-  setTimeout(() => { bar.style.width = '0'; }, 400);
+  setTimeout(function() { bar.style.width = '0'; }, 400);
 }
 
 // --- Status ---
@@ -124,7 +176,7 @@ async function loadStatus() {
     document.getElementById('pollCount').textContent = data.poll_count;
     document.getElementById('statusDot').className = 'status-dot green';
     document.getElementById('clusterName').textContent = 'Connected';
-  } catch {
+  } catch(e) {
     document.getElementById('statusDot').className = 'status-dot red';
     document.getElementById('clusterName').textContent = 'Disconnected';
   }
@@ -139,22 +191,25 @@ async function loadRepos() {
       container.innerHTML = '<div class="empty">No repos configured</div>';
       return;
     }
-    container.innerHTML = repos.map(r => `
-      <div class="card">
-        <div class="card-header">
-          <a class="card-title" href="https://github.com/${escapeHtml(r.name)}" target="_blank">${escapeHtml(r.name)}</a>
-        </div>
-        <div class="card-stats">
-          <div><span class="stat-value">${r.processed || 0}</span> <span class="stat-label">processed</span></div>
-          <div><span class="stat-value">${r.pending || 0}</span> <span class="stat-label">pending</span></div>
-        </div>
-        <div class="card-footer">
-          <span>Last check: ${timeAgo(r.last_check)}</span>
-          <button class="btn" onclick="checkNow()">Check Now</button>
-        </div>
-      </div>
-    `).join('');
-  } catch {
+    container.innerHTML = repos.map(function(r) {
+      return '<div class="card">' +
+        '<div class="card-header">' +
+          '<a class="card-title" href="https://github.com/' + escapeHtml(r.name) + '" target="_blank">' + escapeHtml(r.name) + '</a>' +
+          '<span class="badge badge-repo-filter" onclick="event.preventDefault(); toggleRepoFilter(\'' + escapeHtml(r.name) + '\')">' +
+            (activeRepoFilter === r.name ? 'Filtering' : 'Filter runs') +
+          '</span>' +
+        '</div>' +
+        '<div class="card-stats">' +
+          '<div><span class="stat-value">' + (r.processed || 0) + '</span> <span class="stat-label">processed</span></div>' +
+          '<div><span class="stat-value">' + (r.pending || 0) + '</span> <span class="stat-label">pending</span></div>' +
+        '</div>' +
+        '<div class="card-footer">' +
+          '<span>Last check: ' + timeAgo(r.last_check) + '</span>' +
+          '<button class="btn" onclick="checkNow()">Check Now</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  } catch(e) {
     document.getElementById('repoCards').innerHTML = '<div class="empty">Failed to load repos</div>';
   }
 }
@@ -168,25 +223,25 @@ async function loadJobs() {
       container.innerHTML = '<div class="table-wrap"><div class="empty">No active jobs</div></div>';
       return;
     }
-    let html = `<div class="table-wrap"><table>
-      <thead><tr><th>Job</th><th>Repo</th><th>Issue</th><th>Status</th><th>Duration</th></tr></thead>
-      <tbody>`;
-    jobs.forEach((j, i) => {
-      const jobId = 'job-' + i;
-      html += `<tr class="expandable" onclick="toggleExpand('${jobId}')">
-        <td>${escapeHtml(j.name)}</td>
-        <td>${escapeHtml(j.repo)}</td>
-        <td>#${escapeHtml(j.issue)}</td>
-        <td>${jobStatusBadge(j.status)}</td>
-        <td>${j.duration || '--'}</td>
-      </tr>
-      <tr class="expand-row" id="${jobId}" style="display:none">
-        <td colspan="5"><div class="expand-content">${escapeHtml(j.logs || '(no logs)')}</div></td>
-      </tr>`;
+    var html = '<div class="table-wrap"><table>' +
+      '<thead><tr><th>Job</th><th>Repo</th><th>Issue</th><th>Status</th><th>Duration</th></tr></thead>' +
+      '<tbody>';
+    jobs.forEach(function(j, i) {
+      var jobId = 'job-' + i;
+      html += '<tr class="expandable" onclick="toggleExpand(\'' + jobId + '\')">' +
+        '<td>' + escapeHtml(j.name) + '</td>' +
+        '<td>' + escapeHtml(j.repo) + '</td>' +
+        '<td>#' + escapeHtml(j.issue) + '</td>' +
+        '<td>' + jobStatusBadge(j.status) + '</td>' +
+        '<td>' + (j.duration || '--') + '</td>' +
+      '</tr>' +
+      '<tr class="expand-row" id="' + jobId + '" style="display:none">' +
+        '<td colspan="5"><div class="expand-content">' + escapeHtml(j.logs || '(no logs)') + '</div></td>' +
+      '</tr>';
     });
     html += '</tbody></table></div>';
     container.innerHTML = html;
-  } catch {
+  } catch(e) {
     document.getElementById('jobsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load jobs</div></div>';
   }
 }
@@ -194,63 +249,353 @@ async function loadJobs() {
 // --- Runs ---
 async function loadRuns() {
   try {
-    const runs = await fetchJSON('/api/runs');
-    const container = document.getElementById('runsContainer');
-    if (!runs.length) {
-      container.innerHTML = '<div class="table-wrap"><div class="empty">No runs yet</div></div>';
-      return;
-    }
-    let html = `<div class="table-wrap"><table>
-      <thead><tr><th>Issue</th><th>Repo</th><th>Verdict</th><th>Analysis</th><th>Duration</th><th>Time</th><th></th></tr></thead>
-      <tbody>`;
-    runs.forEach((r, i) => {
-      const runId = 'run-' + i;
-      const issueUrl = 'https://github.com/' + r.repo + '/issues/' + r.issue;
-      html += `<tr class="expandable" onclick="toggleExpand('${runId}')">
-        <td><a href="${issueUrl}" target="_blank" onclick="event.stopPropagation()">#${r.issue}</a> ${escapeHtml(r.title || '')}</td>
-        <td>${escapeHtml(r.repo)}</td>
-        <td>${verdictBadge(r.verdict)}</td>
-        <td>${r.ai ? 'AI' : 'Deterministic'}</td>
-        <td>${r.duration || '--'}</td>
-        <td>${timeAgo(r.timestamp)}</td>
-        <td><button class="btn" onclick="event.stopPropagation(); rerun('${r.repo}', ${r.issue})">&#x1F504; Re-run</button></td>
-      </tr>
-      <tr class="expand-row" id="${runId}" style="display:none">
-        <td colspan="7"><div class="expand-content">${escapeHtml(r.report || '(no details)')}</div></td>
-      </tr>`;
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
-  } catch {
+    allRuns = await fetchJSON('/api/runs');
+    renderRuns();
+    renderRepoFilter();
+  } catch(e) {
     document.getElementById('runsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load runs</div></div>';
   }
 }
 
+function renderRepoFilter() {
+  var repos = {};
+  allRuns.forEach(function(r) { if (r.repo) repos[r.repo] = true; });
+  var names = Object.keys(repos);
+  var container = document.getElementById('repoFilter');
+  if (names.length <= 1) { container.innerHTML = ''; return; }
+  var html = '<button class="btn filter-btn' + (!activeRepoFilter ? ' filter-active' : '') + '" onclick="toggleRepoFilter(null)">All</button>';
+  names.forEach(function(name) {
+    html += '<button class="btn filter-btn' + (activeRepoFilter === name ? ' filter-active' : '') + '" onclick="toggleRepoFilter(\'' + escapeHtml(name) + '\')">' + escapeHtml(name) + '</button>';
+  });
+  container.innerHTML = html;
+}
+
+function toggleRepoFilter(repo) {
+  activeRepoFilter = (activeRepoFilter === repo) ? null : repo;
+  renderRuns();
+  renderRepoFilter();
+  loadRepos(); // re-render cards to update filter badge
+}
+
+function renderRuns() {
+  var runs = activeRepoFilter ? allRuns.filter(function(r) { return r.repo === activeRepoFilter; }) : allRuns;
+  var container = document.getElementById('runsContainer');
+  if (!runs.length) {
+    container.innerHTML = '<div class="table-wrap"><div class="empty">' + (activeRepoFilter ? 'No runs for ' + escapeHtml(activeRepoFilter) : 'No runs yet') + '</div></div>';
+    return;
+  }
+  var html = '<div class="table-wrap"><table>' +
+    '<thead><tr><th>Issue</th><th>Repo</th><th>Verdict</th><th>Analysis</th><th>Duration</th><th>Time</th><th></th></tr></thead>' +
+    '<tbody>';
+  runs.forEach(function(r, i) {
+    var runId = 'run-' + i;
+    var issueUrl = 'https://github.com/' + r.repo + '/issues/' + r.issue;
+    html += '<tr class="expandable" onclick="toggleExpand(\'' + runId + '\')">' +
+      '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + r.issue + '</a> ' + escapeHtml(r.title || '') + '</td>' +
+      '<td><span class="badge badge-repo" onclick="event.stopPropagation(); toggleRepoFilter(\'' + escapeHtml(r.repo) + '\')">' + escapeHtml(r.repo) + '</span></td>' +
+      '<td>' + verdictBadge(r.verdict) + '</td>' +
+      '<td>' + (r.ai ? 'AI' : 'Deterministic') + '</td>' +
+      '<td>' + (r.duration || '--') + '</td>' +
+      '<td>' + timeAgo(r.timestamp) + '</td>' +
+      '<td>' +
+        '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ' +
+        '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + r.repo + '\', ' + r.issue + ')">&#x1F504;</button>' +
+      '</td>' +
+    '</tr>' +
+    '<tr class="expand-row" id="' + runId + '" style="display:none">' +
+      '<td colspan="7"><div class="expand-content">' + escapeHtml(r.report || '(no details)') + '</div></td>' +
+    '</tr>';
+  });
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+}
+
 function toggleExpand(id) {
-  const el = document.getElementById(id);
+  var el = document.getElementById(id);
   if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
 }
 
+// --- Actions ---
 async function checkNow() {
   try {
+    showToast('Checking for new issues...', 'info');
     await fetch(API + '/api/check-now', { method: 'POST' });
     animateRefresh();
-    setTimeout(refreshAll, 2000);
-  } catch { /* ignore */ }
+    // Poll for result
+    var attempts = 0;
+    var poll = setInterval(async function() {
+      attempts++;
+      try {
+        var data = await fetchJSON('/api/check-now/result');
+        if (data.status === 'done') {
+          clearInterval(poll);
+          if (data.total > 0) {
+            showToast('Found ' + data.total + ' new issue' + (data.total > 1 ? 's' : ''), 'success');
+          } else {
+            showToast('No new issues found', 'info');
+          }
+          refreshAll();
+        } else if (attempts > 60) {
+          clearInterval(poll);
+          showToast('Check is taking a while...', 'info');
+        }
+      } catch(e) {
+        clearInterval(poll);
+      }
+    }, 2000);
+  } catch(e) {
+    showToast('Failed to trigger check', 'error');
+  }
 }
 
 async function rerun(repo, issue) {
   try {
+    showToast('Re-running ' + repo + '#' + issue + '...', 'info');
     await fetch(API + '/api/rerun/' + repo + '/' + issue, { method: 'POST' });
     animateRefresh();
     setTimeout(refreshAll, 2000);
-  } catch { /* ignore */ }
+  } catch(e) {
+    showToast('Failed to trigger re-run', 'error');
+  }
 }
+
+function parseIssueUrl(url) {
+  // Match: https://github.com/owner/repo/issues/42
+  var m = url.match(/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)/);
+  if (m) return { repo: m[1], issue: parseInt(m[2]) };
+  return null;
+}
+
+async function reproduceFromUrl() {
+  var input = document.getElementById('reproduceInput');
+  var url = input.value.trim();
+  if (!url) { showToast('Paste a GitHub issue URL first', 'error'); return; }
+  var parsed = parseIssueUrl(url);
+  if (!parsed) { showToast('Invalid issue URL format', 'error'); return; }
+  try {
+    showToast('Reproducing ' + parsed.repo + '#' + parsed.issue + '...', 'info');
+    var resp = await fetch(API + '/api/reproduce', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: parsed.repo, issue_number: parsed.issue })
+    });
+    var data = await resp.json();
+    if (data.status === 'triggered') {
+      showToast('Job created for ' + parsed.repo + '#' + parsed.issue, 'success');
+      input.value = '';
+      setTimeout(refreshAll, 2000);
+    } else {
+      showToast('Error: ' + (data.message || 'unknown'), 'error');
+    }
+  } catch(e) {
+    showToast('Failed to create reproduction job', 'error');
+  }
+}
+
+// Enter key on reproduce input
+document.getElementById('reproduceInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') reproduceFromUrl();
+});
 
 async function refreshAll() {
   animateRefresh();
   await Promise.all([loadStatus(), loadRepos(), loadJobs(), loadRuns()]);
 }
+
+// =====================================================================
+// Chat panel
+// =====================================================================
+var chatOpen = false;
+var chatContext = {};  // {repo, issue_number}
+var chatHistory = [];  // [{role: 'user'|'ai', content: '...'}]
+var chatBusy = false;
+
+function toggleChat() {
+  chatOpen = !chatOpen;
+  document.getElementById('chatPanel').classList.toggle('chat-open', chatOpen);
+  if (chatOpen) {
+    renderSuggestions();
+    document.getElementById('chatInput').focus();
+  }
+}
+
+function setChatContext(repo, issue, title) {
+  // If context changed, clear history
+  if (chatContext.repo !== repo || chatContext.issue_number !== issue) {
+    chatHistory = [];
+    renderChatMessages();
+  }
+  chatContext = { repo: repo, issue_number: issue };
+  var label = repo + '#' + issue;
+  if (title) label += ' — ' + title;
+  document.getElementById('chatContextLabel').textContent = 'Discussing: ' + label;
+  renderSuggestions();
+  // Open panel
+  if (!chatOpen) toggleChat();
+}
+
+function clearChatContext() {
+  chatContext = {};
+  chatHistory = [];
+  document.getElementById('chatContextLabel').textContent = 'General context';
+  renderChatMessages();
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  var container = document.getElementById('chatSuggestions');
+  var chips = [];
+  if (chatContext.repo && chatContext.issue_number) {
+    chips = [
+      'Is this a real bug or user error?',
+      'How would you reproduce this?',
+      'What\'s the root cause?',
+      'Suggest a fix',
+      'Draft a response to the issue author'
+    ];
+  } else {
+    chips = [
+      'What issues are pending?',
+      'Show me the latest results',
+      'What repos am I monitoring?'
+    ];
+  }
+  // Don't show suggestions if there's already chat history
+  if (chatHistory.length > 0) { container.innerHTML = ''; return; }
+  container.innerHTML = chips.map(function(c) {
+    return '<button class="chat-chip" onclick="sendSuggestion(\'' + escapeHtml(c).replace(/'/g, "\\'") + '\')">' + escapeHtml(c) + '</button>';
+  }).join('');
+}
+
+function sendSuggestion(text) {
+  document.getElementById('chatInput').value = text;
+  sendChat();
+}
+
+// Simple markdown renderer
+function renderMarkdown(text) {
+  if (!text) return '';
+  var html = escapeHtml(text);
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    return '<pre><code>' + code.trim() + '</code></pre>';
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  // Ordered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  // Paragraphs (double newline)
+  html = html.replace(/\n\n/g, '</p><p>');
+  // Single newlines -> <br> (but not inside pre)
+  html = html.replace(/(?<!<\/pre>)\n(?!<)/g, '<br>');
+  return '<p>' + html + '</p>';
+}
+
+function renderChatMessages() {
+  var container = document.getElementById('chatMessages');
+  if (!chatHistory.length) {
+    container.innerHTML = '<div class="empty" style="padding:20px;font-size:13px;">Ask me anything about your bugs and issues.</div>';
+    return;
+  }
+  var html = '';
+  chatHistory.forEach(function(msg, i) {
+    if (msg.role === 'user') {
+      html += '<div class="chat-msg chat-msg-user">' + escapeHtml(msg.content) + '</div>';
+    } else {
+      var msgId = 'ai-msg-' + i;
+      html += '<div class="chat-msg chat-msg-ai">' +
+        '<span class="chat-avatar">&#x1F3B3;</span>' +
+        '<button class="chat-msg-copy" onclick="event.stopPropagation(); copyAiMsg(\'' + msgId + '\')" title="Copy">Copy</button>' +
+        '<div class="msg-content" id="' + msgId + '">' + renderMarkdown(msg.content) + '</div>' +
+      '</div>';
+    }
+  });
+  container.innerHTML = html;
+  container.scrollTop = container.scrollHeight;
+}
+
+function showTypingIndicator() {
+  var container = document.getElementById('chatMessages');
+  var typing = document.createElement('div');
+  typing.className = 'chat-typing';
+  typing.id = 'chatTyping';
+  typing.innerHTML = '<span class="chat-typing-dot"></span><span class="chat-typing-dot"></span><span class="chat-typing-dot"></span>';
+  container.appendChild(typing);
+  container.scrollTop = container.scrollHeight;
+}
+
+function removeTypingIndicator() {
+  var el = document.getElementById('chatTyping');
+  if (el) el.remove();
+}
+
+async function sendChat() {
+  if (chatBusy) return;
+  var input = document.getElementById('chatInput');
+  var message = input.value.trim();
+  if (!message) return;
+
+  // Add user message
+  chatHistory.push({ role: 'user', content: message });
+  input.value = '';
+  renderChatMessages();
+  renderSuggestions(); // clear chips after first message
+
+  // Show typing
+  chatBusy = true;
+  document.getElementById('chatSend').disabled = true;
+  showTypingIndicator();
+
+  try {
+    var resp = await fetch(API + '/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: message, context: chatContext })
+    });
+    var data = await resp.json();
+    removeTypingIndicator();
+    chatHistory.push({ role: 'ai', content: data.reply || 'No response.' });
+    renderChatMessages();
+  } catch(e) {
+    removeTypingIndicator();
+    chatHistory.push({ role: 'ai', content: 'Failed to reach the AI service. Please try again.' });
+    renderChatMessages();
+  }
+
+  chatBusy = false;
+  document.getElementById('chatSend').disabled = false;
+  input.focus();
+}
+
+function copyAiMsg(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var text = el.innerText || el.textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    showToast('Copied to clipboard', 'success');
+  });
+}
+
+// Chat input: Ctrl+Enter or Enter to send, Shift+Enter for newline
+document.getElementById('chatInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChat();
+  }
+});
+
+// Auto-resize chat input
+document.getElementById('chatInput').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+});
 
 // Initial load + auto-refresh
 refreshAll();

@@ -23,7 +23,11 @@ _state = {
     "repos": {},       # repo -> {pending: int, processed: int, last_check: str}
     "runs": [],        # [{repo, issue, title, verdict, ai, duration, timestamp, report}]
     "check_now": False,
+    "check_now_result": None,  # {total: int} set by controller after check completes
 }
+
+# Callback set by the controller for creating reproduction jobs
+_reproduce_callback = None
 _state_lock = threading.Lock()
 
 
@@ -53,12 +57,23 @@ def update_repo_stats(repo: str, pending: int, processed: int):
         }
 
 
+def set_check_result(total_new: int):
+    with _state_lock:
+        _state["check_now_result"] = {"total": total_new}
+
+
 def should_check_now() -> bool:
     with _state_lock:
         if _state["check_now"]:
             _state["check_now"] = False
             return True
         return False
+
+
+def set_reproduce_callback(callback):
+    """Register the controller's create_job function for dashboard use."""
+    global _reproduce_callback
+    _reproduce_callback = callback
 
 
 def _generate_certs():
@@ -130,13 +145,44 @@ def _create_app() -> Flask:
 
     @app.route("/api/check-now", methods=["POST"])
     def api_check_now():
-        update_state("check_now", True)
+        # Clear any previous result, set flag
+        with _state_lock:
+            _state["check_now"] = True
+            _state["check_now_result"] = None
         return jsonify({"status": "triggered"})
+
+    @app.route("/api/check-now/result", methods=["GET"])
+    def api_check_now_result():
+        """Poll for check-now result after triggering."""
+        with _state_lock:
+            result = _state.get("check_now_result")
+        if result is not None:
+            return jsonify({"status": "done", **result})
+        return jsonify({"status": "pending"})
 
     @app.route("/api/rerun/<path:repo>/<int:issue>", methods=["POST"])
     def api_rerun(repo, issue):
         result = _rerun_issue(repo, issue)
         return jsonify(result)
+
+    @app.route("/api/reproduce", methods=["POST"])
+    def api_reproduce():
+        data = request.get_json()
+        repo = data.get("repo", "")
+        issue_number = data.get("issue_number")
+        if not repo or not issue_number:
+            return jsonify({"status": "error", "message": "repo and issue_number required"}), 400
+        return jsonify(_reproduce_issue(repo, int(issue_number)))
+
+    @app.route("/api/chat", methods=["POST"])
+    def api_chat():
+        data = request.get_json()
+        message = data.get("message", "")
+        context = data.get("context", {})
+        if not message.strip():
+            return jsonify({"reply": "Please send a message."}), 400
+        reply = _handle_chat(message, context)
+        return jsonify({"reply": reply})
 
     return app
 
@@ -257,6 +303,177 @@ def _rerun_issue(repo: str, issue: int) -> dict:
         return {"status": "rerun_triggered", "repo": repo, "issue": issue}
     except Exception as exc:
         log.error("Rerun failed for %s#%d: %s", repo, issue, exc)
+        return {"status": "error", "message": str(exc)}
+
+
+def _fetch_issue(repo: str, issue_number: int) -> dict:
+    """Fetch issue details from GitHub API."""
+    import requests as req
+    gh_token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {gh_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        resp = req.get(
+            f"https://api.github.com/repos/{repo}/issues/{issue_number}",
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        log.error("Failed to fetch issue %s#%d: %s", repo, issue_number, exc)
+        return {}
+
+
+def _get_repo_profile(repo: str) -> dict | None:
+    """Load repo profile from env vars."""
+    repo_key = repo.replace("/", "_").replace("-", "_").replace(".", "_")
+    raw = os.environ.get(f"REPO_PROFILE_{repo_key}", "")
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw.strip())
+    except json.JSONDecodeError:
+        return None
+
+
+def _call_ai_chat(system_context: str, user_message: str) -> str:
+    """Call the AI API for chat. Reuses the same auth pattern as opinai_runner."""
+    import requests as req
+
+    ai_provider = os.environ.get("AI_PROVIDER", "").lower()
+    ai_api_key = os.environ.get("AI_API_KEY", "")
+    ai_model = os.environ.get("AI_MODEL", "claude-sonnet-4-20250514")
+    ai_base_url = os.environ.get("AI_BASE_URL", "https://api.anthropic.com")
+    ai_project = os.environ.get("AI_PROJECT", "")
+    ai_region = os.environ.get("AI_REGION", "")
+
+    messages = [
+        {"role": "user", "content": f"{system_context}\n\nUser question: {user_message}"},
+    ]
+
+    try:
+        if ai_provider == "vertex":
+            import google.auth
+            import google.auth.transport.requests as google_requests
+            scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+            credentials, _ = google.auth.default(scopes=scopes)
+            credentials.refresh(google_requests.Request())
+            access_token = credentials.token
+
+            url = (
+                f"https://{ai_region}-aiplatform.googleapis.com/v1/"
+                f"projects/{ai_project}/locations/{ai_region}/"
+                f"publishers/anthropic/models/{ai_model}:rawPredict"
+            )
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "anthropic_version": "vertex-2023-10-16",
+                "messages": messages,
+                "max_tokens": 2048,
+            }
+        elif "openai" in ai_base_url.lower():
+            url = f"{ai_base_url}/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {ai_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": ai_model,
+                "max_tokens": 2048,
+                "messages": messages,
+            }
+        else:
+            url = f"{ai_base_url}/v1/messages"
+            headers = {
+                "x-api-key": ai_api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": ai_model,
+                "max_tokens": 2048,
+                "messages": messages,
+            }
+
+        # Credentials in headers — never log the request
+        resp = req.post(url, headers=headers, json=payload, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+
+        if ai_provider == "vertex" or (ai_provider != "openai" and "openai" not in ai_base_url.lower()):
+            blocks = data.get("content", [])
+            return blocks[0].get("text", "") if blocks else "No response from AI."
+        else:
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI.")
+    except Exception as exc:
+        log.error("Chat AI call failed: %s", exc)
+        return f"Sorry, I couldn't reach the AI service: {exc}"
+
+
+def _handle_chat(message: str, context: dict) -> str:
+    """Build context and call AI for the chat feature."""
+    system_context = (
+        "You are OpinAI, an AI bug reproduction assistant running on a Kubernetes cluster. "
+        "You help developers understand bugs, analyze reproduction results, and suggest fixes. "
+        "Be concise, technical, and helpful. Use markdown formatting.\n\n"
+    )
+
+    repo = context.get("repo")
+    issue_number = context.get("issue_number")
+
+    if repo and issue_number:
+        issue = _fetch_issue(repo, int(issue_number))
+        if issue:
+            system_context += f"Current issue: {repo}#{issue_number}\n"
+            system_context += f"Title: {issue.get('title', '')}\n"
+            body = issue.get("body", "") or ""
+            system_context += f"Body: {body[:2000]}\n\n"
+
+        # Include previous reproduction results
+        state = get_state()
+        for run in state.get("runs", []):
+            if str(run.get("repo")) == str(repo) and str(run.get("issue")) == str(issue_number):
+                system_context += f"Previous reproduction result:\n{(run.get('report') or '')[:1000]}\n\n"
+                break
+
+        # Include repo profile
+        profile = _get_repo_profile(repo)
+        if profile:
+            system_context += f"Project profile: {json.dumps(profile)}\n\n"
+    else:
+        # General context — include current dashboard state
+        state = get_state()
+        repos = list(state.get("repos", {}).keys())
+        system_context += f"Monitored repos: {', '.join(repos) if repos else 'none configured'}\n"
+        system_context += f"Total runs: {len(state.get('runs', []))}\n"
+        pending = sum(r.get("pending", 0) for r in state.get("repos", {}).values())
+        system_context += f"Pending issues: {pending}\n\n"
+
+    # Sanitize AI response — strip any leaked credentials
+    reply = _call_ai_chat(system_context, message)
+    for secret_key in ("AI_API_KEY", "GITHUB_TOKEN"):
+        secret = os.environ.get(secret_key, "")
+        if secret and len(secret) > 8:
+            reply = reply.replace(secret, "REDACTED")
+    return reply
+
+
+def _reproduce_issue(repo: str, issue_number: int) -> dict:
+    """Create a K8s Job for a specific issue via the controller's callback."""
+    if _reproduce_callback is None:
+        return {"status": "error", "message": "Controller not ready"}
+    try:
+        _reproduce_callback(repo, issue_number)
+        return {"status": "triggered", "repo": repo, "issue": issue_number}
+    except Exception as exc:
+        log.error("Reproduce failed for %s#%d: %s", repo, issue_number, exc)
         return {"status": "error", "message": str(exc)}
 
 

@@ -37,7 +37,7 @@ GH_API = "https://api.github.com"
 
 def load_repo_profile() -> dict | None:
     """Load the repo profile from the REPO_PROFILE_<key> env var."""
-    repo_key = REPO.replace("/", "_").replace("-", "_")
+    repo_key = REPO.replace("/", "_").replace("-", "_").replace(".", "_")
     raw = os.environ.get(f"REPO_PROFILE_{repo_key}", "")
     if not raw.strip():
         return None
@@ -53,15 +53,15 @@ def format_profile_context(profile: dict) -> str:
     gpu = "Yes" if profile.get("gpu") else "No"
     k8s = "Yes" if profile.get("k8s") else "No"
     return (
-        "\nProject profile:\n"
+        "\nProject Profile:\n"
         f"- Type: {profile.get('type', 'unknown')}\n"
-        f"- Build: {profile.get('build', 'N/A')}\n"
-        f"- Run: {profile.get('run', 'N/A')}\n"
-        f"- Health: {profile.get('health', 'N/A')}\n"
+        f"- Install: {profile.get('build', 'unknown')}\n"
+        f"- Run: {profile.get('run', 'unknown')}\n"
+        f"- Health check: {profile.get('health', 'unknown')}\n"
         f"- Needs GPU: {gpu}\n"
         f"- Needs Kubernetes: {k8s}\n"
         f"- Dependencies: {profile.get('deps', 'none')}\n"
-        "\nUse this information to design your reproduction. "
+        "\nUse this to properly install and start the server before testing. "
         "If the project needs Kubernetes, use kubectl/oc commands. "
         "If it is an API server, start it and use curl.\n"
     )
