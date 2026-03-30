@@ -5,6 +5,7 @@ import logging
 import os
 import ssl
 import subprocess
+import sys
 import threading
 import time
 
@@ -14,6 +15,32 @@ log = logging.getLogger("opinai-dashboard")
 
 CERT_DIR = "/tmp/opinai-certs"
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+# In-memory log buffer for admin page
+_log_buffer = []
+_log_buffer_lock = threading.Lock()
+_LOG_BUFFER_MAX = 200
+
+
+class DashboardLogHandler(logging.Handler):
+    """Captures log lines into a buffer for the admin page."""
+
+    def emit(self, record):
+        line = self.format(record)
+        with _log_buffer_lock:
+            _log_buffer.append(line)
+            if len(_log_buffer) > _LOG_BUFFER_MAX:
+                del _log_buffer[: len(_log_buffer) - _LOG_BUFFER_MAX]
+
+
+def install_log_handler():
+    """Install the buffer handler on the root logger."""
+    handler = DashboardLogHandler()
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    ))
+    logging.getLogger().addHandler(handler)
 
 # Shared state — written by the controller, read by the dashboard
 _state = {
@@ -183,6 +210,121 @@ def _create_app() -> Flask:
             return jsonify({"reply": "Please send a message."}), 400
         reply = _handle_chat(message, context)
         return jsonify({"reply": reply})
+
+    # ----- Admin routes -----
+
+    @app.route("/admin")
+    def admin_page():
+        return send_from_directory(STATIC_DIR, "admin.html")
+
+    @app.route("/api/admin/repos", methods=["GET"])
+    def admin_repos_get():
+        repos, profiles = _admin_read_config()
+        result = []
+        for r in repos:
+            key = r.replace("/", "_").replace("-", "_").replace(".", "_")
+            profile = profiles.get(f"REPO_PROFILE_{key}")
+            parsed = {}
+            if profile:
+                try:
+                    parsed = json.loads(profile)
+                except json.JSONDecodeError:
+                    pass
+            result.append({"name": r, "profile": parsed})
+        return jsonify(result)
+
+    @app.route("/api/admin/repos", methods=["POST"])
+    def admin_repos_add():
+        data = request.get_json()
+        repo = data.get("name", "").strip()
+        profile = data.get("profile", {})
+        if not repo:
+            return jsonify({"error": "name required"}), 400
+        _admin_update_repo(repo, profile, delete=False)
+        return jsonify({"status": "added", "name": repo})
+
+    @app.route("/api/admin/repos", methods=["PUT"])
+    def admin_repos_update():
+        data = request.get_json()
+        repo = data.get("name", "").strip()
+        profile = data.get("profile", {})
+        if not repo:
+            return jsonify({"error": "name required"}), 400
+        _admin_update_repo(repo, profile, delete=False)
+        return jsonify({"status": "updated", "name": repo})
+
+    @app.route("/api/admin/repos", methods=["DELETE"])
+    def admin_repos_delete():
+        data = request.get_json()
+        repo = data.get("name", "").strip()
+        if not repo:
+            return jsonify({"error": "name required"}), 400
+        _admin_update_repo(repo, {}, delete=True)
+        return jsonify({"status": "deleted", "name": repo})
+
+    @app.route("/api/admin/settings", methods=["GET"])
+    def admin_settings_get():
+        return jsonify({
+            "poll_interval_minutes": os.environ.get("POLL_INTERVAL_MINUTES", "60"),
+            "done_label": os.environ.get("DONE_LABEL", "opinai-done"),
+            "ai_provider": os.environ.get("AI_PROVIDER", ""),
+            "ai_model": os.environ.get("AI_MODEL", ""),
+            "ai_region": os.environ.get("AI_REGION", ""),
+            "ai_project": os.environ.get("AI_PROJECT", ""),
+            "namespace": os.environ.get("NAMESPACE", "opinai"),
+        })
+
+    @app.route("/api/admin/settings", methods=["PUT"])
+    def admin_settings_put():
+        data = request.get_json()
+        _admin_update_settings(data)
+        return jsonify({"status": "updated"})
+
+    @app.route("/api/admin/test-ai", methods=["POST"])
+    def admin_test_ai():
+        try:
+            reply = _call_ai_chat("You are OpinAI. Respond with exactly: OpinAI is online.", "Say hi")
+            return jsonify({"status": "ok", "reply": reply})
+        except Exception as exc:
+            return jsonify({"status": "error", "message": str(exc)})
+
+    @app.route("/api/admin/test-github", methods=["POST"])
+    def admin_test_github():
+        import requests as req
+        gh_token = os.environ.get("GITHUB_TOKEN", "")
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {gh_token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        try:
+            resp = req.get("https://api.github.com/user", headers=headers, timeout=10)
+            if resp.ok:
+                user = resp.json()
+                return jsonify({"status": "ok", "login": user.get("login", "?")})
+            return jsonify({"status": "error", "message": f"HTTP {resp.status_code}"})
+        except Exception as exc:
+            return jsonify({"status": "error", "message": str(exc)})
+
+    @app.route("/api/admin/logs", methods=["GET"])
+    def admin_logs():
+        count = request.args.get("count", 50, type=int)
+        with _log_buffer_lock:
+            lines = _log_buffer[-count:]
+        return jsonify(lines)
+
+    @app.route("/api/admin/system", methods=["GET"])
+    def admin_system():
+        state = get_state()
+        uptime = time.time() - state["start_time"]
+        return jsonify({
+            "namespace": os.environ.get("NAMESPACE", "opinai"),
+            "pod_name": os.environ.get("HOSTNAME", "unknown"),
+            "uptime_human": _format_duration(uptime),
+            "uptime_seconds": int(uptime),
+            "image": "opinai-controller:latest",
+            "python": sys.version.split()[0] if "sys" in dir() else "?",
+        })
 
     return app
 
@@ -465,6 +607,88 @@ def _handle_chat(message: str, context: dict) -> str:
     return reply
 
 
+def _admin_read_config() -> tuple[list[str], dict]:
+    """Read repos list and profiles from the Kubernetes ConfigMap."""
+    try:
+        from kubernetes import client
+        v1 = client.CoreV1Api()
+        namespace = os.environ.get("NAMESPACE", "opinai")
+        cm = v1.read_namespaced_config_map("opinai-config", namespace)
+        data = cm.data or {}
+        repos_str = data.get("REPOS", "")
+        repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+        profiles = {k: v for k, v in data.items() if k.startswith("REPO_PROFILE_")}
+        return repos, profiles
+    except Exception as exc:
+        log.error("Failed to read ConfigMap: %s", exc)
+        # Fall back to env vars
+        repos_str = os.environ.get("REPOS", "")
+        repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+        return repos, {}
+
+
+def _admin_update_repo(repo: str, profile: dict, delete: bool = False):
+    """Add, update, or delete a repo in the Kubernetes ConfigMap."""
+    try:
+        from kubernetes import client
+        v1 = client.CoreV1Api()
+        namespace = os.environ.get("NAMESPACE", "opinai")
+        cm = v1.read_namespaced_config_map("opinai-config", namespace)
+        data = cm.data or {}
+
+        repos_str = data.get("REPOS", "")
+        repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+        repo_key = f"REPO_PROFILE_{repo.replace('/', '_').replace('-', '_').replace('.', '_')}"
+
+        if delete:
+            repos = [r for r in repos if r != repo]
+            data.pop(repo_key, None)
+        else:
+            if repo not in repos:
+                repos.append(repo)
+            data[repo_key] = json.dumps(profile)
+
+        data["REPOS"] = ",".join(repos)
+        cm.data = data
+        v1.replace_namespaced_config_map("opinai-config", namespace, cm)
+
+        # Update local env so the controller picks it up on next poll
+        os.environ["REPOS"] = data["REPOS"]
+        if delete:
+            os.environ.pop(repo_key, None)
+        else:
+            os.environ[repo_key] = json.dumps(profile)
+
+        log.info("ConfigMap updated: %s repo %s", "deleted" if delete else "upserted", repo)
+    except Exception as exc:
+        log.error("Failed to update ConfigMap: %s", exc)
+        raise
+
+
+def _admin_update_settings(settings: dict):
+    """Update settings in the Kubernetes ConfigMap."""
+    try:
+        from kubernetes import client
+        v1 = client.CoreV1Api()
+        namespace = os.environ.get("NAMESPACE", "opinai")
+        cm = v1.read_namespaced_config_map("opinai-config", namespace)
+        data = cm.data or {}
+
+        if "poll_interval_minutes" in settings:
+            data["POLL_INTERVAL_MINUTES"] = str(settings["poll_interval_minutes"])
+            os.environ["POLL_INTERVAL_MINUTES"] = data["POLL_INTERVAL_MINUTES"]
+        if "done_label" in settings:
+            data["DONE_LABEL"] = settings["done_label"]
+            os.environ["DONE_LABEL"] = data["DONE_LABEL"]
+
+        cm.data = data
+        v1.replace_namespaced_config_map("opinai-config", namespace, cm)
+        log.info("ConfigMap settings updated")
+    except Exception as exc:
+        log.error("Failed to update settings: %s", exc)
+        raise
+
+
 def _reproduce_issue(repo: str, issue_number: int) -> dict:
     """Create a K8s Job for a specific issue via the controller's callback."""
     if _reproduce_callback is None:
@@ -479,6 +703,7 @@ def _reproduce_issue(repo: str, issue_number: int) -> dict:
 
 def start_dashboard():
     """Start the dashboard HTTPS server in a background thread."""
+    install_log_handler()
     cert_path, key_path = _generate_certs()
     app = _create_app()
 

@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y curl jq git openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    curl jq git openssl build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install gh CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \

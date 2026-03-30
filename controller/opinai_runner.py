@@ -335,6 +335,88 @@ def add_label():
 # ---------------------------------------------------------------------------
 
 
+def _start_server(profile: dict) -> subprocess.Popen | None:
+    """Install and start the target server inside the pod using profile config."""
+    global SERVER_URL
+
+    build_cmd = profile.get("build", "")
+    run_cmd = profile.get("run", "")
+
+    # Clone the repo first
+    log.info("Cloning %s...", REPO)
+    clone_dir = "/tmp/opinai-repo"
+    result = subprocess.run(
+        ["git", "clone", "--depth=1", f"https://github.com/{REPO}.git", clone_dir],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        log.warning("Clone failed: %s", result.stderr[:500])
+        return None
+
+    # Install / build
+    if build_cmd:
+        log.info("Installing: %s", build_cmd)
+        result = subprocess.run(
+            build_cmd,
+            shell=True,
+            cwd=clone_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            log.warning("Build failed (exit %d): %s", result.returncode, result.stderr[:500])
+            # Continue anyway — the AI tests may still be useful
+
+    if not run_cmd:
+        return None
+
+    # Start the server
+    log.info("Starting server: %s", run_cmd)
+    server_proc = subprocess.Popen(
+        run_cmd,
+        shell=True,
+        cwd=clone_dir,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Derive SERVER_URL from health check URL
+    health_url = profile.get("health", "")
+    if health_url:
+        # Strip path to get base URL (e.g. http://localhost:8000/health -> http://localhost:8000)
+        parts = health_url.split("/")
+        if len(parts) >= 3:
+            SERVER_URL = "/".join(parts[:3])
+        else:
+            SERVER_URL = health_url
+    else:
+        health_url = "http://localhost:8000/health"
+        SERVER_URL = "http://localhost:8000"
+
+    os.environ["SERVER_URL"] = SERVER_URL
+
+    # Wait for health check
+    log.info("Waiting for server health at %s...", health_url)
+    for i in range(30):
+        try:
+            r = requests.get(health_url, timeout=2)
+            if r.status_code < 500:
+                log.info("Server healthy after %ds", i)
+                return server_proc
+        except (requests.ConnectionError, requests.Timeout):
+            pass
+        if server_proc.poll() is not None:
+            log.warning("Server process exited with code %d", server_proc.returncode)
+            return None
+        time.sleep(1)
+
+    log.warning("Server did not become healthy within 30s — continuing anyway")
+    return server_proc
+
+
 def main():
     if not REPO or not ISSUE_NUMBER:
         log.error("REPO and ISSUE_NUMBER env vars are required")
@@ -356,80 +438,94 @@ def main():
     body = issue.get("body", "") or ""
     log.info("Issue: %s", title)
 
-    # Load repo profile from env
+    # Step 2: Load repo profile and start server inside the pod
     profile = load_repo_profile()
+    server_proc = None
     if profile:
         log.info("Loaded repo profile: type=%s", profile.get("type", "?"))
+        server_proc = _start_server(profile)
 
-    # Step 2: AI generates test script
-    script_text = ai_generate_tests(title, body, profile=profile)
-    if not script_text:
+    try:
+        # Step 3: AI generates test script
+        script_text = ai_generate_tests(title, body, profile=profile)
+        if not script_text:
+            comment = (
+                "## OpinAI Bug Reproduction Report\n\n"
+                f"**Issue:** #{ISSUE_NUMBER}\n"
+                "**Analysis:** Skipped (no AI API key or AI analysis failed)\n\n"
+                "Could not generate tests for this issue. "
+                "Configure an AI API key for automated analysis.\n\n"
+                "---\n"
+                '*"That\'s just, like, your opinion, man." '
+                "-- [OpinAI](https://github.com/yossiovadia/opinai)*"
+            )
+            post_comment(comment)
+            add_label()
+            return
+
+        log.info("AI generated test script (%d bytes)", len(script_text))
+
+        # Step 4: Execute tests
+        log.info("Running AI-generated tests...")
+        test_output = run_tests(script_text)
+        log.info("Tests completed (%d bytes of output)", len(test_output))
+
+        # Step 5: AI verdict
+        verdict_text = ai_verdict(title, body, test_output)
+        verdict_section = verdict_text if verdict_text else "AI verdict unavailable."
+
+        # Step 6: Build and post report
+        results_table = ""
+        for line in test_output.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                r = json.loads(line)
+                status = r.get("status", "?")
+                icon = {"pass": "PASS", "fail": "FAIL"}.get(status, status.upper())
+                results_table += (
+                    f"| {r.get('test', '?')} | {icon} | {r.get('details', '')} |\n"
+                )
+            except json.JSONDecodeError:
+                continue
+
+        if not results_table:
+            results_table = "| (no structured results) | - | - |\n"
+
+        server_info = f"**Server:** `{SERVER_URL}`\n" if SERVER_URL else ""
+
         comment = (
             "## OpinAI Bug Reproduction Report\n\n"
             f"**Issue:** #{ISSUE_NUMBER}\n"
-            "**Analysis:** Skipped (no AI API key or AI analysis failed)\n\n"
-            "Could not generate tests for this issue. "
-            "Configure an AI API key for automated analysis.\n\n"
+            f"{server_info}"
+            f"**Analysis:** AI-powered (model: {AI_MODEL})\n\n"
+            "### Results\n\n"
+            "| Test | Status | Details |\n"
+            "|------|--------|---------|\n"
+            f"{results_table}\n"
+            "### Verdict\n\n"
+            f"{verdict_section}\n\n"
+            "<details><summary>Raw test output</summary>\n\n"
+            f"```\n{test_output[:5000]}\n```\n\n"
+            "</details>\n\n"
             "---\n"
             '*"That\'s just, like, your opinion, man." '
             "-- [OpinAI](https://github.com/yossiovadia/opinai)*"
         )
+
         post_comment(comment)
         add_label()
-        return
-
-    log.info("AI generated test script (%d bytes)", len(script_text))
-
-    # Step 3: Execute tests
-    log.info("Running AI-generated tests...")
-    test_output = run_tests(script_text)
-    log.info("Tests completed (%d bytes of output)", len(test_output))
-
-    # Step 4: AI verdict
-    verdict_text = ai_verdict(title, body, test_output)
-    verdict_section = verdict_text if verdict_text else "AI verdict unavailable."
-
-    # Step 5: Build and post report
-    # Parse JSONL results from test output
-    results_table = ""
-    for line in test_output.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            r = json.loads(line)
-            status = r.get("status", "?")
-            icon = {"pass": "PASS", "fail": "FAIL"}.get(status, status.upper())
-            results_table += (
-                f"| {r.get('test', '?')} | {icon} | {r.get('details', '')} |\n"
-            )
-        except json.JSONDecodeError:
-            continue
-
-    if not results_table:
-        results_table = "| (no structured results) | - | - |\n"
-
-    comment = (
-        "## OpinAI Bug Reproduction Report\n\n"
-        f"**Issue:** #{ISSUE_NUMBER}\n"
-        f"**Analysis:** AI-powered (model: {AI_MODEL})\n\n"
-        "### Results\n\n"
-        "| Test | Status | Details |\n"
-        "|------|--------|---------|\n"
-        f"{results_table}\n"
-        "### Verdict\n\n"
-        f"{verdict_section}\n\n"
-        "<details><summary>Raw test output</summary>\n\n"
-        f"```\n{test_output[:5000]}\n```\n\n"
-        "</details>\n\n"
-        "---\n"
-        '*"That\'s just, like, your opinion, man." '
-        "-- [OpinAI](https://github.com/yossiovadia/opinai)*"
-    )
-
-    post_comment(comment)
-    add_label()
-    log.info("Done — reproduction complete for %s#%s", REPO, ISSUE_NUMBER)
+        log.info("Done — reproduction complete for %s#%s", REPO, ISSUE_NUMBER)
+    finally:
+        # Cleanup: kill server process
+        if server_proc and server_proc.poll() is None:
+            log.info("Terminating server process")
+            server_proc.terminate()
+            try:
+                server_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server_proc.kill()
 
 
 if __name__ == "__main__":
