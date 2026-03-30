@@ -323,7 +323,7 @@ def _create_app() -> Flask:
             "uptime_human": _format_duration(uptime),
             "uptime_seconds": int(uptime),
             "image": "opinai-controller:latest",
-            "python": sys.version.split()[0] if "sys" in dir() else "?",
+            "python": sys.version.split()[0],
         })
 
     return app

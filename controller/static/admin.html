@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinAI Admin</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .admin-nav { padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--border); }
+    .admin-nav a { color: var(--blue); font-size: 13px; }
+    .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .admin-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .admin-card h3 { font-size: 15px; margin-bottom: 12px; font-weight: 600; }
+    .admin-field { margin-bottom: 10px; }
+    .admin-field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .admin-field input, .admin-field select {
+      width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text); font-size: 13px; font-family: var(--font); outline: none;
+    }
+    .admin-field input:focus { border-color: var(--blue); }
+    .admin-field .readonly { color: var(--text-dim); background: transparent; border-color: transparent; }
+    .admin-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .admin-status { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; }
+    .log-box {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+      font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; color: var(--text-dim);
+      max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+    }
+    .repo-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 8px; }
+    .repo-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .repo-item-name { font-weight: 600; font-size: 14px; }
+    .repo-item-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+    .repo-item-fields .admin-field { margin-bottom: 0; }
+    .btn-danger { border-color: var(--red); color: var(--red); }
+    .btn-danger:hover { background: rgba(248, 81, 73, 0.15); }
+    @media (max-width: 900px) { .admin-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<div class="admin-nav">
+  <a href="/">&larr; Back to Dashboard</a>
+</div>
+
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo">&#x2699;&#xFE0F; OpinAI Admin</div>
+  </div>
+  <div class="header-right">
+    <span id="adminPod">Pod: loading...</span>
+    <span id="adminUptime">Uptime: --</span>
+  </div>
+</header>
+
+<main class="main">
+
+  <div class="admin-grid">
+
+    <!-- Repos -->
+    <div class="admin-card" style="grid-column: 1 / -1;">
+      <h3>Monitored Repos</h3>
+      <div id="repoList"><div class="empty">Loading...</div></div>
+      <hr style="border-color: var(--border); margin: 16px 0;">
+      <h3>Add Repo</h3>
+      <div class="repo-item-fields">
+        <div class="admin-field"><label>Repo (owner/name)</label><input id="addRepoName" placeholder="owner/repo"></div>
+        <div class="admin-field"><label>Type</label>
+          <select id="addRepoType"><option>api-server</option><option>cli</option><option>operator</option><option>library</option><option>other</option></select>
+        </div>
+        <div class="admin-field"><label>Build / Install</label><input id="addRepoBuild" placeholder="pip install -e ."></div>
+        <div class="admin-field"><label>Run / Start</label><input id="addRepoRun" placeholder="python -m myapp --port 8000"></div>
+        <div class="admin-field"><label>Health Check URL</label><input id="addRepoHealth" placeholder="http://localhost:8000/health"></div>
+        <div class="admin-field"><label>Dependencies</label><input id="addRepoDeps" placeholder="Redis, Ollama"></div>
+      </div>
+      <div style="display:flex;gap:12px;margin-top:8px;">
+        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:4px;">
+          <input type="checkbox" id="addRepoGpu"> Needs GPU
+        </label>
+        <label style="font-size:12px;color:var(--text-dim);display:flex;align-items:center;gap:4px;">
+          <input type="checkbox" id="addRepoK8s"> Needs K8s
+        </label>
+      </div>
+      <div class="admin-actions">
+        <button class="btn btn-primary" onclick="addRepo()">Add Repo</button>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="admin-card">
+      <h3>Settings</h3>
+      <div class="admin-field">
+        <label>Polling Interval (minutes)</label>
+        <input id="settingsPoll" type="number" value="60">
+      </div>
+      <div class="admin-field">
+        <label>Done Label</label>
+        <input id="settingsLabel" value="opinai-done">
+      </div>
+      <div class="admin-actions">
+        <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+      </div>
+    </div>
+
+    <!-- AI Provider (read-only) -->
+    <div class="admin-card">
+      <h3>AI Provider</h3>
+      <div class="admin-field"><label>Provider</label><input id="aiProvider" class="readonly" readonly></div>
+      <div class="admin-field"><label>Model</label><input id="aiModel" class="readonly" readonly></div>
+      <div class="admin-field"><label>Region</label><input id="aiRegion" class="readonly" readonly></div>
+    </div>
+
+    <!-- Credentials -->
+    <div class="admin-card">
+      <h3>Credentials</h3>
+      <div class="admin-status" id="ghStatus"><span class="status-dot" id="ghDot"></span> GitHub: checking...</div>
+      <div class="admin-status" id="aiStatus"><span class="status-dot" id="aiDot"></span> AI: checking...</div>
+      <div class="admin-actions">
+        <button class="btn" onclick="testGithub()">Test GitHub</button>
+        <button class="btn" onclick="testAi()">Test AI Connection</button>
+      </div>
+    </div>
+
+    <!-- System -->
+    <div class="admin-card">
+      <h3>System</h3>
+      <div class="admin-status">Namespace: <strong id="sysNamespace">--</strong></div>
+      <div class="admin-status">Pod: <strong id="sysPod">--</strong></div>
+      <div class="admin-status">Uptime: <strong id="sysUptime">--</strong></div>
+    </div>
+
+    <!-- Logs -->
+    <div class="admin-card" style="grid-column: 1 / -1;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>Controller Logs</h3>
+        <button class="btn" onclick="loadLogs()">Refresh</button>
+      </div>
+      <div class="log-box" id="logBox">Loading...</div>
+    </div>
+
+  </div>
+
+</main>
+
+<script>
+function escapeHtml(s) {
+  if (!s) return '';
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function fetchJSON(url, opts) {
+  var resp = await fetch(url, opts);
+  return resp.json();
+}
+
+// --- Repos ---
+async function loadRepos() {
+  var repos = await fetchJSON('/api/admin/repos');
+  var container = document.getElementById('repoList');
+  if (!repos.length) { container.innerHTML = '<div class="empty">No repos configured</div>'; return; }
+  container.innerHTML = repos.map(function(r) {
+    var p = r.profile || {};
+    var id = r.name.replace(/[^a-zA-Z0-9]/g, '_');
+    return '<div class="repo-item" id="repo-' + id + '">' +
+      '<div class="repo-item-header">' +
+        '<span class="repo-item-name">' + escapeHtml(r.name) + '</span>' +
+        '<div>' +
+          '<button class="btn" onclick="saveRepo(\'' + escapeHtml(r.name) + '\', \'' + id + '\')">Save</button> ' +
+          '<button class="btn btn-danger" onclick="deleteRepo(\'' + escapeHtml(r.name) + '\')">Delete</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="repo-item-fields">' +
+        '<div class="admin-field"><label>Type</label><input id="rf-' + id + '-type" value="' + escapeHtml(p.type || '') + '"></div>' +
+        '<div class="admin-field"><label>Build</label><input id="rf-' + id + '-build" value="' + escapeHtml(p.build || '') + '"></div>' +
+        '<div class="admin-field"><label>Run</label><input id="rf-' + id + '-run" value="' + escapeHtml(p.run || '') + '"></div>' +
+        '<div class="admin-field"><label>Health</label><input id="rf-' + id + '-health" value="' + escapeHtml(p.health || '') + '"></div>' +
+        '<div class="admin-field"><label>Dependencies</label><input id="rf-' + id + '-deps" value="' + escapeHtml(p.deps || '') + '"></div>' +
+        '<div class="admin-field"><label>GPU / K8s</label><input id="rf-' + id + '-flags" value="' + (p.gpu ? 'gpu' : '') + (p.gpu && p.k8s ? ',' : '') + (p.k8s ? 'k8s' : '') + '" placeholder="gpu,k8s"></div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function saveRepo(name, id) {
+  var flags = (document.getElementById('rf-' + id + '-flags').value || '').toLowerCase();
+  var profile = {
+    type: document.getElementById('rf-' + id + '-type').value,
+    build: document.getElementById('rf-' + id + '-build').value,
+    run: document.getElementById('rf-' + id + '-run').value,
+    health: document.getElementById('rf-' + id + '-health').value,
+    deps: document.getElementById('rf-' + id + '-deps').value,
+    gpu: flags.indexOf('gpu') >= 0,
+    k8s: flags.indexOf('k8s') >= 0
+  };
+  await fetchJSON('/api/admin/repos', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name, profile: profile}) });
+  loadRepos();
+}
+
+async function deleteRepo(name) {
+  if (!confirm('Delete ' + name + '?')) return;
+  await fetchJSON('/api/admin/repos', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name}) });
+  loadRepos();
+}
+
+async function addRepo() {
+  var name = document.getElementById('addRepoName').value.trim();
+  if (!name) return;
+  var profile = {
+    type: document.getElementById('addRepoType').value,
+    build: document.getElementById('addRepoBuild').value,
+    run: document.getElementById('addRepoRun').value,
+    health: document.getElementById('addRepoHealth').value,
+    deps: document.getElementById('addRepoDeps').value,
+    gpu: document.getElementById('addRepoGpu').checked,
+    k8s: document.getElementById('addRepoK8s').checked
+  };
+  await fetchJSON('/api/admin/repos', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name, profile: profile}) });
+  document.getElementById('addRepoName').value = '';
+  document.getElementById('addRepoBuild').value = '';
+  document.getElementById('addRepoRun').value = '';
+  document.getElementById('addRepoHealth').value = '';
+  document.getElementById('addRepoDeps').value = '';
+  document.getElementById('addRepoGpu').checked = false;
+  document.getElementById('addRepoK8s').checked = false;
+  loadRepos();
+}
+
+// --- Settings ---
+async function loadSettings() {
+  var s = await fetchJSON('/api/admin/settings');
+  document.getElementById('settingsPoll').value = s.poll_interval_minutes;
+  document.getElementById('settingsLabel').value = s.done_label;
+  document.getElementById('aiProvider').value = s.ai_provider || '(not set)';
+  document.getElementById('aiModel').value = s.ai_model || '(not set)';
+  document.getElementById('aiRegion').value = s.ai_region || '(N/A)';
+}
+
+async function saveSettings() {
+  await fetchJSON('/api/admin/settings', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      poll_interval_minutes: document.getElementById('settingsPoll').value,
+      done_label: document.getElementById('settingsLabel').value
+    })
+  });
+  loadSettings();
+}
+
+// --- Credentials ---
+async function testGithub() {
+  document.getElementById('ghStatus').innerHTML = '<span class="status-dot" style="background:var(--yellow)"></span> GitHub: testing...';
+  var r = await fetchJSON('/api/admin/test-github', { method: 'POST' });
+  if (r.status === 'ok') {
+    document.getElementById('ghStatus').innerHTML = '<span class="status-dot green"></span> GitHub: authenticated as <strong>' + escapeHtml(r.login) + '</strong>';
+  } else {
+    document.getElementById('ghStatus').innerHTML = '<span class="status-dot red"></span> GitHub: ' + escapeHtml(r.message || 'failed');
+  }
+}
+
+async function testAi() {
+  document.getElementById('aiStatus').innerHTML = '<span class="status-dot" style="background:var(--yellow)"></span> AI: testing...';
+  var r = await fetchJSON('/api/admin/test-ai', { method: 'POST' });
+  if (r.status === 'ok') {
+    document.getElementById('aiStatus').innerHTML = '<span class="status-dot green"></span> AI: connected — "' + escapeHtml((r.reply || '').substring(0, 80)) + '"';
+  } else {
+    document.getElementById('aiStatus').innerHTML = '<span class="status-dot red"></span> AI: ' + escapeHtml(r.message || 'failed');
+  }
+}
+
+// --- System ---
+async function loadSystem() {
+  var s = await fetchJSON('/api/admin/system');
+  document.getElementById('sysNamespace').textContent = s.namespace;
+  document.getElementById('sysPod').textContent = s.pod_name;
+  document.getElementById('sysUptime').textContent = s.uptime_human;
+  document.getElementById('adminPod').textContent = 'Pod: ' + s.pod_name;
+  document.getElementById('adminUptime').textContent = 'Uptime: ' + s.uptime_human;
+}
+
+// --- Logs ---
+async function loadLogs() {
+  var lines = await fetchJSON('/api/admin/logs?count=50');
+  var box = document.getElementById('logBox');
+  box.textContent = lines.join('\n') || '(no logs)';
+  box.scrollTop = box.scrollHeight;
+}
+
+// --- Init ---
+async function initAdmin() {
+  await Promise.all([loadRepos(), loadSettings(), loadSystem(), loadLogs()]);
+  testGithub();
+  testAi();
+}
+initAdmin();
+setInterval(function() { loadSystem(); loadLogs(); }, 15000);
+</script>
+
+</body>
+</html>
