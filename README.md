@@ -8,7 +8,7 @@ AI-powered infrastructure-level bug reproduction and validation. You *think* it'
   <img src="assets/demo.svg" alt="OpinAI Demo" width="800">
 </p>
 
-[**→ Watch the Full Interactive Demo**](https://yossiovadia.github.io/reprobot-demo/)
+[**→ Watch the Full Interactive Demo**](https://yossiovadia.github.io/opinai-demo/)
 
 ---
 
@@ -157,7 +157,7 @@ opinai regress --repo owner/repo
 
 Watch the full OpinAI flow — from issue filing to bug confirmation to fix validation:
 
-[**→ Interactive Demo**](https://yossiovadia.github.io/reprobot-demo/)
+[**→ Interactive Demo**](https://yossiovadia.github.io/opinai-demo/)
 
 ## Status
 

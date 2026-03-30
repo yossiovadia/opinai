@@ -131,7 +131,7 @@ Issue reported → AI reads it → provisions the right environment → writes r
 - **Repro** — "AI that reproduces your bugs"
 - **BugWitness** — "automated bug witness"
 - **InfraProbe** — infrastructure-level bug probing
-- **ReproBot** — straightforward
+- **OpinAI** — straightforward
 - **GroundTruth** — validates bugs against real infrastructure
 
 ## Competitive Moat
