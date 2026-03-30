@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -357,13 +358,20 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
         log.warning("Clone failed: %s", result.stderr[:500])
         return None
 
-    # Install / build
+    # Build env with pip bin dirs on PATH
+    env = os.environ.copy()
+    pip_bin = os.path.dirname(shutil.which("python3") or "/usr/local/bin/python3")
+    env["PATH"] = f"/usr/local/bin:/root/.local/bin:{pip_bin}:{env.get('PATH', '')}"
+
+    # Install / build (use python3 -m pip for pip commands)
     if build_cmd:
-        log.info("Installing: %s", build_cmd)
+        resolved_build_cmd = build_cmd.replace("pip install", "python3 -m pip install")
+        log.info("Installing: %s", resolved_build_cmd)
         result = subprocess.run(
-            build_cmd,
+            resolved_build_cmd,
             shell=True,
             cwd=clone_dir,
+            env=env,
             capture_output=True,
             text=True,
             timeout=300,
@@ -381,6 +389,7 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
         run_cmd,
         shell=True,
         cwd=clone_dir,
+        env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
