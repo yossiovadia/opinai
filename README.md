@@ -69,7 +69,7 @@ When someone labels an issue with `needs-reproduction`, OpinAI:
 | Docker-based | [docker.yml](examples/docker.yml) |
 | External/staging server | [external-server.yml](examples/external-server.yml) |
 | Custom test script | [custom-tests.yml](examples/custom-tests.yml) |
-| LLM API server (llm-katan) | [workflow.yml](examples/workflow.yml) |
+| LLM API server (llm-katan) | [llm-katan.yml](examples/llm-katan.yml) |
 
 ## Report Format
 

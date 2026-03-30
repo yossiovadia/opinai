@@ -6,7 +6,7 @@ RESULTS_DIR="$(mktemp -d)"
 SERVER_PID=""
 
 cleanup() {
-  if [[ -n "$SERVER_PID" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+  if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
@@ -68,8 +68,13 @@ echo "Test scope — streaming:$TESTS_STREAMING auth:$TESTS_AUTH tools:$TESTS_TO
 # 3. Start the server
 # ---------------------------------------------------------------------------
 echo "::group::Starting server"
-eval "$SERVER_COMMAND" &
-SERVER_PID=$!
+if [[ -z "${SERVER_COMMAND:-}" ]]; then
+  echo "No server_command provided — assuming server is already running"
+  SERVER_PID=""
+else
+  eval "$SERVER_COMMAND" &
+  SERVER_PID=$!
+fi
 
 echo "Waiting ${WAIT_SECONDS}s for server (pid $SERVER_PID)..."
 ELAPSED=0
@@ -94,7 +99,15 @@ echo "::endgroup::"
 # 4. Run tests
 # ---------------------------------------------------------------------------
 export RESULTS_DIR SERVER_URL PROVIDER_FILTER TESTS_STREAMING TESTS_AUTH TESTS_TOOLS
-"$SCRIPT_DIR/test_providers.sh"
+
+if [[ -n "${TEST_SCRIPT:-}" && -f "$TEST_SCRIPT" ]]; then
+  echo "::group::Running custom test script: $TEST_SCRIPT"
+  chmod +x "$TEST_SCRIPT"
+  "$TEST_SCRIPT"
+  echo "::endgroup::"
+else
+  "$SCRIPT_DIR/test_providers.sh"
+fi
 
 # ---------------------------------------------------------------------------
 # 5. Post report
