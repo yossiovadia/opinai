@@ -1,0 +1,24 @@
+# OpinAI for Go services
+name: OpinAI Bug Reproduction
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reproduce:
+    if: github.event.label.name == 'needs-reproduction'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - uses: yossiovadia/opinai@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          install_command: 'go build -o server ./cmd/server'
+          server_command: './server --port 8000'
+          server_url: 'http://localhost:8000'
+          github_token: ${{ secrets.GITHUB_TOKEN }}

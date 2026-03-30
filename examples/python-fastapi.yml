@@ -1,0 +1,24 @@
+# OpinAI for Python FastAPI/Flask servers
+name: OpinAI Bug Reproduction
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reproduce:
+    if: github.event.label.name == 'needs-reproduction'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: yossiovadia/opinai@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          install_command: 'pip install -e .'
+          server_command: 'python -m myapp serve --port 8000'
+          server_url: 'http://localhost:8000'
+          github_token: ${{ secrets.GITHUB_TOKEN }}

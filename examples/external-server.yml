@@ -1,0 +1,19 @@
+# OpinAI for already-running servers (no install/start needed)
+name: OpinAI Bug Reproduction
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reproduce:
+    if: github.event.label.name == 'needs-reproduction'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: yossiovadia/opinai@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          server_url: 'https://staging.myapi.com'
+          github_token: ${{ secrets.GITHUB_TOKEN }}

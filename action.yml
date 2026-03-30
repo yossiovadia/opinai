@@ -1,27 +1,33 @@
-name: 'OpinAI Bug Reproduction'
-description: "That's just, like, your opinion, man. Let OpinAI verify it."
+name: 'OpinAI — Automated Bug Reproduction'
+description: "AI-powered bug reproduction. Automatically validates reported bugs against your running server with protocol compliance tests."
 branding:
-  icon: 'search'
+  icon: 'target'
   color: 'orange'
 
 inputs:
   issue_number:
-    description: 'GitHub issue number to reproduce'
+    description: 'GitHub issue number to investigate'
     required: true
   install_command:
-    description: 'Command to install the test server'
-    default: 'pip install llm-katan'
+    description: 'Command to install your server (runs before server_command)'
+    required: false
+    default: ''
   server_command:
-    description: 'Command to start the test server (after install)'
-    default: 'llm-katan --model test --backend echo --providers openai,anthropic,vertexai,bedrock,azure_openai --port 8000'
+    description: 'Command to start your server in background'
+    required: false
+    default: ''
   server_url:
-    description: 'Server base URL'
+    description: 'Base URL of your running server'
     default: 'http://localhost:8000'
   wait_seconds:
-    description: 'Seconds to wait for server startup'
+    description: 'Seconds to wait for server to become healthy'
     default: '15'
+  test_script:
+    description: 'Path to a custom test script (overrides built-in tests)'
+    required: false
+    default: ''
   github_token:
-    description: 'GitHub token for posting comments'
+    description: 'GitHub token for posting comments on issues'
     required: true
 
 runs:
@@ -37,10 +43,11 @@ runs:
           fi
         done
 
-    - name: Install test server
+    - name: Install server
+      if: inputs.install_command != ''
       shell: bash
       run: |
-        echo "🔧 Installing test server..."
+        echo "🔧 Installing server..."
         ${{ inputs.install_command }}
         echo "✅ Server installed"
 
@@ -51,6 +58,7 @@ runs:
         SERVER_COMMAND: ${{ inputs.server_command }}
         SERVER_URL: ${{ inputs.server_url }}
         WAIT_SECONDS: ${{ inputs.wait_seconds }}
+        TEST_SCRIPT: ${{ inputs.test_script }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |

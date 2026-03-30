@@ -1,0 +1,21 @@
+# OpinAI with your own test script
+name: OpinAI Bug Reproduction
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reproduce:
+    if: github.event.label.name == 'needs-reproduction'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: yossiovadia/opinai@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          install_command: 'pip install -e .'
+          server_command: 'python -m myapp --port 8000'
+          test_script: './tests/opinai_tests.sh'
+          github_token: ${{ secrets.GITHUB_TOKEN }}

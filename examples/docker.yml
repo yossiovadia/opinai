@@ -1,0 +1,22 @@
+# OpinAI for Docker-based services
+name: OpinAI Bug Reproduction
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  reproduce:
+    if: github.event.label.name == 'needs-reproduction'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: yossiovadia/opinai@v1
+        with:
+          issue_number: ${{ github.event.issue.number }}
+          install_command: 'docker build -t myapp .'
+          server_command: 'docker run -d -p 8000:8000 myapp'
+          server_url: 'http://localhost:8000'
+          wait_seconds: '30'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
