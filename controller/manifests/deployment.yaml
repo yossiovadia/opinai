@@ -20,6 +20,10 @@ spec:
         - name: opinai-data
           persistentVolumeClaim:
             claimName: opinai-data
+        - name: gcp-credentials
+          secret:
+            secretName: opinai-gcp-credentials
+            optional: true
       containers:
         - name: controller
           image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
@@ -34,6 +38,36 @@ spec:
           volumeMounts:
             - name: opinai-data
               mountPath: /data
+            - name: gcp-credentials
+              mountPath: /var/run/secrets/gcp
+              readOnly: true
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/gcp/credentials.json
+            - name: AI_PROVIDER
+              valueFrom:
+                secretKeyRef:
+                  name: opinai-credentials
+                  key: AI_PROVIDER
+                  optional: true
+            - name: AI_PROJECT
+              valueFrom:
+                secretKeyRef:
+                  name: opinai-credentials
+                  key: AI_PROJECT
+                  optional: true
+            - name: AI_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: opinai-credentials
+                  key: AI_REGION
+                  optional: true
+            - name: AI_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: opinai-credentials
+                  key: AI_MODEL
+                  optional: true
           envFrom:
             - configMapRef:
                 name: opinai-config
@@ -41,8 +75,8 @@ spec:
                 name: opinai-credentials
           resources:
             requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 200m
+              cpu: 100m
               memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
