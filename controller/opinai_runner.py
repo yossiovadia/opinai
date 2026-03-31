@@ -101,6 +101,47 @@ def _ai_available() -> bool:
     return bool(AI_API_KEY)
 
 
+def ai_categorize(title: str, body: str) -> str:
+    """Ask the AI to categorize the issue. Returns BUG/FEATURE/QUESTION/DOCS."""
+    if not _ai_available():
+        return "BUG"  # default to BUG if no AI
+
+    prompt = (
+        "You are OpinAI. Categorize this GitHub issue:\n\n"
+        f"Title: {title}\n"
+        f"Body: {body}\n\n"
+        "Categorize this issue: BUG (defect in existing behavior), "
+        "FEATURE (request for new functionality), QUESTION (asking for help/clarification), "
+        "or DOCS (documentation issue).\n\n"
+        "Respond with ONLY one line in this exact format:\n"
+        "Category: BUG\n"
+        "(or FEATURE, QUESTION, DOCS)"
+    )
+
+    try:
+        content = _call_ai(prompt)
+    except Exception as exc:
+        log.error("AI categorization failed: %s", exc)
+        return "BUG"
+
+    if not content:
+        return "BUG"
+
+    # Parse category from response
+    for line in content.upper().splitlines():
+        if "CATEGORY:" in line:
+            for cat in ("BUG", "FEATURE", "QUESTION", "DOCS"):
+                if cat in line:
+                    return cat
+
+    # Fallback: check if the response contains the category anywhere
+    upper = content.upper()
+    for cat in ("FEATURE", "QUESTION", "DOCS"):
+        if cat in upper:
+            return cat
+    return "BUG"
+
+
 def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str | None:
     """Ask the AI to generate a bash test script for the issue. Returns script text."""
     if not _ai_available():
@@ -154,10 +195,10 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
 # ---------------------------------------------------------------------------
 
 
-def ai_verdict(title: str, body: str, results: str) -> str | None:
-    """Ask the AI to summarize the test results."""
+def ai_verdict(title: str, body: str, results: str) -> tuple[str | None, str]:
+    """Ask the AI to summarize the test results. Returns (verdict_text, confidence)."""
     if not _ai_available():
-        return None
+        return None, "LOW"
 
     prompt = (
         "You are OpinAI. A user filed this bug report:\n\n"
@@ -168,14 +209,37 @@ def ai_verdict(title: str, body: str, results: str) -> str | None:
         "Give a brief verdict:\n"
         "1. Is the bug confirmed, not reproduced, or inconclusive?\n"
         "2. One-paragraph summary of what the tests showed.\n"
+        "3. Rate your confidence in this verdict: HIGH (strong evidence, "
+        "clear pass/fail results), MEDIUM (some evidence but ambiguous), "
+        "or LOW (mostly guessing, tests may not cover the actual bug).\n\n"
+        "Include this exact line in your response:\n"
+        "Confidence: HIGH\n"
+        "(or MEDIUM or LOW)\n\n"
         "Keep it concise."
     )
 
     try:
-        return _call_ai(prompt)
+        content = _call_ai(prompt)
     except Exception as exc:
         log.error("AI verdict failed: %s", exc)
-        return None
+        return None, "LOW"
+
+    if not content:
+        return None, "LOW"
+
+    # Parse confidence from response
+    confidence = "MEDIUM"
+    for line in content.upper().splitlines():
+        if "CONFIDENCE:" in line:
+            if "HIGH" in line:
+                confidence = "HIGH"
+            elif "LOW" in line:
+                confidence = "LOW"
+            else:
+                confidence = "MEDIUM"
+            break
+
+    return content, confidence
 
 
 # ---------------------------------------------------------------------------
@@ -475,12 +539,40 @@ def main():
         server_proc = _start_server(profile)
 
     try:
-        # Step 3: AI generates test script
+        # Step 3: Categorize the issue
+        category = ai_categorize(title, body)
+        log.info("Category: %s", category)
+        print(f"--- OPINAI CATEGORY: {category} ---")
+
+        if category in ("FEATURE", "QUESTION", "DOCS"):
+            cat_labels = {
+                "FEATURE": "feature request",
+                "QUESTION": "question / help request",
+                "DOCS": "documentation issue",
+            }
+            comment = (
+                "## OpinAI Bug Reproduction Report\n\n"
+                f"**Issue:** #{ISSUE_NUMBER}\n"
+                f"**Category:** {category}\n"
+                f"**Analysis:** AI-powered (model: {AI_MODEL})\n\n"
+                f"This appears to be a **{cat_labels[category]}**, "
+                "not a reproducible bug. Skipping reproduction.\n\n"
+                "---\n"
+                '*"That\'s just, like, your opinion, man." '
+                "-- [OpinAI](https://github.com/yossiovadia/opinai)*"
+            )
+            post_comment(comment)
+            add_label()
+            log.info("Skipped reproduction — category: %s", category)
+            return
+
+        # Step 4: AI generates test script
         script_text = ai_generate_tests(title, body, profile=profile)
         if not script_text:
             comment = (
                 "## OpinAI Bug Reproduction Report\n\n"
                 f"**Issue:** #{ISSUE_NUMBER}\n"
+                f"**Category:** {category}\n"
                 "**Analysis:** Skipped (no AI API key or AI analysis failed)\n\n"
                 "Could not generate tests for this issue. "
                 "Configure an AI API key for automated analysis.\n\n"
@@ -494,16 +586,18 @@ def main():
 
         log.info("AI generated test script (%d bytes)", len(script_text))
 
-        # Step 4: Execute tests
+        # Step 5: Execute tests
         log.info("Running AI-generated tests...")
         test_output = run_tests(script_text)
         log.info("Tests completed (%d bytes of output)", len(test_output))
 
-        # Step 5: AI verdict
-        verdict_text = ai_verdict(title, body, test_output)
+        # Step 6: AI verdict with confidence
+        verdict_text, confidence = ai_verdict(title, body, test_output)
         verdict_section = verdict_text if verdict_text else "AI verdict unavailable."
+        log.info("Confidence: %s", confidence)
+        print(f"--- OPINAI CONFIDENCE: {confidence} ---")
 
-        # Step 6: Build and post report
+        # Step 7: Build and post report
         results_table = ""
         for line in test_output.splitlines():
             line = line.strip()
@@ -527,6 +621,8 @@ def main():
         comment = (
             "## OpinAI Bug Reproduction Report\n\n"
             f"**Issue:** #{ISSUE_NUMBER}\n"
+            f"**Category:** {category}\n"
+            f"**Confidence:** {confidence}\n"
             f"{server_info}"
             f"**Analysis:** AI-powered (model: {AI_MODEL})\n\n"
             "### Results\n\n"

@@ -145,6 +145,27 @@ function jobStatusBadge(status) {
   }
 }
 
+function categoryBadge(cat) {
+  if (!cat) return '<span class="verdict verdict-inconclusive">--</span>';
+  switch (cat.toUpperCase()) {
+    case 'BUG': return '<span class="verdict verdict-bug">&#x1F41B; BUG</span>';
+    case 'FEATURE': return '<span class="verdict verdict-running">&#x2728; FEATURE</span>';
+    case 'QUESTION': return '<span class="verdict verdict-inconclusive">&#x2753; QUESTION</span>';
+    case 'DOCS': return '<span class="verdict verdict-inconclusive">&#x1F4D6; DOCS</span>';
+    default: return '<span class="verdict verdict-inconclusive">' + escapeHtml(cat) + '</span>';
+  }
+}
+
+function confidenceBadge(level) {
+  if (!level) return '<span class="verdict verdict-inconclusive">--</span>';
+  switch (level.toUpperCase()) {
+    case 'HIGH': return '<span class="verdict verdict-ok">HIGH</span>';
+    case 'MEDIUM': return '<span class="verdict verdict-inconclusive">MEDIUM</span>';
+    case 'LOW': return '<span class="verdict verdict-bug">LOW</span>';
+    default: return '<span class="verdict verdict-inconclusive">' + escapeHtml(level) + '</span>';
+  }
+}
+
 // --- Toast notifications ---
 function showToast(message, type) {
   type = type || 'info';
@@ -286,7 +307,7 @@ function renderRuns() {
     return;
   }
   var html = '<div class="table-wrap"><table>' +
-    '<thead><tr><th>Issue</th><th>Repo</th><th>Verdict</th><th>Analysis</th><th>Duration</th><th>Time</th><th></th></tr></thead>' +
+    '<thead><tr><th>Issue</th><th>Repo</th><th>Category</th><th>Verdict</th><th>Confidence</th><th>Duration</th><th>Time</th><th></th></tr></thead>' +
     '<tbody>';
   runs.forEach(function(r, i) {
     var runId = 'run-' + i;
@@ -294,8 +315,9 @@ function renderRuns() {
     html += '<tr class="expandable" onclick="toggleExpand(\'' + runId + '\')">' +
       '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + r.issue + '</a> ' + escapeHtml(r.title || '') + '</td>' +
       '<td><span class="badge badge-repo" onclick="event.stopPropagation(); toggleRepoFilter(\'' + escapeHtml(r.repo) + '\')">' + escapeHtml(r.repo) + '</span></td>' +
+      '<td>' + categoryBadge(r.category) + '</td>' +
       '<td>' + verdictBadge(r.verdict) + '</td>' +
-      '<td>' + (r.ai ? 'AI' : 'Deterministic') + '</td>' +
+      '<td>' + confidenceBadge(r.confidence) + '</td>' +
       '<td>' + (r.duration || '--') + '</td>' +
       '<td>' + timeAgo(r.timestamp) + '</td>' +
       '<td>' +
@@ -308,7 +330,7 @@ function renderRuns() {
       '</td>' +
     '</tr>' +
     '<tr class="expand-row" id="' + runId + '" style="display:none">' +
-      '<td colspan="7"><div class="expand-content">' + escapeHtml(r.report || '(no details)') + '</div></td>' +
+      '<td colspan="9"><div class="expand-content">' + escapeHtml(r.report || '(no details)') + '</div></td>' +
     '</tr>';
   });
   html += '</tbody></table></div>';

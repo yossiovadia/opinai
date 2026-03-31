@@ -362,10 +362,32 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
             end = pod_logs.index(end_marker)
             suggested_comment = pod_logs[start:end].strip()
 
+        # Parse category from logs (e.g. "--- OPINAI CATEGORY: BUG ---")
+        category = "BUG"
+        for log_line in pod_logs.splitlines():
+            if "--- OPINAI CATEGORY:" in log_line:
+                for cat in ("FEATURE", "QUESTION", "DOCS", "BUG"):
+                    if cat in log_line.upper():
+                        category = cat
+                        break
+                break
+
+        # Parse confidence from logs (e.g. "--- OPINAI CONFIDENCE: HIGH ---")
+        confidence = ""
+        for log_line in pod_logs.splitlines():
+            if "--- OPINAI CONFIDENCE:" in log_line:
+                for lvl in ("HIGH", "MEDIUM", "LOW"):
+                    if lvl in log_line.upper():
+                        confidence = lvl
+                        break
+                break
+
         # Parse verdict from logs
         verdict = "inconclusive"
         check_text = (suggested_comment or pod_logs).lower()
-        if "bug confirmed" in check_text or "tests failed" in check_text:
+        if category in ("FEATURE", "QUESTION", "DOCS"):
+            verdict = category.lower()
+        elif "bug confirmed" in check_text or "tests failed" in check_text:
             verdict = "bug confirmed"
         elif "all tests passed" in check_text or "not a bug" in check_text:
             verdict = "not a bug"
@@ -375,6 +397,8 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
             "issue": issue,
             "title": title,
             "verdict": verdict,
+            "category": category,
+            "confidence": confidence,
             "ai": True,
             "duration": duration,
             "posted": False,
