@@ -192,10 +192,13 @@ def _create_app() -> Flask:
     @app.route("/api/reproduce", methods=["POST"])
     def api_reproduce():
         data = request.get_json()
-        repo = data.get("repo", "")
+        repo = data.get("repo", "").strip()
         issue_number = data.get("issue_number")
         if not repo or not issue_number:
             return jsonify({"status": "error", "message": "repo and issue_number required"}), 400
+        monitored = [r.strip() for r in os.environ.get("REPOS", "").split(",") if r.strip()]
+        if repo not in monitored:
+            return jsonify({"status": "error", "message": "Repo not monitored. Add it via Admin or setup.sh first."}), 403
         return jsonify(_reproduce_issue(repo, int(issue_number)))
 
     @app.route("/api/chat", methods=["POST"])

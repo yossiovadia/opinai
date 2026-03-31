@@ -485,6 +485,15 @@ async function reproduceFromUrl() {
   if (!url) { showToast('Paste a GitHub issue URL first', 'error'); return; }
   var parsed = parseIssueUrl(url);
   if (!parsed) { showToast('Invalid issue URL format', 'error'); return; }
+  // Check if repo is monitored
+  try {
+    var repos = await fetchJSON('/api/repos');
+    var monitored = repos.map(function(r) { return r.name; });
+    if (monitored.indexOf(parsed.repo) === -1) {
+      showToast('This repo is not monitored by OpinAI. Add it first.', 'error');
+      return;
+    }
+  } catch(e) { /* proceed anyway, server will validate */ }
   try {
     showToast('Reproducing ' + parsed.repo + '#' + parsed.issue + '...', 'info');
     var resp = await fetch(API + '/api/reproduce', {
