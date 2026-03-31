@@ -372,9 +372,10 @@ def _get_k8s_jobs() -> list[dict]:
                 delta = (time.time() - job.status.start_time.timestamp())
                 duration = _format_duration(delta)
 
-            # Extract repo + issue from labels
+            # Extract repo + issue from annotations/labels
             labels = job.metadata.labels or {}
-            repo_label = labels.get("opinai/repo", "")
+            annotations = job.metadata.annotations or {}
+            repo_label = annotations.get("opinai/repo-full", labels.get("opinai/repo", ""))
             issue_label = labels.get("opinai/issue", "")
 
             # Get pod logs (last 20 lines)

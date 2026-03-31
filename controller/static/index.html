@@ -248,43 +248,44 @@ async function loadIssues() {
 }
 
 function mergeIssues() {
-  // Build a map of repo+issue -> merged entry
+  // Build a map keyed by "repo#issue" — one entry per unique issue
   var map = {};
 
-  // Add runs first (completed results)
-  allRuns.forEach(function(r, i) {
+  // Add runs first (completed results — richest data)
+  allRuns.forEach(function(r) {
     var key = (r.repo || '') + '#' + (r.issue || '');
     map[key] = {
       repo: r.repo, issue: r.issue, title: r.title || '',
       category: r.category, verdict: r.verdict, confidence: r.confidence,
       status: 'Done', duration: r.duration, timestamp: r.timestamp,
       posted: r.posted, report: r.report, runId: r.id,
-      source: 'run'
+      logs: ''
     };
   });
 
-  // Overlay active jobs (running takes priority)
+  // Merge jobs — running overrides, otherwise enrich existing or add new
   allRawJobs.forEach(function(j) {
-    // Reconstruct full repo from labels (repo label uses dashes)
     var key = (j.repo || '') + '#' + (j.issue || '');
-    var jobStatus = j.status; // Running / Completed / Failed
-    if (jobStatus === 'Completed' && map[key]) return; // run data is richer
-    var status = 'Running';
-    if (jobStatus === 'Failed') status = 'Failed';
-    else if (jobStatus === 'Completed') status = 'Done';
+    var jobStatus = j.status === 'Failed' ? 'Failed'
+                  : j.status === 'Completed' ? 'Done'
+                  : 'Running';
 
-    if (map[key] && status === 'Running') {
-      // Override completed run with running status
-      map[key].status = 'Running';
-      map[key].duration = j.duration || map[key].duration;
-      map[key].logs = j.logs;
-    } else if (!map[key]) {
+    if (map[key]) {
+      // Entry exists from a run — only override if job is still running
+      if (jobStatus === 'Running') {
+        map[key].status = 'Running';
+        map[key].logs = j.logs || '';
+        if (j.duration) map[key].duration = j.duration;
+      }
+      // For Done/Failed jobs where a run already exists, keep the run data
+    } else {
+      // No run for this issue yet — create entry from job
       map[key] = {
         repo: j.repo || '', issue: j.issue || '', title: '',
         category: '', verdict: '', confidence: '',
-        status: status, duration: j.duration, timestamp: j.created,
-        posted: false, report: '', logs: j.logs, runId: null,
-        source: 'job'
+        status: jobStatus, duration: j.duration || '', timestamp: j.created || '',
+        posted: false, report: '', runId: null,
+        logs: j.logs || ''
       };
     }
   });
