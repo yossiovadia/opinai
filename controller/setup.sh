@@ -309,6 +309,10 @@ echo "  🔨 Building controller image (this takes ~2 minutes)..."
 oc start-build opinai-controller -n "$NAMESPACE" --follow 2>&1 | tail -1
 echo "  ✅ Image built"
 
+# Create persistent storage
+sed "s/namespace: opinai/namespace: $NAMESPACE/g" "$SCRIPT_DIR/manifests/pvc.yaml" | oc apply -f - >/dev/null 2>&1
+echo "  ✅ Persistent storage ready"
+
 # Deploy controller
 sed "s/namespace: opinai/namespace: $NAMESPACE/g" "$SCRIPT_DIR/manifests/deployment.yaml" | oc apply -f - >/dev/null 2>&1
 echo "  ✅ Controller deployed"

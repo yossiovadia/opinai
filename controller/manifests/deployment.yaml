@@ -16,6 +16,10 @@ spec:
         app: opinai-controller
     spec:
       serviceAccountName: opinai-controller
+      volumes:
+        - name: opinai-data
+          persistentVolumeClaim:
+            claimName: opinai-data
       containers:
         - name: controller
           image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
@@ -27,6 +31,9 @@ spec:
             - containerPort: 8443
               name: https
               protocol: TCP
+          volumeMounts:
+            - name: opinai-data
+              mountPath: /data
           envFrom:
             - configMapRef:
                 name: opinai-config

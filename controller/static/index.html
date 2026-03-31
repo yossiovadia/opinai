@@ -255,7 +255,7 @@ function mergeIssues() {
       repo: r.repo, issue: r.issue, title: r.title || '',
       category: r.category, verdict: r.verdict, confidence: r.confidence,
       status: 'Done', duration: r.duration, timestamp: r.timestamp,
-      posted: r.posted, report: r.report, runIndex: i,
+      posted: r.posted, report: r.report, runId: r.id,
       source: 'run'
     };
   });
@@ -280,7 +280,7 @@ function mergeIssues() {
         repo: j.repo || '', issue: j.issue || '', title: '',
         category: '', verdict: '', confidence: '',
         status: status, duration: j.duration, timestamp: j.created,
-        posted: false, report: '', logs: j.logs, runIndex: -1,
+        posted: false, report: '', logs: j.logs, runId: null,
         source: 'job'
       };
     }
@@ -357,8 +357,8 @@ function renderIssues() {
     } else if (r.status === 'Done' && r.verdict !== 'FEATURE_REQUEST') {
       if (r.posted) {
         actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button> ';
-      } else if (r.runIndex >= 0) {
-        actions += '<button class="btn" id="post-btn-' + r.runIndex + '" onclick="event.stopPropagation(); postComment(' + r.runIndex + ')" title="Post to GitHub">&#x1F4DD; Post</button> ';
+      } else if (r.runId) {
+        actions += '<button class="btn" id="post-btn-' + r.runId + '" onclick="event.stopPropagation(); postComment(' + r.runId + ')" title="Post to GitHub">&#x1F4DD; Post</button> ';
       }
     }
     if (r.repo && r.issue && r.status !== 'Running') {
@@ -438,17 +438,16 @@ async function checkNow() {
   }
 }
 
-async function postComment(index) {
-  var btn = document.getElementById('post-btn-' + index);
+async function postComment(runId) {
+  var btn = document.getElementById('post-btn-' + runId);
   if (btn) { btn.disabled = true; btn.innerHTML = '&#x23F3; Posting...'; }
   try {
-    var resp = await fetch(API + '/api/runs/' + index + '/post-comment', { method: 'POST' });
+    var resp = await fetch(API + '/api/runs/' + runId + '/post-comment', { method: 'POST' });
     var data = await resp.json();
     if (data.status === 'posted') {
       showToast('Comment posted to ' + data.repo + '#' + data.issue, 'success');
       if (btn) { btn.innerHTML = '&#x2705; Posted'; btn.style.color = 'var(--green)'; btn.style.borderColor = 'var(--green)'; }
-      // Update local state
-      if (allRuns[index]) allRuns[index].posted = true;
+      setTimeout(refreshAll, 1000);
     } else {
       showToast('Failed: ' + (data.message || 'unknown error'), 'error');
       if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F4DD; Post'; }

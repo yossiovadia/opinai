@@ -1,5 +1,6 @@
 """OpinAI Controller — watches GitHub repos for new issues and creates reproduction Jobs."""
 
+import json
 import logging
 import os
 import signal
@@ -11,13 +12,18 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
 from dashboard import (
-    append_run,
     set_check_result,
     set_reproduce_callback,
     should_check_now,
     start_dashboard,
     update_repo_stats,
     update_state,
+)
+from database import (
+    add_run,
+    init_db,
+    is_processed,
+    mark_processed,
 )
 
 logging.basicConfig(
@@ -65,21 +71,8 @@ def gh_headers():
     }
 
 
-def _count_processed(repo: str) -> int:
-    """Count issues with the DONE_LABEL (already processed)."""
-    url = f"{GH_API}/repos/{repo}/issues"
-    params = {"state": "all", "labels": DONE_LABEL, "per_page": 1}
-    try:
-        resp = requests.get(url, headers=gh_headers(), params=params, timeout=15)
-        resp.raise_for_status()
-        # GitHub returns total_count in link header; use len as approximation
-        return len(resp.json())
-    except requests.RequestException:
-        return 0
-
-
 def fetch_open_issues(repo: str) -> list[dict]:
-    """Return open issues (not PRs) that don't have the DONE_LABEL."""
+    """Return open issues (not PRs) that haven't been processed yet."""
     url = f"{GH_API}/repos/{repo}/issues"
     params = {"state": "open", "per_page": 100}
     try:
@@ -91,14 +84,30 @@ def fetch_open_issues(repo: str) -> list[dict]:
 
     issues = []
     for issue in resp.json():
-        # Skip pull requests (they have a pull_request key)
         if "pull_request" in issue:
             continue
+        # Use database as source of truth for "already processed"
+        if is_processed(repo, issue["number"]):
+            continue
+        # Also skip if GitHub label is present (belt + suspenders)
         labels = {lbl["name"] for lbl in issue.get("labels", [])}
         if DONE_LABEL in labels:
+            mark_processed(repo, issue["number"], job_name="label-preexisting")
             continue
         issues.append(issue)
     return issues
+
+
+def _get_repo_profile(repo: str) -> dict | None:
+    """Load repo profile from env vars."""
+    repo_key = repo.replace("/", "_").replace("-", "_").replace(".", "_")
+    raw = os.environ.get(f"REPO_PROFILE_{repo_key}", "")
+    if not raw.strip():
+        return None
+    try:
+        return json.loads(raw.strip())
+    except json.JSONDecodeError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +152,6 @@ def _all_repo_profile_env_vars() -> list:
             if k.startswith("REPO_PROFILE_")
         ]
     except ApiException:
-        # Fallback to env vars
         return [
             client.V1EnvVar(name=k, value=v)
             for k, v in os.environ.items()
@@ -151,7 +159,7 @@ def _all_repo_profile_env_vars() -> list:
         ]
 
 
-# Track Jobs we've already recorded as runs so we don't duplicate
+# Track Jobs we've already recorded as runs so we don't duplicate within a session
 _recorded_jobs: set[str] = set()
 
 
@@ -166,7 +174,6 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
 
     repo_safe = repo.replace("/", "-").lower()
 
-    # Volume + mount for GCP credentials (used when AI_PROVIDER=vertex)
     gcp_volume = client.V1Volume(
         name="gcp-credentials",
         secret=client.V1SecretVolumeSource(
@@ -291,13 +298,14 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
 
     try:
         batch_api.create_namespaced_job(namespace=NAMESPACE, body=job_manifest)
+        mark_processed(repo, number, job_name=name)
         log.info("Created Job %s for %s#%d: %s", name, repo, number, issue["title"])
     except ApiException as exc:
         log.error("Failed to create Job %s: %s", name, exc.reason)
 
 
 def check_completed_jobs(batch_api: client.BatchV1Api):
-    """Scan completed Jobs, extract results, and add to dashboard runs."""
+    """Scan completed Jobs, extract results, and store in database."""
     try:
         jobs = batch_api.list_namespaced_job(
             namespace=NAMESPACE, label_selector="app=opinai-runner"
@@ -337,7 +345,7 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
             secs = int(delta) % 60
             duration = f"{mins}m {secs}s" if mins else f"{secs}s"
 
-        # Read pod logs to extract verdict
+        # Read pod logs
         pod_logs = ""
         try:
             pods = core_api.list_namespaced_pod(
@@ -348,12 +356,12 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                 pod_logs = core_api.read_namespaced_pod_log(
                     name=pods.items[0].metadata.name,
                     namespace=NAMESPACE,
-                    tail_lines=100,
+                    tail_lines=200,
                 )
         except Exception:
             pass
 
-        # Extract suggested comment from delimiters
+        # Extract suggested comment
         suggested_comment = ""
         start_marker = "--- OPINAI SUGGESTED COMMENT ---"
         end_marker = "--- END SUGGESTED COMMENT ---"
@@ -362,7 +370,7 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
             end = pod_logs.index(end_marker)
             suggested_comment = pod_logs[start:end].strip()
 
-        # Parse category from logs (e.g. "--- OPINAI CATEGORY: BUG ---")
+        # Parse category
         category = "BUG"
         for log_line in pod_logs.splitlines():
             if "--- OPINAI CATEGORY:" in log_line:
@@ -372,7 +380,7 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                         break
                 break
 
-        # Parse confidence from logs (e.g. "--- OPINAI CONFIDENCE: HIGH ---")
+        # Parse confidence
         confidence = ""
         for log_line in pod_logs.splitlines():
             if "--- OPINAI CONFIDENCE:" in log_line:
@@ -382,7 +390,7 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                         break
                 break
 
-        # Parse verdict from logs — first check explicit marker
+        # Parse verdict
         verdict = "ERROR"
         for log_line in pod_logs.splitlines():
             if "--- OPINAI VERDICT:" in log_line:
@@ -393,7 +401,6 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                         break
                 break
         else:
-            # Fallback: scan text for keywords
             check_text = (suggested_comment or pod_logs).lower()
             if category in ("FEATURE", "QUESTION", "DOCS"):
                 verdict = "FEATURE_REQUEST"
@@ -401,10 +408,11 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                 verdict = "BUG_CONFIRMED"
             elif "not a bug" in check_text or "not_a_bug" in check_text or "all tests passed" in check_text:
                 verdict = "NOT_A_BUG"
-            elif "not reproducible" in check_text or "not_reproducible" in check_text or "cannot reproduce" in check_text:
+            elif "not reproducible" in check_text or "not_reproducible" in check_text:
                 verdict = "NOT_REPRODUCIBLE"
 
-        append_run({
+        # Store in database
+        add_run({
             "repo": repo,
             "issue": issue,
             "title": title,
@@ -436,15 +444,17 @@ def main():
         log.error("GITHUB_TOKEN env var is required")
         sys.exit(1)
 
+    # Initialize database
+    init_db()
+
     load_k8s()
     batch_api = client.BatchV1Api()
 
     # Start the web dashboard
     start_dashboard()
 
-    # Register reproduce callback so the dashboard can create jobs
+    # Register reproduce callback
     def _reproduce_from_dashboard(repo: str, issue_number: int):
-        """Fetch issue from GitHub and create a Job."""
         import requests as req
         url = f"{GH_API}/repos/{repo}/issues/{issue_number}"
         resp = req.get(url, headers=gh_headers(), timeout=30)
@@ -469,14 +479,21 @@ def main():
 
         total_new = 0
         for repo in REPOS:
+            # Check if repo has k8s:true in profile — skip auto-creation
+            profile = _get_repo_profile(repo)
+            if profile and profile.get("k8s"):
+                log.info("Skipping auto-poll for %s (k8s:true — manual trigger only)", repo)
+                continue
+
             log.info("Checking %s for new issues...", repo)
             issues = fetch_open_issues(repo)
             log.info("Found %d unprocessed issues in %s", len(issues), repo)
             total_new += len(issues)
 
-            # Count processed issues (those with done label) for stats
-            processed = _count_processed(repo)
-            update_repo_stats(repo, pending=len(issues), processed=processed)
+            # Update dashboard stats from database
+            from database import get_stats
+            stats = get_stats(repo)
+            update_repo_stats(repo, pending=len(issues), processed=stats["processed"])
 
             for issue in issues:
                 create_job(batch_api, repo, issue)
@@ -484,7 +501,6 @@ def main():
         check_completed_jobs(batch_api)
         set_check_result(total_new)
 
-        # Sleep in small increments, but also check for "check now" requests
         elapsed = 0
         while elapsed < POLL_INTERVAL and not _shutdown:
             if should_check_now():

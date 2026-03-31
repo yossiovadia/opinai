@@ -14,7 +14,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY opinai_controller.py opinai_runner.py dashboard.py /app/
+COPY opinai_controller.py opinai_runner.py dashboard.py database.py /app/
 COPY static/ /app/static/
 WORKDIR /app
 

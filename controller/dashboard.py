@@ -42,18 +42,17 @@ def install_log_handler():
     ))
     logging.getLogger().addHandler(handler)
 
-# Shared state — written by the controller, read by the dashboard
+# Shared state — lightweight in-memory state for controller coordination
+# Runs are stored in SQLite (database.py), NOT here
 _state = {
     "start_time": time.time(),
     "last_poll": None,
     "poll_count": 0,
     "repos": {},       # repo -> {pending: int, processed: int, last_check: str}
-    "runs": [],        # [{repo, issue, title, verdict, ai, duration, timestamp, report}]
     "check_now": False,
-    "check_now_result": None,  # {total: int} set by controller after check completes
+    "check_now_result": None,
 }
 
-# Callback set by the controller for creating reproduction jobs
 _reproduce_callback = None
 _state_lock = threading.Lock()
 
@@ -66,13 +65,6 @@ def get_state():
 def update_state(key, value):
     with _state_lock:
         _state[key] = value
-
-
-def append_run(run: dict):
-    with _state_lock:
-        _state["runs"].insert(0, run)
-        if len(_state["runs"]) > 200:
-            _state["runs"] = _state["runs"][:200]
 
 
 def update_repo_stats(repo: str, pending: int, processed: int):
@@ -98,7 +90,6 @@ def should_check_now() -> bool:
 
 
 def set_reproduce_callback(callback):
-    """Register the controller's create_job function for dashboard use."""
     global _reproduce_callback
     _reproduce_callback = callback
 
@@ -141,14 +132,18 @@ def _create_app() -> Flask:
 
     @app.route("/api/status")
     def api_status():
+        from database import get_total_stats
         state = get_state()
         uptime = time.time() - state["start_time"]
+        db_stats = get_total_stats()
         return jsonify({
             "uptime_seconds": int(uptime),
             "uptime_human": _format_duration(uptime),
             "last_poll": state["last_poll"],
             "poll_count": state["poll_count"],
             "repos_count": len(state["repos"]),
+            "total_runs": db_stats["total_runs"],
+            "total_processed": db_stats["total_processed"],
         })
 
     @app.route("/api/repos")
@@ -161,9 +156,10 @@ def _create_app() -> Flask:
 
     @app.route("/api/runs")
     def api_runs():
-        state = get_state()
+        from database import get_runs
         limit = request.args.get("limit", 50, type=int)
-        return jsonify(state["runs"][:limit])
+        repo = request.args.get("repo")
+        return jsonify(get_runs(repo=repo, limit=limit))
 
     @app.route("/api/jobs")
     def api_jobs():
@@ -211,9 +207,9 @@ def _create_app() -> Flask:
         reply = _handle_chat(message, context)
         return jsonify({"reply": reply})
 
-    @app.route("/api/runs/<int:index>/post-comment", methods=["POST"])
-    def post_run_comment(index):
-        result = _post_run_comment(index)
+    @app.route("/api/runs/<int:run_id>/post-comment", methods=["POST"])
+    def post_run_comment(run_id):
+        result = _post_run_comment(run_id)
         return jsonify(result)
 
     # ----- Admin routes -----
@@ -583,10 +579,11 @@ def _handle_chat(message: str, context: dict) -> str:
             body = issue.get("body", "") or ""
             system_context += f"Body: {body[:2000]}\n\n"
 
-        # Include previous reproduction results
-        state = get_state()
-        for run in state.get("runs", []):
-            if str(run.get("repo")) == str(repo) and str(run.get("issue")) == str(issue_number):
+        # Include previous reproduction results from database
+        from database import get_runs as db_get_runs
+        prev_runs = db_get_runs(repo=repo, limit=3)
+        for run in prev_runs:
+            if str(run.get("issue")) == str(issue_number):
                 system_context += f"Previous reproduction result:\n{(run.get('report') or '')[:1000]}\n\n"
                 break
 
@@ -595,11 +592,13 @@ def _handle_chat(message: str, context: dict) -> str:
         if profile:
             system_context += f"Project profile: {json.dumps(profile)}\n\n"
     else:
-        # General context — include current dashboard state
+        # General context from database + in-memory state
+        from database import get_total_stats
         state = get_state()
         repos = list(state.get("repos", {}).keys())
+        db_stats = get_total_stats()
         system_context += f"Monitored repos: {', '.join(repos) if repos else 'none configured'}\n"
-        system_context += f"Total runs: {len(state.get('runs', []))}\n"
+        system_context += f"Total runs: {db_stats['total_runs']}\n"
         pending = sum(r.get("pending", 0) for r in state.get("repos", {}).values())
         system_context += f"Pending issues: {pending}\n\n"
 
@@ -694,17 +693,16 @@ def _admin_update_settings(settings: dict):
         raise
 
 
-def _post_run_comment(index: int) -> dict:
-    """Post a run's report as a GitHub comment."""
+def _post_run_comment(run_id: int) -> dict:
+    """Post a run's report as a GitHub comment, using database by ID."""
     import requests as req
+    from database import get_run, mark_posted
 
-    with _state_lock:
-        runs = _state.get("runs", [])
-        if index < 0 or index >= len(runs):
-            return {"status": "error", "message": "Invalid run index"}
-        run = runs[index]
-        if run.get("posted"):
-            return {"status": "error", "message": "Already posted"}
+    run = get_run(run_id)
+    if not run:
+        return {"status": "error", "message": "Run not found"}
+    if run.get("posted"):
+        return {"status": "error", "message": "Already posted"}
 
     repo = run.get("repo", "")
     issue = run.get("issue", "")
@@ -720,7 +718,6 @@ def _post_run_comment(index: int) -> dict:
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    # Sanitize report before posting
     safe_report = report
     for key in ("AI_API_KEY", "GITHUB_TOKEN"):
         secret = os.environ.get(key, "")
@@ -735,8 +732,7 @@ def _post_run_comment(index: int) -> dict:
             timeout=30,
         )
         if resp.ok:
-            with _state_lock:
-                _state["runs"][index]["posted"] = True
+            mark_posted(run_id)
             log.info("Posted comment to %s#%s from dashboard", repo, issue)
             return {"status": "posted", "repo": repo, "issue": issue}
         return {"status": "error", "message": f"GitHub returned {resp.status_code}"}
