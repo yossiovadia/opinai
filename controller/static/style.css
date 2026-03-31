@@ -241,6 +241,16 @@ tr:hover td {
   color: var(--blue);
 }
 
+.spin {
+  display: inline-block;
+  animation: spinAnim 1s linear infinite;
+}
+
+@keyframes spinAnim {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;

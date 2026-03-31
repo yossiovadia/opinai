@@ -51,24 +51,14 @@
     </div>
   </section>
 
-  <!-- Active Jobs -->
+  <!-- All Issues (unified jobs + runs) -->
   <section class="section">
     <div class="section-header">
-      <h2 class="section-title">Active Jobs</h2>
-    </div>
-    <div id="jobsContainer">
-      <div class="empty">Loading jobs...</div>
-    </div>
-  </section>
-
-  <!-- Recent Runs -->
-  <section class="section">
-    <div class="section-header">
-      <h2 class="section-title">Recent Runs</h2>
+      <h2 class="section-title">All Issues</h2>
       <div class="filter-bar" id="repoFilter"></div>
     </div>
-    <div id="runsContainer">
-      <div class="empty">Loading runs...</div>
+    <div id="issuesContainer">
+      <div class="empty">Loading...</div>
     </div>
   </section>
 
@@ -238,52 +228,87 @@ async function loadRepos() {
   }
 }
 
-// --- Jobs ---
-async function loadJobs() {
+// --- Unified Issues (jobs + runs) ---
+let allRawJobs = [];
+let expandedRows = new Set();
+
+async function loadIssues() {
   try {
-    const jobs = await fetchJSON('/api/jobs');
-    const container = document.getElementById('jobsContainer');
-    if (!jobs.length) {
-      container.innerHTML = '<div class="table-wrap"><div class="empty">No active jobs</div></div>';
-      return;
-    }
-    var html = '<div class="table-wrap"><table>' +
-      '<thead><tr><th>Job</th><th>Repo</th><th>Issue</th><th>Status</th><th>Duration</th></tr></thead>' +
-      '<tbody>';
-    jobs.forEach(function(j, i) {
-      var jobId = 'job-' + i;
-      html += '<tr class="expandable" onclick="toggleExpand(\'' + jobId + '\')">' +
-        '<td>' + escapeHtml(j.name) + '</td>' +
-        '<td>' + escapeHtml(j.repo) + '</td>' +
-        '<td>#' + escapeHtml(j.issue) + '</td>' +
-        '<td>' + jobStatusBadge(j.status) + '</td>' +
-        '<td>' + (j.duration || '--') + '</td>' +
-      '</tr>' +
-      '<tr class="expand-row" id="' + jobId + '" style="display:none">' +
-        '<td colspan="5"><div class="expand-content">' + escapeHtml(j.logs || '(no logs)') + '</div></td>' +
-      '</tr>';
-    });
-    html += '</tbody></table></div>';
-    container.innerHTML = html;
+    var results = await Promise.all([fetchJSON('/api/jobs'), fetchJSON('/api/runs')]);
+    allRawJobs = results[0];
+    allRuns = results[1];
+    renderIssues();
+    renderRepoFilter();
   } catch(e) {
-    document.getElementById('jobsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load jobs</div></div>';
+    document.getElementById('issuesContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load issues</div></div>';
   }
 }
 
-// --- Runs ---
-async function loadRuns() {
-  try {
-    allRuns = await fetchJSON('/api/runs');
-    renderRuns();
-    renderRepoFilter();
-  } catch(e) {
-    document.getElementById('runsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load runs</div></div>';
+function mergeIssues() {
+  // Build a map of repo+issue -> merged entry
+  var map = {};
+
+  // Add runs first (completed results)
+  allRuns.forEach(function(r, i) {
+    var key = (r.repo || '') + '#' + (r.issue || '');
+    map[key] = {
+      repo: r.repo, issue: r.issue, title: r.title || '',
+      category: r.category, verdict: r.verdict, confidence: r.confidence,
+      status: 'Done', duration: r.duration, timestamp: r.timestamp,
+      posted: r.posted, report: r.report, runIndex: i,
+      source: 'run'
+    };
+  });
+
+  // Overlay active jobs (running takes priority)
+  allRawJobs.forEach(function(j) {
+    // Reconstruct full repo from labels (repo label uses dashes)
+    var key = (j.repo || '') + '#' + (j.issue || '');
+    var jobStatus = j.status; // Running / Completed / Failed
+    if (jobStatus === 'Completed' && map[key]) return; // run data is richer
+    var status = 'Running';
+    if (jobStatus === 'Failed') status = 'Failed';
+    else if (jobStatus === 'Completed') status = 'Done';
+
+    if (map[key] && status === 'Running') {
+      // Override completed run with running status
+      map[key].status = 'Running';
+      map[key].duration = j.duration || map[key].duration;
+      map[key].logs = j.logs;
+    } else if (!map[key]) {
+      map[key] = {
+        repo: j.repo || '', issue: j.issue || '', title: '',
+        category: '', verdict: '', confidence: '',
+        status: status, duration: j.duration, timestamp: j.created,
+        posted: false, report: '', logs: j.logs, runIndex: -1,
+        source: 'job'
+      };
+    }
+  });
+
+  // Convert to array, sorted by timestamp (newest first)
+  var items = Object.values(map);
+  items.sort(function(a, b) {
+    var ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+    var tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+    return tb - ta;
+  });
+  return items;
+}
+
+function statusBadge(status) {
+  switch (status) {
+    case 'Running': return '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running</span>';
+    case 'Done': return '<span class="verdict verdict-ok">&#x2705; Done</span>';
+    case 'Failed': return '<span class="verdict verdict-bug">&#x274C; Failed</span>';
+    case 'Pending': return '<span class="verdict verdict-warn">&#x23F3; Pending</span>';
+    default: return '<span class="verdict verdict-error">' + escapeHtml(status) + '</span>';
   }
 }
 
 function renderRepoFilter() {
   var repos = {};
-  allRuns.forEach(function(r) { if (r.repo) repos[r.repo] = true; });
+  mergeIssues().forEach(function(r) { if (r.repo) repos[r.repo] = true; });
   var names = Object.keys(repos);
   var container = document.getElementById('repoFilter');
   if (names.length <= 1) { container.innerHTML = ''; return; }
@@ -296,52 +321,88 @@ function renderRepoFilter() {
 
 function toggleRepoFilter(repo) {
   activeRepoFilter = (activeRepoFilter === repo) ? null : repo;
-  renderRuns();
+  renderIssues();
   renderRepoFilter();
-  loadRepos(); // re-render cards to update filter badge
+  loadRepos();
 }
 
-function renderRuns() {
-  var runs = activeRepoFilter ? allRuns.filter(function(r) { return r.repo === activeRepoFilter; }) : allRuns;
-  var container = document.getElementById('runsContainer');
-  if (!runs.length) {
-    container.innerHTML = '<div class="table-wrap"><div class="empty">' + (activeRepoFilter ? 'No runs for ' + escapeHtml(activeRepoFilter) : 'No runs yet') + '</div></div>';
+function renderIssues() {
+  // Save expanded state before re-render
+  document.querySelectorAll('.expand-row').forEach(function(row) {
+    if (row.style.display !== 'none') expandedRows.add(row.id);
+  });
+
+  var items = mergeIssues();
+  if (activeRepoFilter) items = items.filter(function(r) { return r.repo === activeRepoFilter; });
+  var container = document.getElementById('issuesContainer');
+
+  if (!items.length) {
+    container.innerHTML = '<div class="table-wrap"><div class="empty">' + (activeRepoFilter ? 'No issues for ' + escapeHtml(activeRepoFilter) : 'No issues yet') + '</div></div>';
     return;
   }
+
   var html = '<div class="table-wrap"><table>' +
-    '<thead><tr><th>Issue</th><th>Repo</th><th>Category</th><th>Verdict</th><th>Confidence</th><th>Duration</th><th>Time</th><th></th></tr></thead>' +
+    '<thead><tr><th>#</th><th>Repo</th><th>Title</th><th>Category</th><th>Status</th><th>Verdict</th><th>Confidence</th><th></th></tr></thead>' +
     '<tbody>';
-  runs.forEach(function(r, i) {
-    var runId = 'run-' + i;
-    var issueUrl = 'https://github.com/' + r.repo + '/issues/' + r.issue;
-    html += '<tr class="expandable" onclick="toggleExpand(\'' + runId + '\')">' +
-      '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + r.issue + '</a> ' + escapeHtml(r.title || '') + '</td>' +
+
+  items.forEach(function(r, i) {
+    var rowId = 'issue-' + (r.repo || '').replace(/[^a-zA-Z0-9]/g, '-') + '-' + r.issue;
+    var issueUrl = r.repo ? ('https://github.com/' + r.repo + '/issues/' + r.issue) : '#';
+    var expandContent = r.report || r.logs || '(no details)';
+
+    // Actions
+    var actions = '';
+    if (r.status === 'Running') {
+      // nothing extra
+    } else if (r.status === 'Done' && r.verdict !== 'FEATURE_REQUEST') {
+      if (r.posted) {
+        actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button> ';
+      } else if (r.runIndex >= 0) {
+        actions += '<button class="btn" id="post-btn-' + r.runIndex + '" onclick="event.stopPropagation(); postComment(' + r.runIndex + ')" title="Post to GitHub">&#x1F4DD; Post</button> ';
+      }
+    }
+    if (r.repo && r.issue && r.status !== 'Running') {
+      actions += '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
+    }
+    if (r.status === 'Done' || r.status === 'Failed') {
+      actions += '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + r.repo + '\', ' + r.issue + ')" title="Re-run">&#x1F504;</button>';
+    }
+
+    html += '<tr class="expandable" onclick="toggleExpand(\'' + rowId + '\')">' +
+      '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(r.issue + '') + '</a></td>' +
       '<td><span class="badge badge-repo" onclick="event.stopPropagation(); toggleRepoFilter(\'' + escapeHtml(r.repo) + '\')">' + escapeHtml(r.repo) + '</span></td>' +
+      '<td>' + escapeHtml(r.title || '') + '</td>' +
       '<td>' + categoryBadge(r.category) + '</td>' +
-      '<td>' + verdictBadge(r.verdict) + '</td>' +
-      '<td>' + confidenceBadge(r.confidence) + '</td>' +
-      '<td>' + (r.duration || '--') + '</td>' +
-      '<td>' + timeAgo(r.timestamp) + '</td>' +
-      '<td>' +
-        (r.posted
-          ? '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button> '
-          : '<button class="btn" id="post-btn-' + i + '" onclick="event.stopPropagation(); postComment(' + i + ')" title="Post to GitHub">&#x1F4DD; Post</button> '
-        ) +
-        '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ' +
-        '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + r.repo + '\', ' + r.issue + ')">&#x1F504;</button>' +
-      '</td>' +
+      '<td>' + statusBadge(r.status) + '</td>' +
+      '<td>' + (r.verdict ? verdictBadge(r.verdict) : '--') + '</td>' +
+      '<td>' + (r.confidence ? confidenceBadge(r.confidence) : '--') + '</td>' +
+      '<td>' + actions + '</td>' +
     '</tr>' +
-    '<tr class="expand-row" id="' + runId + '" style="display:none">' +
-      '<td colspan="9"><div class="expand-content">' + escapeHtml(r.report || '(no details)') + '</div></td>' +
+    '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
+      '<td colspan="8"><div class="expand-content">' + escapeHtml(expandContent) + '</div></td>' +
     '</tr>';
   });
+
   html += '</tbody></table></div>';
   container.innerHTML = html;
+
+  // Restore expanded state
+  expandedRows.forEach(function(id) {
+    var row = document.getElementById(id);
+    if (row) row.style.display = '';
+  });
 }
 
 function toggleExpand(id) {
   var el = document.getElementById(id);
-  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    expandedRows.add(id);
+  } else {
+    el.style.display = 'none';
+    expandedRows.delete(id);
+  }
 }
 
 // --- Actions ---
@@ -449,7 +510,7 @@ document.getElementById('reproduceInput').addEventListener('keydown', function(e
 
 async function refreshAll() {
   animateRefresh();
-  await Promise.all([loadStatus(), loadRepos(), loadJobs(), loadRuns()]);
+  await Promise.all([loadStatus(), loadRepos(), loadIssues()]);
 }
 
 // =====================================================================
