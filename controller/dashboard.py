@@ -318,6 +318,43 @@ def _create_app() -> Flask:
             lines = _log_buffer[-count:]
         return jsonify(lines)
 
+    @app.route("/api/admin/repo-memory/<path:repo>", methods=["GET"])
+    def admin_repo_memory(repo):
+        from database import get_repo_memory
+        memory = get_repo_memory(repo)
+        return jsonify(memory)
+
+    @app.route("/api/admin/db-stats", methods=["GET"])
+    def admin_db_stats():
+        from database import get_total_stats, _get_conn, _lock
+        stats = get_total_stats()
+        with _lock:
+            conn = _get_conn()
+            memory_count = conn.execute("SELECT COUNT(*) FROM repo_memory").fetchone()[0]
+        stats["repo_memory_count"] = memory_count
+        return jsonify(stats)
+
+    @app.route("/api/admin/db-runs", methods=["GET"])
+    def admin_db_runs():
+        from database import get_runs
+        return jsonify(get_runs(limit=20))
+
+    @app.route("/api/admin/db-memory", methods=["GET"])
+    def admin_db_memory():
+        from database import _get_conn, _lock
+        with _lock:
+            conn = _get_conn()
+            rows = conn.execute(
+                "SELECT repo, key, value, updated_at FROM repo_memory ORDER BY repo, key"
+            ).fetchall()
+        result = {}
+        for r in rows:
+            repo = r["repo"]
+            if repo not in result:
+                result[repo] = {}
+            result[repo][r["key"]] = {"value": r["value"], "updated_at": r["updated_at"]}
+        return jsonify(result)
+
     @app.route("/api/admin/system", methods=["GET"])
     def admin_system():
         state = get_state()

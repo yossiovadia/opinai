@@ -128,6 +128,26 @@
       <div class="admin-status">Uptime: <strong id="sysUptime">--</strong></div>
     </div>
 
+    <!-- AI Knowledge -->
+    <div class="admin-card" style="grid-column: 1 / -1;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>&#x1F9E0; AI Knowledge</h3>
+        <button class="btn" onclick="loadMemory()">Refresh</button>
+      </div>
+      <div id="memoryContainer"><div class="empty">Loading...</div></div>
+    </div>
+
+    <!-- Database -->
+    <div class="admin-card" style="grid-column: 1 / -1;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>&#x1F5C4;&#xFE0F; Database</h3>
+        <button class="btn" onclick="loadDbStats(); loadDbRuns()">Refresh</button>
+      </div>
+      <div class="admin-status" id="dbStats">Loading...</div>
+      <h4 style="margin:12px 0 8px;font-size:13px;color:var(--text-dim)">Recent Runs</h4>
+      <div id="dbRunsContainer" style="overflow-x:auto"><div class="empty">Loading...</div></div>
+    </div>
+
     <!-- Logs -->
     <div class="admin-card" style="grid-column: 1 / -1;">
       <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -287,9 +307,82 @@ async function loadLogs() {
   box.scrollTop = box.scrollHeight;
 }
 
+// --- AI Knowledge ---
+async function loadMemory() {
+  try {
+    var data = await fetchJSON('/api/admin/db-memory');
+    var container = document.getElementById('memoryContainer');
+    var repos = Object.keys(data);
+    if (!repos.length) {
+      container.innerHTML = '<div class="empty" style="padding:12px">No AI knowledge yet. Run a reproduction to start learning.</div>';
+      return;
+    }
+    var html = '';
+    repos.forEach(function(repo) {
+      html += '<div class="repo-item">';
+      html += '<div class="repo-item-header"><span class="repo-item-name">' + escapeHtml(repo) + '</span></div>';
+      var entries = data[repo];
+      Object.keys(entries).forEach(function(key) {
+        var e = entries[key];
+        html += '<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;">' +
+          '<span style="color:var(--blue);min-width:140px;font-weight:500">' + escapeHtml(key) + '</span>' +
+          '<span style="color:var(--text)">' + escapeHtml(e.value || '') + '</span>' +
+          '<span style="color:var(--text-dim);font-size:10px;white-space:nowrap">' + escapeHtml(e.updated_at || '') + '</span>' +
+        '</div>';
+      });
+      html += '</div>';
+    });
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('memoryContainer').innerHTML = '<div class="empty">Failed to load</div>';
+  }
+}
+
+// --- Database ---
+async function loadDbStats() {
+  try {
+    var s = await fetchJSON('/api/admin/db-stats');
+    document.getElementById('dbStats').innerHTML =
+      'Runs: <strong>' + s.total_runs + '</strong> &nbsp; ' +
+      'Processed issues: <strong>' + s.total_processed + '</strong> &nbsp; ' +
+      'Memory entries: <strong>' + s.repo_memory_count + '</strong>';
+  } catch(e) {
+    document.getElementById('dbStats').textContent = 'Failed to load stats';
+  }
+}
+
+async function loadDbRuns() {
+  try {
+    var runs = await fetchJSON('/api/admin/db-runs');
+    var container = document.getElementById('dbRunsContainer');
+    if (!runs.length) {
+      container.innerHTML = '<div class="empty" style="padding:12px">No runs in database</div>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:auto">' +
+      '<thead><tr><th style="text-align:left;padding:6px 8px">ID</th><th style="text-align:left;padding:6px 8px">Repo</th>' +
+      '<th style="text-align:left;padding:6px 8px">Issue</th><th style="text-align:left;padding:6px 8px">Verdict</th>' +
+      '<th style="text-align:left;padding:6px 8px">Category</th><th style="text-align:left;padding:6px 8px">Created</th></tr></thead><tbody>';
+    runs.forEach(function(r) {
+      html += '<tr>' +
+        '<td style="padding:4px 8px">' + r.id + '</td>' +
+        '<td style="padding:4px 8px">' + escapeHtml(r.repo) + '</td>' +
+        '<td style="padding:4px 8px">#' + r.issue + '</td>' +
+        '<td style="padding:4px 8px">' + escapeHtml(r.verdict || '') + '</td>' +
+        '<td style="padding:4px 8px">' + escapeHtml(r.category || '') + '</td>' +
+        '<td style="padding:4px 8px">' + escapeHtml(r.timestamp || '') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('dbRunsContainer').innerHTML = '<div class="empty">Failed to load runs</div>';
+  }
+}
+
 // --- Init ---
 async function initAdmin() {
-  await Promise.all([loadRepos(), loadSettings(), loadSystem(), loadLogs()]);
+  await Promise.all([loadRepos(), loadSettings(), loadSystem(), loadLogs(), loadMemory(), loadDbStats(), loadDbRuns()]);
   testGithub();
   testAi();
 }

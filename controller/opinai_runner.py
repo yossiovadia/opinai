@@ -94,6 +94,108 @@ def fetch_issue() -> dict:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Database helpers (optional — only available in controller pod, not runner pods
+# unless /data is mounted, so we gracefully degrade)
+# ---------------------------------------------------------------------------
+
+_db_available = False
+try:
+    from database import get_repo_memory, get_runs, init_db, set_repo_memory
+    # Only init if the DB path directory exists (i.e. PVC is mounted)
+    import os as _os
+    if _os.path.isdir(_os.path.dirname(_os.environ.get("OPINAI_DB_PATH", "/data/opinai.db")) or "/data"):
+        init_db()
+        _db_available = True
+except Exception:
+    pass
+
+
+def _load_repo_context() -> str:
+    """Build context string from repo memory and previous runs."""
+    if not _db_available:
+        return ""
+
+    parts = []
+    memory = get_repo_memory(REPO)
+    if memory:
+        parts.append("## What OpinAI knows about this project:")
+        for key, value in memory.items():
+            parts.append(f"- {key}: {value}")
+
+    prev_runs = get_runs(repo=REPO, limit=10)
+    if prev_runs:
+        parts.append("\n## Previous reproduction attempts:")
+        for run in prev_runs:
+            line = f"- Issue #{run['issue']}: {run['verdict']} ({run.get('category', '?')})"
+            parts.append(line)
+            report = run.get("report", "")
+            if report:
+                parts.append(f"  Summary: {report[:200]}")
+
+    return "\n".join(parts) + "\n" if parts else ""
+
+
+def _analyze_repo_readme(readme_text: str):
+    """Ask AI to analyze the repo README and save learnings. Only on first run."""
+    if not _db_available or not _ai_available():
+        return
+
+    # Skip if we already have a description
+    existing = get_repo_memory(REPO, key="description")
+    if existing:
+        log.info("Repo knowledge already exists — skipping README analysis")
+        return
+
+    log.info("First run for %s — analyzing README...", REPO)
+    prompt = (
+        f"Analyze this project README from {REPO}.\n\n"
+        f"{readme_text[:3000]}\n\n"
+        "Provide a brief JSON summary (no markdown fences, just raw JSON):\n"
+        "{\n"
+        '  "description": "what this project does in 1-2 sentences",\n'
+        '  "tech_stack": "languages and frameworks used",\n'
+        '  "how_to_test": "how to test/validate bugs in this project",\n'
+        '  "deployment_needs": "what infrastructure is needed to run it"\n'
+        "}"
+    )
+
+    try:
+        content = _call_ai(prompt)
+    except Exception as exc:
+        log.warning("README analysis failed: %s", exc)
+        return
+
+    if not content:
+        return
+
+    # Strip markdown fences if present
+    content = content.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(l for l in lines if not l.strip().startswith("```"))
+
+    try:
+        data = json.loads(content)
+        for key in ("description", "tech_stack", "how_to_test", "deployment_needs"):
+            if key in data and data[key]:
+                set_repo_memory(REPO, key, str(data[key]))
+        log.info("Saved repo knowledge for %s", REPO)
+    except json.JSONDecodeError:
+        # Save raw text as description fallback
+        set_repo_memory(REPO, "description", content[:500])
+
+
+def _save_run_learnings(verdict: str, confidence: str, category: str):
+    """Save learnings from this run to repo memory."""
+    if not _db_available:
+        return
+    set_repo_memory(REPO, "last_analyzed_issue", str(ISSUE_NUMBER))
+    set_repo_memory(REPO, "last_verdict", verdict)
+    if confidence:
+        set_repo_memory(REPO, "last_confidence", confidence)
+
+
 def _ai_available() -> bool:
     """Check if any AI provider is configured."""
     if AI_PROVIDER.lower() == "vertex":
@@ -152,6 +254,7 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
     current_server_url = os.environ.get("SERVER_URL", "") or SERVER_URL
     server_context = f"\nThe server is already running at {current_server_url}. Do NOT start the server yourself — just test it with curl." if current_server_url else ""
     profile_context = format_profile_context(profile) if profile else ""
+    repo_context = _load_repo_context()
 
     prompt = (
         "You are OpinAI, an automated bug reproduction system. "
@@ -159,7 +262,8 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
         f"Title: {title}\n"
         f"Body: {body}\n"
         f"{server_context}"
-        f"{profile_context}\n\n"
+        f"{profile_context}"
+        f"{repo_context}\n\n"
         "Your task:\n"
         "1. Analyze what the bug claims\n"
         "2. Write a bash test script that would prove or disprove this bug\n"
@@ -463,6 +567,18 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
         log.warning("Clone failed: %s", result.stderr[:500])
         return None
 
+    # Read README and analyze on first run
+    readme_path = os.path.join(clone_dir, "README.md")
+    if not os.path.exists(readme_path):
+        readme_path = os.path.join(clone_dir, "readme.md")
+    if os.path.exists(readme_path):
+        try:
+            with open(readme_path) as f:
+                readme_text = f.read()[:3000]
+            _analyze_repo_readme(readme_text)
+        except OSError:
+            pass
+
     # Build env with pip bin dirs on PATH
     env = os.environ.copy()
     pip_bin = os.path.dirname(shutil.which("python3") or "/usr/local/bin/python3")
@@ -590,6 +706,7 @@ def main():
             )
             post_comment(comment)
             add_label()
+            _save_run_learnings(verdict_enum, "", category)
             log.info("Skipped reproduction — verdict: %s", verdict_enum)
             return
 
@@ -672,6 +789,7 @@ def main():
 
         post_comment(comment)
         add_label()
+        _save_run_learnings(verdict_enum, confidence, category)
         log.info("Done — reproduction complete for %s#%s", REPO, ISSUE_NUMBER)
     finally:
         # Cleanup: kill server process
