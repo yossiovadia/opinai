@@ -195,10 +195,10 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
 # ---------------------------------------------------------------------------
 
 
-def ai_verdict(title: str, body: str, results: str) -> tuple[str | None, str]:
-    """Ask the AI to summarize the test results. Returns (verdict_text, confidence)."""
+def ai_verdict(title: str, body: str, results: str) -> tuple[str | None, str, str]:
+    """Ask the AI to summarize the test results. Returns (verdict_text, confidence, verdict_enum)."""
     if not _ai_available():
-        return None, "LOW"
+        return None, "LOW", "ERROR"
 
     prompt = (
         "You are OpinAI. A user filed this bug report:\n\n"
@@ -206,13 +206,18 @@ def ai_verdict(title: str, body: str, results: str) -> tuple[str | None, str]:
         f"Body: {body}\n\n"
         "Here are the test results:\n\n"
         f"{results}\n\n"
-        "Give a brief verdict:\n"
-        "1. Is the bug confirmed, not reproduced, or inconclusive?\n"
-        "2. One-paragraph summary of what the tests showed.\n"
-        "3. Rate your confidence in this verdict: HIGH (strong evidence, "
+        "Give a brief verdict. Use EXACTLY one of these verdicts:\n"
+        "- BUG_CONFIRMED — tests prove the bug exists\n"
+        "- NOT_A_BUG — tests prove behavior is correct\n"
+        "- NOT_REPRODUCIBLE — tests ran but could not trigger the bug\n\n"
+        "Include this exact line:\n"
+        "Verdict: BUG_CONFIRMED\n"
+        "(or NOT_A_BUG or NOT_REPRODUCIBLE)\n\n"
+        "Then a one-paragraph summary of what the tests showed.\n\n"
+        "Also rate your confidence: HIGH (strong evidence, "
         "clear pass/fail results), MEDIUM (some evidence but ambiguous), "
         "or LOW (mostly guessing, tests may not cover the actual bug).\n\n"
-        "Include this exact line in your response:\n"
+        "Include this exact line:\n"
         "Confidence: HIGH\n"
         "(or MEDIUM or LOW)\n\n"
         "Keep it concise."
@@ -222,10 +227,10 @@ def ai_verdict(title: str, body: str, results: str) -> tuple[str | None, str]:
         content = _call_ai(prompt)
     except Exception as exc:
         log.error("AI verdict failed: %s", exc)
-        return None, "LOW"
+        return None, "LOW", "ERROR"
 
     if not content:
-        return None, "LOW"
+        return None, "LOW", "ERROR"
 
     # Parse confidence from response
     confidence = "MEDIUM"
@@ -239,7 +244,26 @@ def ai_verdict(title: str, body: str, results: str) -> tuple[str | None, str]:
                 confidence = "MEDIUM"
             break
 
-    return content, confidence
+    # Parse verdict enum from response
+    verdict_enum = "NOT_REPRODUCIBLE"
+    for line in content.upper().splitlines():
+        if "VERDICT:" in line:
+            if "BUG_CONFIRMED" in line:
+                verdict_enum = "BUG_CONFIRMED"
+            elif "NOT_A_BUG" in line:
+                verdict_enum = "NOT_A_BUG"
+            elif "NOT_REPRODUCIBLE" in line:
+                verdict_enum = "NOT_REPRODUCIBLE"
+            break
+    else:
+        # Fallback: scan content for keywords
+        upper = content.upper()
+        if "BUG_CONFIRMED" in upper or "BUG CONFIRMED" in upper:
+            verdict_enum = "BUG_CONFIRMED"
+        elif "NOT_A_BUG" in upper or "NOT A BUG" in upper:
+            verdict_enum = "NOT_A_BUG"
+
+    return content, confidence, verdict_enum
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +569,8 @@ def main():
         print(f"--- OPINAI CATEGORY: {category} ---")
 
         if category in ("FEATURE", "QUESTION", "DOCS"):
+            verdict_enum = "FEATURE_REQUEST"
+            print(f"--- OPINAI VERDICT: {verdict_enum} ---")
             cat_labels = {
                 "FEATURE": "feature request",
                 "QUESTION": "question / help request",
@@ -554,6 +580,7 @@ def main():
                 "## OpinAI Bug Reproduction Report\n\n"
                 f"**Issue:** #{ISSUE_NUMBER}\n"
                 f"**Category:** {category}\n"
+                f"**Verdict:** {verdict_enum}\n"
                 f"**Analysis:** AI-powered (model: {AI_MODEL})\n\n"
                 f"This appears to be a **{cat_labels[category]}**, "
                 "not a reproducible bug. Skipping reproduction.\n\n"
@@ -563,16 +590,18 @@ def main():
             )
             post_comment(comment)
             add_label()
-            log.info("Skipped reproduction — category: %s", category)
+            log.info("Skipped reproduction — verdict: %s", verdict_enum)
             return
 
         # Step 4: AI generates test script
         script_text = ai_generate_tests(title, body, profile=profile)
         if not script_text:
+            print("--- OPINAI VERDICT: ERROR ---")
             comment = (
                 "## OpinAI Bug Reproduction Report\n\n"
                 f"**Issue:** #{ISSUE_NUMBER}\n"
                 f"**Category:** {category}\n"
+                "**Verdict:** ERROR\n"
                 "**Analysis:** Skipped (no AI API key or AI analysis failed)\n\n"
                 "Could not generate tests for this issue. "
                 "Configure an AI API key for automated analysis.\n\n"
@@ -592,9 +621,10 @@ def main():
         log.info("Tests completed (%d bytes of output)", len(test_output))
 
         # Step 6: AI verdict with confidence
-        verdict_text, confidence = ai_verdict(title, body, test_output)
+        verdict_text, confidence, verdict_enum = ai_verdict(title, body, test_output)
         verdict_section = verdict_text if verdict_text else "AI verdict unavailable."
-        log.info("Confidence: %s", confidence)
+        log.info("Verdict: %s, Confidence: %s", verdict_enum, confidence)
+        print(f"--- OPINAI VERDICT: {verdict_enum} ---")
         print(f"--- OPINAI CONFIDENCE: {confidence} ---")
 
         # Step 7: Build and post report
@@ -622,6 +652,7 @@ def main():
             "## OpinAI Bug Reproduction Report\n\n"
             f"**Issue:** #{ISSUE_NUMBER}\n"
             f"**Category:** {category}\n"
+            f"**Verdict:** {verdict_enum}\n"
             f"**Confidence:** {confidence}\n"
             f"{server_info}"
             f"**Analysis:** AI-powered (model: {AI_MODEL})\n\n"

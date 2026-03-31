@@ -128,13 +128,15 @@ function escapeHtml(s) {
 }
 
 function verdictBadge(verdict) {
-  if (!verdict) return '<span class="verdict verdict-inconclusive">&#x2753; Unknown</span>';
-  const v = verdict.toLowerCase();
-  if (v.includes('bug') || v.includes('confirmed') || v.includes('fail'))
-    return '<span class="verdict verdict-bug">&#x1F534; BUG CONFIRMED</span>';
-  if (v.includes('pass') || v.includes('not') || v.includes('ok'))
-    return '<span class="verdict verdict-ok">&#x2705; NOT A BUG</span>';
-  return '<span class="verdict verdict-inconclusive">&#x26A0;&#xFE0F; INCONCLUSIVE</span>';
+  if (!verdict) return '<span class="verdict verdict-error">--</span>';
+  switch (verdict.toUpperCase()) {
+    case 'BUG_CONFIRMED': return '<span class="verdict verdict-bug">&#x1F534; Bug Confirmed</span>';
+    case 'NOT_A_BUG': return '<span class="verdict verdict-ok">&#x2705; Not a Bug</span>';
+    case 'NOT_REPRODUCIBLE': return '<span class="verdict verdict-warn">&#x26A0;&#xFE0F; Not Reproducible</span>';
+    case 'FEATURE_REQUEST': return '<span class="verdict verdict-feature">&#x2728; Feature Request</span>';
+    case 'ERROR': return '<span class="verdict verdict-error">&#x26D4; Error</span>';
+    default: return '<span class="verdict verdict-error">' + escapeHtml(verdict) + '</span>';
+  }
 }
 
 function jobStatusBadge(status) {
@@ -146,23 +148,23 @@ function jobStatusBadge(status) {
 }
 
 function categoryBadge(cat) {
-  if (!cat) return '<span class="verdict verdict-inconclusive">--</span>';
+  if (!cat) return '<span class="verdict verdict-error">--</span>';
   switch (cat.toUpperCase()) {
     case 'BUG': return '<span class="verdict verdict-bug">&#x1F41B; BUG</span>';
-    case 'FEATURE': return '<span class="verdict verdict-running">&#x2728; FEATURE</span>';
-    case 'QUESTION': return '<span class="verdict verdict-inconclusive">&#x2753; QUESTION</span>';
-    case 'DOCS': return '<span class="verdict verdict-inconclusive">&#x1F4D6; DOCS</span>';
-    default: return '<span class="verdict verdict-inconclusive">' + escapeHtml(cat) + '</span>';
+    case 'FEATURE': return '<span class="verdict verdict-feature">&#x2728; FEATURE</span>';
+    case 'QUESTION': return '<span class="verdict verdict-warn">&#x2753; QUESTION</span>';
+    case 'DOCS': return '<span class="verdict verdict-warn">&#x1F4D6; DOCS</span>';
+    default: return '<span class="verdict verdict-error">' + escapeHtml(cat) + '</span>';
   }
 }
 
 function confidenceBadge(level) {
-  if (!level) return '<span class="verdict verdict-inconclusive">--</span>';
+  if (!level) return '<span class="verdict verdict-error">--</span>';
   switch (level.toUpperCase()) {
     case 'HIGH': return '<span class="verdict verdict-ok">HIGH</span>';
-    case 'MEDIUM': return '<span class="verdict verdict-inconclusive">MEDIUM</span>';
+    case 'MEDIUM': return '<span class="verdict verdict-warn">MEDIUM</span>';
     case 'LOW': return '<span class="verdict verdict-bug">LOW</span>';
-    default: return '<span class="verdict verdict-inconclusive">' + escapeHtml(level) + '</span>';
+    default: return '<span class="verdict verdict-error">' + escapeHtml(level) + '</span>';
   }
 }
 

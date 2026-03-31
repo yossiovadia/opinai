@@ -221,9 +221,19 @@ tr:hover td {
   color: var(--green);
 }
 
-.verdict-inconclusive {
+.verdict-warn {
   background: rgba(210, 153, 34, 0.15);
   color: var(--yellow);
+}
+
+.verdict-feature {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--blue);
+}
+
+.verdict-error {
+  background: rgba(139, 148, 158, 0.15);
+  color: var(--text-dim);
 }
 
 .verdict-running {

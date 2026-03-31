@@ -382,15 +382,27 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                         break
                 break
 
-        # Parse verdict from logs
-        verdict = "inconclusive"
-        check_text = (suggested_comment or pod_logs).lower()
-        if category in ("FEATURE", "QUESTION", "DOCS"):
-            verdict = category.lower()
-        elif "bug confirmed" in check_text or "tests failed" in check_text:
-            verdict = "bug confirmed"
-        elif "all tests passed" in check_text or "not a bug" in check_text:
-            verdict = "not a bug"
+        # Parse verdict from logs — first check explicit marker
+        verdict = "ERROR"
+        for log_line in pod_logs.splitlines():
+            if "--- OPINAI VERDICT:" in log_line:
+                for v in ("BUG_CONFIRMED", "NOT_A_BUG", "NOT_REPRODUCIBLE",
+                          "FEATURE_REQUEST", "ERROR"):
+                    if v in log_line.upper():
+                        verdict = v
+                        break
+                break
+        else:
+            # Fallback: scan text for keywords
+            check_text = (suggested_comment or pod_logs).lower()
+            if category in ("FEATURE", "QUESTION", "DOCS"):
+                verdict = "FEATURE_REQUEST"
+            elif "bug confirmed" in check_text or "bug_confirmed" in check_text:
+                verdict = "BUG_CONFIRMED"
+            elif "not a bug" in check_text or "not_a_bug" in check_text or "all tests passed" in check_text:
+                verdict = "NOT_A_BUG"
+            elif "not reproducible" in check_text or "not_reproducible" in check_text or "cannot reproduce" in check_text:
+                verdict = "NOT_REPRODUCIBLE"
 
         append_run({
             "repo": repo,
