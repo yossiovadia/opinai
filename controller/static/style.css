@@ -301,14 +301,99 @@ tr:hover td {
 }
 
 .expand-content {
-  padding: 16px;
+  padding: 16px 20px;
   background: var(--bg);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 300px;
+  font-size: 13px;
+  max-height: 500px;
   overflow-y: auto;
+  line-height: 1.6;
+}
+
+.expand-content .md-rendered { font-family: var(--font); }
+.expand-content h3 { font-size: 16px; font-weight: 600; margin: 12px 0 6px; }
+.expand-content h4 { font-size: 14px; font-weight: 600; margin: 10px 0 4px; }
+.expand-content p { margin: 4px 0; }
+.expand-content strong { font-weight: 600; color: var(--text); }
+.expand-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+.expand-content code {
+  background: rgba(110, 118, 129, 0.2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.expand-content pre {
+  background: #161b22;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.expand-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.expand-content ul {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+
+.expand-content li { margin: 2px 0; }
+
+.expand-content .md-table,
+.expand-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 12px;
+  min-width: auto;
+}
+
+.expand-content .md-table th,
+.expand-content .md-table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  background: transparent;
+}
+
+.expand-content .md-table th {
+  background: var(--card);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.expand-content details {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.expand-content summary {
+  padding: 8px 12px;
+  background: var(--card);
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.expand-content details[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.expand-content details > :not(summary) {
+  padding: 8px 12px;
 }
 
 /* Jobs */

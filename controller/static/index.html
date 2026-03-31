@@ -383,7 +383,7 @@ function renderIssues() {
       '<td>' + actions + '</td>' +
     '</tr>' +
     '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
-      '<td colspan="8"><div class="expand-content">' + escapeHtml(expandContent) + '</div></td>' +
+      '<td colspan="8"><div class="expand-content">' + renderMarkdown(expandContent) + '</div></td>' +
     '</tr>';
   });
 
@@ -595,30 +595,74 @@ function sendSuggestion(text) {
   sendChat();
 }
 
-// Simple markdown renderer
+// Markdown renderer — handles headings, bold, code, tables, details, lists
 function renderMarkdown(text) {
   if (!text) return '';
-  var html = escapeHtml(text);
-  // Code blocks (``` ... ```)
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
-    return '<pre><code>' + code.trim() + '</code></pre>';
+
+  // Extract <details>...</details> blocks and code fences before escaping
+  var preserved = [];
+  // Preserve <details> blocks as-is
+  text = text.replace(/<details[\s\S]*?<\/details>/gi, function(m) {
+    preserved.push(m);
+    return '\x00PRESERVE' + (preserved.length - 1) + '\x00';
   });
-  // Inline code
+  // Preserve code fences
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+    var block = '<pre><code>' + escapeHtml(code.trim()) + '</code></pre>';
+    preserved.push(block);
+    return '\x00PRESERVE' + (preserved.length - 1) + '\x00';
+  });
+
+  // Now escape the rest
+  var html = escapeHtml(text);
+
+  // Restore preserved blocks
+  html = html.replace(/\x00PRESERVE(\d+)\x00/g, function(_, i) {
+    return preserved[parseInt(i)];
+  });
+
+  // Headings (## and ###)
+  html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
+
+  // Tables: detect lines with | separators
+  html = html.replace(/((?:^\|.+\|$\n?)+)/gm, function(block) {
+    var rows = block.trim().split('\n');
+    var out = '<table class="md-table">';
+    rows.forEach(function(row, ri) {
+      // Skip separator rows (|---|---|)
+      if (/^\|[\s\-:|]+\|$/.test(row)) return;
+      var tag = ri === 0 ? 'th' : 'td';
+      var cells = row.split('|').filter(function(c, i, a) { return i > 0 && i < a.length - 1; });
+      out += '<tr>';
+      cells.forEach(function(cell) {
+        out += '<' + tag + '>' + cell.trim() + '</' + tag + '>';
+      });
+      out += '</tr>';
+    });
+    out += '</table>';
+    return out;
+  });
+
+  // Inline code (after escaping)
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   // Bold
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   // Italic
-  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
   // Unordered lists
   html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
   // Ordered lists
   html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  // Horizontal rules
+  html = html.replace(/^---$/gm, '<hr>');
   // Paragraphs (double newline)
   html = html.replace(/\n\n/g, '</p><p>');
-  // Single newlines -> <br> (but not inside pre)
-  html = html.replace(/(?<!<\/pre>)\n(?!<)/g, '<br>');
-  return '<p>' + html + '</p>';
+  // Single newlines -> <br> (but not after block elements)
+  html = html.replace(/(?<!\>)\n(?!\<)/g, '<br>');
+
+  return '<div class="md-rendered"><p>' + html + '</p></div>';
 }
 
 function renderChatMessages() {
