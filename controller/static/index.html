@@ -346,7 +346,7 @@ function renderIssues() {
   }
 
   var html = '<div class="table-wrap"><table>' +
-    '<thead><tr><th>#</th><th>Repo</th><th>Title</th><th>Category</th><th>Status</th><th>Verdict</th><th>Confidence</th><th></th></tr></thead>' +
+    '<thead><tr><th>#</th><th>Repo</th><th>Title</th><th>Category</th><th>Status</th><th>Verdict</th><th class="col-confidence">Confidence</th><th></th></tr></thead>' +
     '<tbody>';
 
   items.forEach(function(r, i) {
@@ -375,11 +375,11 @@ function renderIssues() {
     html += '<tr class="expandable" onclick="toggleExpand(\'' + rowId + '\')">' +
       '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(r.issue + '') + '</a></td>' +
       '<td><span class="badge badge-repo" onclick="event.stopPropagation(); toggleRepoFilter(\'' + escapeHtml(r.repo) + '\')">' + escapeHtml(r.repo) + '</span></td>' +
-      '<td>' + escapeHtml(r.title || '') + '</td>' +
+      '<td class="td-title">' + escapeHtml(r.title || '') + '</td>' +
       '<td>' + categoryBadge(r.category) + '</td>' +
       '<td>' + statusBadge(r.status) + '</td>' +
       '<td>' + (r.verdict ? verdictBadge(r.verdict) : '--') + '</td>' +
-      '<td>' + (r.confidence ? confidenceBadge(r.confidence) : '--') + '</td>' +
+      '<td class="col-confidence">' + (r.confidence ? confidenceBadge(r.confidence) : '--') + '</td>' +
       '<td>' + actions + '</td>' +
     '</tr>' +
     '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
