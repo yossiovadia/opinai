@@ -206,6 +206,9 @@ async function loadRepos() {
       return;
     }
     container.innerHTML = repos.map(function(r) {
+      var footerAction = r.manual_only
+        ? '<span class="verdict verdict-warn" style="font-size:11px">&#x1F527; Manual</span>'
+        : '<button class="btn" onclick="checkNow()">Check Now</button>';
       return '<div class="card">' +
         '<div class="card-header">' +
           '<a class="card-title" href="https://github.com/' + escapeHtml(r.name) + '" target="_blank">' + escapeHtml(r.name) + '</a>' +
@@ -215,11 +218,11 @@ async function loadRepos() {
         '</div>' +
         '<div class="card-stats">' +
           '<div><span class="stat-value">' + (r.processed || 0) + '</span> <span class="stat-label">processed</span></div>' +
-          '<div><span class="stat-value">' + (r.pending || 0) + '</span> <span class="stat-label">pending</span></div>' +
+          (r.manual_only ? '' : '<div><span class="stat-value">' + (r.pending || 0) + '</span> <span class="stat-label">pending</span></div>') +
         '</div>' +
         '<div class="card-footer">' +
           '<span>Last check: ' + timeAgo(r.last_check) + '</span>' +
-          '<button class="btn" onclick="checkNow()">Check Now</button>' +
+          footerAction +
         '</div>' +
       '</div>';
     }).join('');

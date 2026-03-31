@@ -479,10 +479,14 @@ def main():
 
         total_new = 0
         for repo in REPOS:
-            # Check if repo has k8s:true in profile — skip auto-creation
+            from database import get_stats
             profile = _get_repo_profile(repo)
-            if profile and profile.get("k8s"):
-                log.info("Skipping auto-poll for %s (k8s:true — manual trigger only)", repo)
+            is_k8s = bool(profile and profile.get("k8s"))
+            stats = get_stats(repo)
+
+            if is_k8s:
+                # k8s repos: show in dashboard but don't auto-create jobs
+                update_repo_stats(repo, pending=0, processed=stats["processed"], manual_only=True)
                 continue
 
             log.info("Checking %s for new issues...", repo)
@@ -490,9 +494,6 @@ def main():
             log.info("Found %d unprocessed issues in %s", len(issues), repo)
             total_new += len(issues)
 
-            # Update dashboard stats from database
-            from database import get_stats
-            stats = get_stats(repo)
             update_repo_stats(repo, pending=len(issues), processed=stats["processed"])
 
             for issue in issues:

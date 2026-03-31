@@ -67,11 +67,12 @@ def update_state(key, value):
         _state[key] = value
 
 
-def update_repo_stats(repo: str, pending: int, processed: int):
+def update_repo_stats(repo: str, pending: int, processed: int, manual_only: bool = False):
     with _state_lock:
         _state["repos"][repo] = {
             "pending": pending,
             "processed": processed,
+            "manual_only": manual_only,
             "last_check": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
 
