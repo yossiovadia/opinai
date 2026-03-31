@@ -95,55 +95,31 @@ def fetch_issue() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Database helpers (optional — only available in controller pod, not runner pods
-# unless /data is mounted, so we gracefully degrade)
+# Knowledge output — written to stdout for the controller to parse and store
 # ---------------------------------------------------------------------------
 
-_db_available = False
-try:
-    from database import get_repo_memory, get_runs, init_db, set_repo_memory
-    # Only init if the DB path directory exists (i.e. PVC is mounted)
-    import os as _os
-    if _os.path.isdir(_os.path.dirname(_os.environ.get("OPINAI_DB_PATH", "/data/opinai.db")) or "/data"):
-        init_db()
-        _db_available = True
-except Exception:
-    pass
+
+def _emit_repo_memory(data: dict):
+    """Print repo memory as delimited JSON for the controller to extract."""
+    print("--- OPINAI REPO MEMORY ---")
+    print(json.dumps(data))
+    print("--- END REPO MEMORY ---")
 
 
 def _load_repo_context() -> str:
-    """Build context string from repo memory and previous runs."""
-    if not _db_available:
-        return ""
-
-    parts = []
-    memory = get_repo_memory(REPO)
-    if memory:
-        parts.append("## What OpinAI knows about this project:")
-        for key, value in memory.items():
-            parts.append(f"- {key}: {value}")
-
-    prev_runs = get_runs(repo=REPO, limit=10)
-    if prev_runs:
-        parts.append("\n## Previous reproduction attempts:")
-        for run in prev_runs:
-            line = f"- Issue #{run['issue']}: {run['verdict']} ({run.get('category', '?')})"
-            parts.append(line)
-            report = run.get("report", "")
-            if report:
-                parts.append(f"  Summary: {report[:200]}")
-
-    return "\n".join(parts) + "\n" if parts else ""
+    """Build context from REPO_MEMORY env var (injected by controller via ConfigMap)."""
+    # The controller passes previous knowledge as OPINAI_REPO_CONTEXT env var
+    ctx = os.environ.get("OPINAI_REPO_CONTEXT", "")
+    return ctx
 
 
 def _analyze_repo_readme(readme_text: str):
-    """Ask AI to analyze the repo README and save learnings. Only on first run."""
-    if not _db_available or not _ai_available():
+    """Ask AI to analyze the repo README and emit learnings to stdout."""
+    if not _ai_available():
         return
 
-    # Skip if we already have a description
-    existing = get_repo_memory(REPO, key="description")
-    if existing:
+    # Check env — controller sets this if knowledge already exists
+    if os.environ.get("OPINAI_HAS_KNOWLEDGE", "") == "true":
         log.info("Repo knowledge already exists — skipping README analysis")
         return
 
@@ -169,7 +145,6 @@ def _analyze_repo_readme(readme_text: str):
     if not content:
         return
 
-    # Strip markdown fences if present
     content = content.strip()
     if content.startswith("```"):
         lines = content.splitlines()
@@ -177,23 +152,21 @@ def _analyze_repo_readme(readme_text: str):
 
     try:
         data = json.loads(content)
-        for key in ("description", "tech_stack", "how_to_test", "deployment_needs"):
-            if key in data and data[key]:
-                set_repo_memory(REPO, key, str(data[key]))
-        log.info("Saved repo knowledge for %s", REPO)
+        _emit_repo_memory(data)
+        log.info("Emitted repo knowledge for %s", REPO)
     except json.JSONDecodeError:
-        # Save raw text as description fallback
-        set_repo_memory(REPO, "description", content[:500])
+        _emit_repo_memory({"description": content[:500]})
 
 
 def _save_run_learnings(verdict: str, confidence: str, category: str):
-    """Save learnings from this run to repo memory."""
-    if not _db_available:
-        return
-    set_repo_memory(REPO, "last_analyzed_issue", str(ISSUE_NUMBER))
-    set_repo_memory(REPO, "last_verdict", verdict)
+    """Emit run learnings to stdout for the controller to store."""
+    learnings = {
+        "last_analyzed_issue": str(ISSUE_NUMBER),
+        "last_verdict": verdict,
+    }
     if confidence:
-        set_repo_memory(REPO, "last_confidence", confidence)
+        learnings["last_confidence"] = confidence
+    _emit_repo_memory(learnings)
 
 
 def _ai_available() -> bool:

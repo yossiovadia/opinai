@@ -21,9 +21,12 @@ from dashboard import (
 )
 from database import (
     add_run,
+    get_repo_memory,
+    get_runs,
     init_db,
     is_processed,
     mark_processed,
+    set_repo_memory,
 )
 
 logging.basicConfig(
@@ -159,6 +162,28 @@ def _all_repo_profile_env_vars() -> list:
         ]
 
 
+def _build_repo_context(repo: str) -> str:
+    """Build context string from DB knowledge + previous runs for a repo."""
+    parts = []
+    memory = get_repo_memory(repo)
+    if memory:
+        parts.append("## What OpinAI knows about this project:")
+        for key, value in memory.items():
+            parts.append(f"- {key}: {value}")
+
+    prev_runs = get_runs(repo=repo, limit=10)
+    if prev_runs:
+        parts.append("\n## Previous reproduction attempts:")
+        for run in prev_runs:
+            line = f"- Issue #{run['issue']}: {run['verdict']} ({run.get('category', '?')})"
+            parts.append(line)
+            report = run.get("report", "")
+            if report:
+                parts.append(f"  Summary: {report[:200]}")
+
+    return "\n".join(parts) if parts else ""
+
+
 # Track Jobs we've already recorded as runs so we don't duplicate within a session
 _recorded_jobs: set[str] = set()
 
@@ -225,6 +250,14 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                 client.V1EnvVar(
                                     name="OPINAI_AUTO_POST",
                                     value="false",
+                                ),
+                                client.V1EnvVar(
+                                    name="OPINAI_REPO_CONTEXT",
+                                    value=_build_repo_context(repo),
+                                ),
+                                client.V1EnvVar(
+                                    name="OPINAI_HAS_KNOWLEDGE",
+                                    value="true" if get_repo_memory(repo, key="description") else "false",
                                 ),
                                 client.V1EnvVar(
                                     name="GOOGLE_APPLICATION_CREDENTIALS",
@@ -410,6 +443,26 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
                 verdict = "NOT_A_BUG"
             elif "not reproducible" in check_text or "not_reproducible" in check_text:
                 verdict = "NOT_REPRODUCIBLE"
+
+        # Extract and store repo memory from pod logs
+        mem_start = "--- OPINAI REPO MEMORY ---"
+        mem_end = "--- END REPO MEMORY ---"
+        search_pos = 0
+        while mem_start in pod_logs[search_pos:]:
+            s = pod_logs.index(mem_start, search_pos) + len(mem_start)
+            if mem_end not in pod_logs[s:]:
+                break
+            e = pod_logs.index(mem_end, s)
+            mem_json = pod_logs[s:e].strip()
+            search_pos = e + len(mem_end)
+            try:
+                mem_data = json.loads(mem_json)
+                for mk, mv in mem_data.items():
+                    if mv:
+                        set_repo_memory(repo, mk, str(mv))
+                log.info("Saved repo memory for %s: %s", repo, list(mem_data.keys()))
+            except (json.JSONDecodeError, TypeError):
+                log.warning("Failed to parse repo memory JSON")
 
         # Store in database
         add_run({
