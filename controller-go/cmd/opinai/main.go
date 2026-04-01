@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log/slog"
 	"os"
 
@@ -16,11 +17,14 @@ func main() {
 	dbPath := flag.String("db", "", "SQLite database path (default: $OPINAI_DB_PATH or /data/opinai.db)")
 	flag.Parse()
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	// Log buffer captures lines for the admin /api/admin/logs endpoint
+	logBuf := dashboard.NewLogBuffer(200)
+	logWriter := io.MultiWriter(os.Stderr, logBuf)
+	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	switch *mode {
 	case "controller":
-		runController(*httpAddr, *httpsAddr, *dbPath)
+		runController(*httpAddr, *httpsAddr, *dbPath, logBuf)
 	case "runner":
 		slog.Info("runner mode not yet implemented")
 		os.Exit(1)
@@ -30,40 +34,32 @@ func main() {
 	}
 }
 
-func runController(httpAddr, httpsAddr, dbPath string) {
-	// Database path
+func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuffer) {
 	if dbPath == "" {
 		dbPath = dashboard.Env("OPINAI_DB_PATH", "/data/opinai.db")
 	}
 
-	// Initialize database
 	if err := database.Init(dbPath); err != nil {
 		slog.Error("failed to initialize database", "error", err)
 		os.Exit(1)
 	}
 
-	// Shared state
 	state := dashboard.NewState()
 
 	// Populate repos from env
-	reposStr := dashboard.Env("REPOS", "")
-	for _, repo := range dashboard.ParseRepos(reposStr) {
+	for _, repo := range dashboard.ParseRepos(dashboard.Env("REPOS", "")) {
 		stats, _ := database.GetStats(repo)
 		state.UpdateRepo(repo, dashboard.RepoStatus{
-			Pending:    0,
 			Processed:  stats.Processed,
 			ManualOnly: stats.Processed == 0,
-			LastCheck:  "",
 		})
 	}
 
-	// Start dashboard
-	srv := dashboard.New(state)
+	srv := dashboard.New(state, logBuf)
 
 	slog.Info("OpinAI Go controller starting",
 		"http", httpAddr,
 		"https", httpsAddr,
-		"repos", reposStr,
 	)
 
 	go srv.StartHTTPS(httpsAddr)

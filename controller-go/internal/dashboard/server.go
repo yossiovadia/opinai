@@ -33,7 +33,7 @@ type State struct {
 	LastPoll    string
 	PollCount   int
 	Repos       map[string]RepoStatus
-	CheckNow    bool
+	CheckNow    chan struct{}
 	CheckResult *CheckResult
 }
 
@@ -52,6 +52,7 @@ func NewState() *State {
 	return &State{
 		StartTime: time.Now(),
 		Repos:     make(map[string]RepoStatus),
+		CheckNow:  make(chan struct{}, 1),
 	}
 }
 
@@ -83,17 +84,67 @@ func (s *State) UpdateRepo(repo string, status RepoStatus) {
 	s.Repos[repo] = status
 }
 
+func (s *State) TriggerCheckNow() {
+	select {
+	case s.CheckNow <- struct{}{}:
+	default:
+	}
+}
+
+// LogBuffer captures recent log lines for the admin page.
+type LogBuffer struct {
+	mu    sync.Mutex
+	lines []string
+	max   int
+}
+
+func NewLogBuffer(max int) *LogBuffer {
+	return &LogBuffer{max: max, lines: make([]string, 0, max)}
+}
+
+func (lb *LogBuffer) Write(p []byte) (int, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	line := strings.TrimRight(string(p), "\n")
+	lb.lines = append(lb.lines, line)
+	if len(lb.lines) > lb.max {
+		lb.lines = lb.lines[len(lb.lines)-lb.max:]
+	}
+	return len(p), nil
+}
+
+func (lb *LogBuffer) Last(n int) []string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	if n > len(lb.lines) {
+		n = len(lb.lines)
+	}
+	result := make([]string, n)
+	copy(result, lb.lines[len(lb.lines)-n:])
+	return result
+}
+
+// ReproduceFunc is the callback for creating reproduction jobs.
+type ReproduceFunc func(repo string, issue int) error
+
 // Server is the OpinAI dashboard HTTP/HTTPS server.
 type Server struct {
-	state  *State
-	router chi.Router
+	state     *State
+	router    chi.Router
+	logBuf    *LogBuffer
+	reproduce ReproduceFunc
 }
 
 // New creates the dashboard server with all routes.
-func New(state *State) *Server {
-	s := &Server{state: state}
+func New(state *State, logBuf *LogBuffer) *Server {
+	s := &Server{state: state, logBuf: logBuf}
 	s.router = s.buildRouter()
 	return s
+}
+
+// SetReproduceCallback sets the function called for /api/reproduce.
+func (s *Server) SetReproduceCallback(fn ReproduceFunc) {
+	s.reproduce = fn
 }
 
 func (s *Server) buildRouter() chi.Router {
@@ -106,49 +157,62 @@ func (s *Server) buildRouter() chi.Router {
 	if err != nil {
 		slog.Error("failed to create static sub-fs", "error", err)
 	} else {
-		r.Get("/", func(w http.ResponseWriter, req *http.Request) {
-			data, err := fs.ReadFile(staticSub, "index.html")
-			if err != nil {
-				http.Error(w, "not found", 404)
-				return
+		serveFile := func(name, ct string) http.HandlerFunc {
+			return func(w http.ResponseWriter, _ *http.Request) {
+				data, err := fs.ReadFile(staticSub, name)
+				if err != nil {
+					http.Error(w, "not found", 404)
+					return
+				}
+				w.Header().Set("Content-Type", ct)
+				w.Write(data)
 			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(data)
-		})
-		r.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
-			data, err := fs.ReadFile(staticSub, "admin.html")
-			if err != nil {
-				http.Error(w, "not found", 404)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(data)
-		})
-		r.Get("/style.css", func(w http.ResponseWriter, req *http.Request) {
-			data, err := fs.ReadFile(staticSub, "style.css")
-			if err != nil {
-				http.Error(w, "not found", 404)
-				return
-			}
-			w.Header().Set("Content-Type", "text/css; charset=utf-8")
-			w.Write(data)
-		})
+		}
+		r.Get("/", serveFile("index.html", "text/html; charset=utf-8"))
+		r.Get("/admin", serveFile("admin.html", "text/html; charset=utf-8"))
+		r.Get("/style.css", serveFile("style.css", "text/css; charset=utf-8"))
 	}
 
 	// Health
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
-	})
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 
-	// API
+	// Core API
 	r.Route("/api", func(r chi.Router) {
 		r.Use(jsonContentType)
 		r.Get("/status", s.handleStatus)
 		r.Get("/repos", s.handleRepos)
 		r.Get("/runs", s.handleRuns)
+		r.Get("/jobs", s.handleJobs)
+		r.Post("/check-now", s.handleCheckNow)
+		r.Post("/reproduce", s.handleReproduce)
+		r.Post("/chat", s.handleChat)
+		r.Post("/runs/{id}/post-comment", s.handlePostComment)
+		r.Post("/rerun/*", s.handleRerun)
+
+		// Admin
+		r.Route("/admin", func(r chi.Router) {
+			r.Get("/repos", s.handleAdminReposGet)
+			r.Post("/repos", s.handleAdminReposAdd)
+			r.Put("/repos", s.handleAdminReposUpdate)
+			r.Delete("/repos", s.handleAdminReposDelete)
+			r.Get("/settings", s.handleAdminSettings)
+			r.Put("/settings", s.handleAdminSettingsUpdate)
+			r.Get("/system", s.handleAdminSystem)
+			r.Get("/logs", s.handleAdminLogs)
+			r.Post("/test-ai", s.handleAdminTestAI)
+			r.Post("/test-github", s.handleAdminTestGitHub)
+			r.Get("/db-stats", s.handleAdminDBStats)
+			r.Get("/db-runs", s.handleAdminDBRuns)
+			r.Get("/db-memory", s.handleAdminDBMemory)
+			r.Get("/repo-memory/*", s.handleAdminRepoMemory)
+			r.Get("/deployment-plan/*", s.handleAdminGetPlan)
+			r.Put("/deployment-plan/*", s.handleAdminUpdatePlan)
+			r.Post("/analyze-deployment", s.handleAdminAnalyze)
+			r.Get("/sandboxes", s.handleAdminSandboxes)
+			r.Delete("/sandboxes/*", s.handleAdminSandboxDelete)
+			r.Post("/sandboxes/cleanup", s.handleAdminSandboxCleanup)
+		})
 	})
 
 	return r
@@ -161,7 +225,7 @@ func jsonContentType(next http.Handler) http.Handler {
 	})
 }
 
-// StartHTTP starts the HTTP server on the given address.
+// StartHTTP starts the HTTP server.
 func (s *Server) StartHTTP(addr string) {
 	slog.Info("dashboard HTTP server starting", "addr", addr)
 	srv := &http.Server{Addr: addr, Handler: s.router}
@@ -189,7 +253,6 @@ func selfSignedTLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "opinai-controller"},
@@ -199,24 +262,17 @@ func selfSignedTLSConfig() (*tls.Config, error) {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{"opinai-controller", "localhost"},
 	}
-
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
 		return nil, err
 	}
-
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return nil, err
-	}
+	keyDER, _ := x509.MarshalECPrivateKey(key)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-
 	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, err
 	}
-
 	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
 }
 
