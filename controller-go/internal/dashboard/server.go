@@ -233,7 +233,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/jobs", s.handleJobs)
 		r.Post("/check-now", s.handleCheckNow)
 		r.Post("/reproduce", s.handleReproduce)
-		r.Post("/chat", s.handleChat)
+		r.Post("/chat", s.handleChatFull)
 		r.Post("/runs/{id}/post-comment", s.handlePostComment)
 		r.Post("/rerun/*", s.handleRerun)
 

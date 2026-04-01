@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
 
@@ -122,37 +121,6 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 		"repo":         req.Repo,
 		"issue_number": req.IssueNumber,
 	})
-}
-
-// --- /api/chat ---
-
-func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Message string         `json:"message"`
-		Context map[string]any `json:"context"`
-	}
-	if err := decodeJSON(r, &req); err != nil || req.Message == "" {
-		jsonError(w, "message required", 400)
-		return
-	}
-
-	systemCtx := "You are OpinAI, an AI bug reproduction assistant running on a Kubernetes cluster. " +
-		"You help developers understand bugs, analyze reproduction results, and suggest fixes. " +
-		"Be concise, technical, and helpful. Use markdown formatting.\n\n"
-
-	// Add context if available
-	if repo, ok := req.Context["repo"].(string); ok && repo != "" {
-		if issueNum, ok := req.Context["issue_number"].(float64); ok && issueNum > 0 {
-			systemCtx += fmt.Sprintf("Current issue: %s#%d\n", repo, int(issueNum))
-		}
-	}
-
-	reply, err := ai.Call(systemCtx+"\n\nUser question: "+req.Message, 2048)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{"reply": "AI error: " + err.Error()})
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]string{"reply": ai.Sanitize(reply)})
 }
 
 // --- /api/runs/{id}/post-comment ---

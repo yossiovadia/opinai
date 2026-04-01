@@ -166,16 +166,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	sseHeaders(w)
 
-	systemCtx := "You are OpinAI, an AI bug reproduction assistant running on a Kubernetes cluster. " +
-		"You help developers understand bugs, analyze reproduction results, and suggest fixes. " +
-		"Be concise, technical, and helpful. Use markdown formatting.\n\n"
-
-	if repo, ok := req.Context["repo"].(string); ok && repo != "" {
-		if issueNum, ok := req.Context["issue_number"].(float64); ok && issueNum > 0 {
-			systemCtx += fmt.Sprintf("Current issue: %s#%d\n", repo, int(issueNum))
-		}
-	}
-
+	systemCtx := buildChatContext(req.Context)
 	prompt := systemCtx + "\n\nUser question: " + req.Message
 
 	// Try streaming API call

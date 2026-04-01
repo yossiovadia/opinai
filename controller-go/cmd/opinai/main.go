@@ -16,6 +16,7 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
 	"github.com/yossiovadia/opinai/controller-go/internal/dashboard"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/runner"
 	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
 
@@ -34,8 +35,7 @@ func main() {
 	case "controller":
 		runController(*httpAddr, *httpsAddr, *dbPath, logBuf)
 	case "runner":
-		slog.Info("runner mode not yet implemented")
-		os.Exit(1)
+		runner.Run()
 	default:
 		slog.Error("unknown mode", "mode", *mode)
 		os.Exit(1)
