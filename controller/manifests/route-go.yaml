@@ -1,0 +1,15 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: opinai-dashboard-go
+  namespace: opinai
+  labels:
+    app: opinai-controller
+spec:
+  to:
+    kind: Service
+    name: opinai-controller
+  port:
+    targetPort: http-go
+  tls:
+    termination: edge

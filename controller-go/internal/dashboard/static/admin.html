@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinAI Admin</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .admin-nav { padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--border); }
+    .admin-nav a { color: var(--blue); font-size: 13px; }
+    .admin-grid { display: flex; flex-direction: column; gap: 20px; }
+    .admin-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .admin-card h3 { font-size: 15px; margin-bottom: 12px; font-weight: 600; }
+    .admin-field { margin-bottom: 10px; }
+    .admin-field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .admin-field input, .admin-field select {
+      width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--text); font-size: 13px; font-family: var(--font); outline: none;
+    }
+    .admin-field input:focus { border-color: var(--blue); }
+    .admin-field .readonly { color: var(--text-dim); background: transparent; border-color: transparent; }
+    .admin-actions { display: flex; gap: 8px; margin-top: 12px; }
+    .admin-status { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 6px 0; }
+    .log-box {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+      font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; color: var(--text-dim);
+      max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+    }
+    .repo-card { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 14px; margin-bottom: 8px; }
+    .repo-card-header { display: flex; justify-content: space-between; align-items: center; }
+    .repo-card-name { font-weight: 600; font-size: 14px; }
+    .repo-card-info { font-size: 12px; color: var(--text-dim); margin-top: 4px; line-height: 1.6; }
+    .repo-card-info span { margin-right: 12px; }
+    .repo-edit-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .repo-edit-fields .admin-field { margin-bottom: 0; }
+    .btn-danger { border-color: var(--red); color: var(--red); }
+    .btn-danger:hover { background: rgba(248, 81, 73, 0.15); }
+    .deploy-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+    .deploy-opt { border: 2px solid var(--border); border-radius: 8px; padding: 14px; }
+    .deploy-opt.recommended { border-color: var(--green); }
+    .deploy-opt h4 { font-size: 14px; margin-bottom: 6px; }
+    .deploy-opt p { font-size: 12px; color: var(--text-dim); margin: 4px 0; }
+    .deploy-opt .deploy-meta { font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+    .deploy-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .deploy-badge.analyzed { background: rgba(88,166,255,0.2); color: var(--blue); }
+    .deploy-badge.tested { background: rgba(63,185,80,0.2); color: var(--green); }
+    .deploy-badge.failed { background: rgba(248,81,73,0.2); color: var(--red); }
+    .sandbox-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin: 4px 0; font-size: 12px; }
+    .add-bar { display: flex; gap: 10px; align-items: center; }
+    .add-bar input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--font); outline: none; }
+    .add-bar input:focus { border-color: var(--blue); }
+    .add-bar input::placeholder { color: var(--text-dim); }
+    .collapsible-header { cursor: pointer; user-select: none; display: flex; justify-content: space-between; align-items: center; }
+    .collapsible-header:hover h3 { color: var(--blue); }
+    .collapsible-arrow { color: var(--text-dim); font-size: 12px; transition: transform 0.2s; }
+    .collapsible-arrow.open { transform: rotate(90deg); }
+    .collapsible-body { display: none; margin-top: 12px; }
+    .collapsible-body.open { display: block; }
+    .settings-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 900px) { .settings-row { grid-template-columns: 1fr; } .repo-edit-fields { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+<div class="admin-nav">
+  <a href="/">&larr; Back to Dashboard</a>
+</div>
+
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo">&#x2699;&#xFE0F; OpinAI Admin</div>
+  </div>
+  <div class="header-right">
+    <span id="adminPod">Pod: loading...</span>
+    <span id="adminUptime">Uptime: --</span>
+  </div>
+</header>
+
+<main class="main">
+<div class="admin-grid">
+
+  <!-- 1. Add Repo -->
+  <div class="admin-card">
+    <h3>&#x2795; Add Repo</h3>
+    <div class="add-bar">
+      <input type="text" id="addRepoInput" placeholder="Paste repo URL or owner/repo (e.g. https://github.com/owner/repo)">
+      <button class="btn btn-primary" onclick="smartAddRepo()" id="addRepoBtn">&#x2795; Add &amp; Analyze</button>
+    </div>
+    <div id="addRepoStatus" style="margin-top:8px;font-size:12px;color:var(--text-dim)"></div>
+  </div>
+
+  <!-- 2. Monitored Repos (compact cards) -->
+  <div class="admin-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3>&#x1F4E6; Monitored Repos</h3>
+      <button class="btn" onclick="loadRepos()">Refresh</button>
+    </div>
+    <div id="repoList"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- 3. Deployment Plans -->
+  <div class="admin-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3>&#x1F680; Deployment Plans</h3>
+      <button class="btn" onclick="loadDeploymentPlans()">Refresh</button>
+    </div>
+    <div id="deployPlansContainer"><div class="empty">Loading...</div></div>
+  </div>
+
+  <!-- 4. AI Provider + Credentials + Settings -->
+  <div class="admin-card">
+    <h3>&#x2699;&#xFE0F; Settings &amp; Credentials</h3>
+    <div class="settings-row">
+      <div>
+        <div class="admin-status" id="aiStatus"><span class="status-dot" id="aiDot"></span> AI: checking...</div>
+        <div class="admin-field"><label>Provider</label><input id="aiProvider" class="readonly" readonly></div>
+        <div class="admin-field"><label>Model</label><input id="aiModel" class="readonly" readonly></div>
+        <div class="admin-field"><label>Region</label><input id="aiRegion" class="readonly" readonly></div>
+        <button class="btn" onclick="testAi()" style="margin-top:6px">Test AI Connection</button>
+      </div>
+      <div>
+        <div class="admin-status" id="ghStatus"><span class="status-dot" id="ghDot"></span> GitHub: checking...</div>
+        <div class="admin-field"><label>Polling Interval (min)</label><input id="settingsPoll" type="number" value="60"></div>
+        <div class="admin-field"><label>Done Label</label><input id="settingsLabel" value="opinai-done"></div>
+        <div class="admin-actions">
+          <button class="btn" onclick="testGithub()">Test GitHub</button>
+          <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+      </div>
+    </div>
+    <div class="admin-status" style="margin-top:8px;">Namespace: <strong id="sysNamespace">--</strong> &nbsp; Pod: <strong id="sysPod">--</strong> &nbsp; Uptime: <strong id="sysUptime">--</strong></div>
+  </div>
+
+  <!-- 5. Sandboxes -->
+  <div class="admin-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3>&#x1F4E6; Active Sandboxes</h3>
+      <div>
+        <button class="btn" onclick="loadSandboxes()">Refresh</button>
+        <button class="btn btn-danger" onclick="cleanupSandboxes()">Cleanup Old</button>
+      </div>
+    </div>
+    <div id="sandboxContainer"><div class="empty" style="padding:12px">Loading...</div></div>
+  </div>
+
+  <!-- 6. AI Knowledge (collapsible) -->
+  <div class="admin-card">
+    <div class="collapsible-header" onclick="toggleSection('memory')">
+      <h3>&#x1F9E0; AI Knowledge</h3>
+      <span class="collapsible-arrow" id="arrow-memory">&#x25B6;</span>
+    </div>
+    <div class="collapsible-body" id="body-memory">
+      <div id="memoryContainer"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- 7. Database (collapsible) -->
+  <div class="admin-card">
+    <div class="collapsible-header" onclick="toggleSection('db')">
+      <h3>&#x1F5C4;&#xFE0F; Database</h3>
+      <span class="collapsible-arrow" id="arrow-db">&#x25B6;</span>
+    </div>
+    <div class="collapsible-body" id="body-db">
+      <div class="admin-status" id="dbStats">Loading...</div>
+      <h4 style="margin:12px 0 8px;font-size:13px;color:var(--text-dim)">Recent Runs</h4>
+      <div id="dbRunsContainer" style="overflow-x:auto"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <!-- 8. Logs (collapsible) -->
+  <div class="admin-card">
+    <div class="collapsible-header" onclick="toggleSection('logs')">
+      <h3>&#x1F4DC; Controller Logs</h3>
+      <span class="collapsible-arrow" id="arrow-logs">&#x25B6;</span>
+    </div>
+    <div class="collapsible-body" id="body-logs">
+      <div class="log-box" id="logBox">Loading...</div>
+    </div>
+  </div>
+
+</div>
+</main>
+
+<script>
+function escapeHtml(s) {
+  if (!s) return '';
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function fetchJSON(url, opts) {
+  var resp = await fetch(url, opts);
+  return resp.json();
+}
+
+// --- Collapsible sections ---
+function toggleSection(id) {
+  var body = document.getElementById('body-' + id);
+  var arrow = document.getElementById('arrow-' + id);
+  var isOpen = body.classList.contains('open');
+  body.classList.toggle('open');
+  arrow.classList.toggle('open');
+  // Lazy load on first open
+  if (!isOpen) {
+    if (id === 'memory') loadMemory();
+    else if (id === 'db') { loadDbStats(); loadDbRuns(); }
+    else if (id === 'logs') loadLogs();
+  }
+}
+
+// --- Smart Add Repo ---
+function parseRepoInput(input) {
+  input = input.trim();
+  var m = input.match(/github\.com\/([^/]+\/[^/\s?#]+)/);
+  if (m) return m[1].replace(/\.git$/, '');
+  if (/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(input)) return input;
+  return null;
+}
+
+async function smartAddRepo() {
+  var input = document.getElementById('addRepoInput');
+  var status = document.getElementById('addRepoStatus');
+  var btn = document.getElementById('addRepoBtn');
+  var repo = parseRepoInput(input.value);
+  if (!repo) { status.innerHTML = '<span style="color:var(--red)">Invalid repo format. Use owner/repo or a GitHub URL.</span>'; return; }
+
+  btn.disabled = true;
+
+  // Step 1: Add the repo
+  status.innerHTML = '&#x1F4E6; Adding <strong>' + escapeHtml(repo) + '</strong>...';
+  try {
+    var resp = await fetch('/api/admin/repos', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: repo, profile: {}}) });
+    var data = await resp.json();
+    if (!resp.ok) {
+      status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(data.error || 'unknown') + '</span>';
+      btn.disabled = false;
+      return;
+    }
+  } catch(e) {
+    status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(e.message || 'network error') + '</span>';
+    btn.disabled = false;
+    return;
+  }
+
+  input.value = '';
+  loadRepos();
+
+  // Step 2: Analyze via SSE stream
+  streamAnalyze(repo, status, function() { btn.disabled = false; loadRepos(); loadDeploymentPlans(); });
+}
+
+document.getElementById('addRepoInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') smartAddRepo();
+});
+
+// --- Repos (compact cards) ---
+async function loadRepos() {
+  var repos = await fetchJSON('/api/admin/repos');
+  var container = document.getElementById('repoList');
+  if (!repos.length) { container.innerHTML = '<div class="empty">No repos configured. Add one above.</div>'; return; }
+  container.innerHTML = repos.map(function(r) {
+    var p = r.profile || {};
+    var id = r.name.replace(/[^a-zA-Z0-9]/g, '_');
+    var typeStr = p.type ? escapeHtml(p.type) : 'unknown';
+    var buildStr = p.build ? escapeHtml(p.build) : 'not configured';
+    var flags = [];
+    if (p.gpu) flags.push('GPU');
+    if (p.k8s) flags.push('K8s');
+    var flagStr = flags.length ? flags.join(', ') : 'No GPU, No K8s';
+    var depsStr = p.deps ? escapeHtml(p.deps) : 'none';
+
+    return '<div class="repo-card" id="repo-' + id + '">' +
+      '<div class="repo-card-header">' +
+        '<span class="repo-card-name">&#x1F4E6; ' + escapeHtml(r.name) + '</span>' +
+        '<div>' +
+          '<button class="btn" onclick="toggleEdit(\'' + id + '\')" style="font-size:11px">Edit</button> ' +
+          '<button class="btn btn-danger" onclick="deleteRepo(\'' + escapeHtml(r.name) + '\')" style="font-size:11px">Delete</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="repo-card-info">' +
+        '<span>' + typeStr + '</span>' +
+        '<span>&#x1F527; ' + buildStr + '</span><br>' +
+        '<span>' + flagStr + '</span>' +
+        '<span>Deps: ' + depsStr + '</span>' +
+      '</div>' +
+      '<div class="repo-edit-fields" id="edit-' + id + '" style="display:none">' +
+        '<div class="admin-field"><label>Type</label><input id="rf-' + id + '-type" value="' + escapeHtml(p.type || '') + '"></div>' +
+        '<div class="admin-field"><label>Build</label><input id="rf-' + id + '-build" value="' + escapeHtml(p.build || '') + '"></div>' +
+        '<div class="admin-field"><label>Run</label><input id="rf-' + id + '-run" value="' + escapeHtml(p.run || '') + '"></div>' +
+        '<div class="admin-field"><label>Health</label><input id="rf-' + id + '-health" value="' + escapeHtml(p.health || '') + '"></div>' +
+        '<div class="admin-field"><label>Dependencies</label><input id="rf-' + id + '-deps" value="' + escapeHtml(p.deps || '') + '"></div>' +
+        '<div class="admin-field"><label>GPU / K8s</label><input id="rf-' + id + '-flags" value="' + (p.gpu ? 'gpu' : '') + (p.gpu && p.k8s ? ',' : '') + (p.k8s ? 'k8s' : '') + '" placeholder="gpu,k8s"></div>' +
+        '<div style="grid-column:1/-1"><button class="btn btn-primary" onclick="saveRepo(\'' + escapeHtml(r.name) + '\', \'' + id + '\')">Save Changes</button></div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function toggleEdit(id) {
+  var el = document.getElementById('edit-' + id);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function saveRepo(name, id) {
+  var flags = (document.getElementById('rf-' + id + '-flags').value || '').toLowerCase();
+  var profile = {
+    type: document.getElementById('rf-' + id + '-type').value,
+    build: document.getElementById('rf-' + id + '-build').value,
+    run: document.getElementById('rf-' + id + '-run').value,
+    health: document.getElementById('rf-' + id + '-health').value,
+    deps: document.getElementById('rf-' + id + '-deps').value,
+    gpu: flags.indexOf('gpu') >= 0,
+    k8s: flags.indexOf('k8s') >= 0
+  };
+  await fetchJSON('/api/admin/repos', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name, profile: profile}) });
+  loadRepos();
+}
+
+async function deleteRepo(name) {
+  if (!confirm('Delete ' + name + '?')) return;
+  try {
+    var resp = await fetch('/api/admin/repos', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name}) });
+    var data = await resp.json();
+    if (!resp.ok) { alert('Delete failed: ' + (data.error || 'unknown')); return; }
+  } catch(e) { alert('Delete failed: ' + e.message); return; }
+  loadRepos();
+  loadDeploymentPlans();
+}
+
+// --- Settings ---
+async function loadSettings() {
+  var s = await fetchJSON('/api/admin/settings');
+  document.getElementById('settingsPoll').value = s.poll_interval_minutes;
+  document.getElementById('settingsLabel').value = s.done_label;
+  document.getElementById('aiProvider').value = s.ai_provider || '(not set)';
+  document.getElementById('aiModel').value = s.ai_model || '(not set)';
+  document.getElementById('aiRegion').value = s.ai_region || '(N/A)';
+}
+
+async function saveSettings() {
+  await fetchJSON('/api/admin/settings', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      poll_interval_minutes: document.getElementById('settingsPoll').value,
+      done_label: document.getElementById('settingsLabel').value
+    })
+  });
+  loadSettings();
+}
+
+// --- Credentials ---
+async function testGithub() {
+  document.getElementById('ghStatus').innerHTML = '<span class="status-dot" style="background:var(--yellow)"></span> GitHub: testing...';
+  var r = await fetchJSON('/api/admin/test-github', { method: 'POST' });
+  if (r.status === 'ok') {
+    document.getElementById('ghStatus').innerHTML = '<span class="status-dot green"></span> GitHub: &#x2705; authenticated as <strong>' + escapeHtml(r.login) + '</strong>';
+  } else {
+    document.getElementById('ghStatus').innerHTML = '<span class="status-dot red"></span> GitHub: &#x274C; ' + escapeHtml(r.message || 'failed');
+  }
+}
+
+async function testAi() {
+  document.getElementById('aiStatus').innerHTML = '<span class="status-dot" style="background:var(--yellow)"></span> AI: testing...';
+  var t0 = Date.now();
+  var r = await fetchJSON('/api/admin/test-ai', { method: 'POST' });
+  var elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  if (r.status === 'ok') {
+    document.getElementById('aiStatus').innerHTML = '<span class="status-dot green"></span> AI: &#x2705; Connected — responded in ' + elapsed + 's';
+  } else {
+    document.getElementById('aiStatus').innerHTML = '<span class="status-dot red"></span> AI: &#x274C; ' + escapeHtml(r.message || 'failed');
+  }
+}
+
+// --- System ---
+async function loadSystem() {
+  var s = await fetchJSON('/api/admin/system');
+  document.getElementById('sysNamespace').textContent = s.namespace;
+  document.getElementById('sysPod').textContent = s.pod_name;
+  document.getElementById('sysUptime').textContent = s.uptime_human;
+  document.getElementById('adminPod').textContent = 'Pod: ' + s.pod_name;
+  document.getElementById('adminUptime').textContent = 'Uptime: ' + s.uptime_human;
+}
+
+// --- Logs ---
+async function loadLogs() {
+  var lines = await fetchJSON('/api/admin/logs?count=50');
+  var box = document.getElementById('logBox');
+  box.textContent = lines.join('\n') || '(no logs)';
+  box.scrollTop = box.scrollHeight;
+}
+
+// --- AI Knowledge ---
+async function loadMemory() {
+  try {
+    var data = await fetchJSON('/api/admin/db-memory');
+    var container = document.getElementById('memoryContainer');
+    var repos = Object.keys(data);
+    if (!repos.length) {
+      container.innerHTML = '<div class="empty" style="padding:12px">No AI knowledge yet. Run a reproduction to start learning.</div>';
+      return;
+    }
+    var html = '';
+    repos.forEach(function(repo) {
+      html += '<div class="repo-card" style="margin-bottom:8px">';
+      html += '<div class="repo-card-header"><span class="repo-card-name">' + escapeHtml(repo) + '</span></div>';
+      var entries = data[repo];
+      Object.keys(entries).forEach(function(key) {
+        var e = entries[key];
+        html += '<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;">' +
+          '<span style="color:var(--blue);min-width:140px;font-weight:500">' + escapeHtml(key) + '</span>' +
+          '<span style="color:var(--text)">' + escapeHtml(e.value || '') + '</span>' +
+        '</div>';
+      });
+      html += '</div>';
+    });
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('memoryContainer').innerHTML = '<div class="empty">Failed to load</div>';
+  }
+}
+
+// --- Database ---
+async function loadDbStats() {
+  try {
+    var s = await fetchJSON('/api/admin/db-stats');
+    document.getElementById('dbStats').innerHTML =
+      'Runs: <strong>' + s.total_runs + '</strong> &nbsp; ' +
+      'Processed: <strong>' + s.total_processed + '</strong> &nbsp; ' +
+      'Memory: <strong>' + s.repo_memory_count + '</strong>';
+  } catch(e) {
+    document.getElementById('dbStats').textContent = 'Failed to load stats';
+  }
+}
+
+async function loadDbRuns() {
+  try {
+    var runs = await fetchJSON('/api/admin/db-runs');
+    var container = document.getElementById('dbRunsContainer');
+    if (!runs.length) { container.innerHTML = '<div class="empty" style="padding:12px">No runs yet</div>'; return; }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:auto">' +
+      '<thead><tr><th style="text-align:left;padding:6px 8px">ID</th><th style="text-align:left;padding:6px 8px">Repo</th>' +
+      '<th style="text-align:left;padding:6px 8px">Issue</th><th style="text-align:left;padding:6px 8px">Verdict</th>' +
+      '<th style="text-align:left;padding:6px 8px">Created</th></tr></thead><tbody>';
+    runs.forEach(function(r) {
+      html += '<tr><td style="padding:4px 8px">' + r.id + '</td><td style="padding:4px 8px">' + escapeHtml(r.repo) + '</td>' +
+        '<td style="padding:4px 8px">#' + r.issue + '</td><td style="padding:4px 8px">' + escapeHtml(r.verdict || '') + '</td>' +
+        '<td style="padding:4px 8px">' + escapeHtml(r.timestamp || '') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('dbRunsContainer').innerHTML = '<div class="empty">Failed to load</div>';
+  }
+}
+
+// --- Deployment Plans ---
+async function loadDeploymentPlans() {
+  try {
+    var repos = await fetchJSON('/api/admin/repos');
+    var container = document.getElementById('deployPlansContainer');
+    if (!repos.length) { container.innerHTML = '<div class="empty" style="padding:12px">No repos configured</div>'; return; }
+    var html = '';
+    for (var r of repos) {
+      html += '<div class="repo-card"><div class="repo-card-header"><span class="repo-card-name">' + escapeHtml(r.name) + '</span><div>';
+      var plan = null;
+      try { plan = await fetchJSON('/api/admin/deployment-plan/' + r.name); } catch(e) {}
+      if (plan && plan.options && plan.options.length) {
+        html += '<span class="deploy-badge ' + (plan.status || 'analyzed') + '">' + escapeHtml(plan.status || 'analyzed') + '</span> ';
+        html += '<button class="btn" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')" style="font-size:11px">Re-analyze</button>';
+        html += '</div></div>';
+        html += '<div class="deploy-options">';
+        plan.options.forEach(function(opt) {
+          html += '<div class="deploy-opt' + (opt.recommended ? ' recommended' : '') + '">';
+          html += '<h4>' + (opt.recommended ? '&#x2705; Recommended &mdash; ' : '') + escapeHtml(opt.name || opt.id) + '</h4>';
+          html += '<p>' + escapeHtml(opt.description || '') + '</p>';
+          html += '<div class="deploy-meta">';
+          html += '&#x23F1; ' + escapeHtml(opt.estimated_time || '?') + ' &nbsp; ';
+          html += '&#x1F4CB; ' + (opt.steps ? opt.steps.length : 0) + ' steps &nbsp; ';
+          if (opt.best_for) html += '&#x1F3AF; ' + escapeHtml(opt.best_for);
+          html += '</div>';
+          if (opt.requirements && opt.requirements.length) {
+            html += '<div class="deploy-meta">Requires: ' + opt.requirements.map(escapeHtml).join(', ') + '</div>';
+          }
+          if (opt.risks && opt.risks.length) {
+            html += '<div class="deploy-meta" style="color:var(--yellow)">Risks: ' + opt.risks.map(escapeHtml).join(', ') + '</div>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+      } else {
+        html += '<button class="btn btn-primary" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')" style="font-size:11px">&#x1F50D; Analyze Deployment</button>';
+        html += '</div></div>';
+      }
+      html += '</div>';
+    }
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('deployPlansContainer').innerHTML = '<div class="empty">Failed to load</div>';
+  }
+}
+
+function streamAnalyze(repo, statusEl, onDone) {
+  var source = new EventSource('/api/admin/analyze-stream?repo=' + encodeURIComponent(repo));
+  source.addEventListener('progress', function(e) {
+    var d = JSON.parse(e.data);
+    statusEl.innerHTML = d.message;
+  });
+  source.addEventListener('done', function(e) {
+    var d = JSON.parse(e.data);
+    statusEl.innerHTML = '&#x2705; ' + escapeHtml(d.message);
+    source.close();
+    if (onDone) onDone();
+  });
+  source.addEventListener('error', function(e) {
+    try { var d = JSON.parse(e.data); statusEl.innerHTML = '&#x26A0;&#xFE0F; ' + escapeHtml(d.message); }
+    catch(x) { statusEl.innerHTML = '&#x26A0;&#xFE0F; Analysis failed — you can retry.'; }
+    source.close();
+    if (onDone) onDone();
+  });
+}
+
+async function analyzeDeployment(repo) {
+  var container = document.getElementById('deployPlansContainer');
+  container.innerHTML = '<div class="empty" style="padding:20px" id="analyzeStatus">&#x23F3; Starting analysis...</div>';
+  var statusEl = document.getElementById('analyzeStatus');
+  streamAnalyze(repo, statusEl, function() { loadDeploymentPlans(); loadRepos(); });
+}
+
+// --- Sandboxes ---
+async function loadSandboxes() {
+  try {
+    var sandboxes = await fetchJSON('/api/admin/sandboxes');
+    var container = document.getElementById('sandboxContainer');
+    if (!sandboxes.length) { container.innerHTML = '<div class="empty" style="padding:12px">No active sandboxes</div>'; return; }
+    var html = '';
+    sandboxes.forEach(function(sb) {
+      var age = sb.age_seconds < 60 ? sb.age_seconds + 's' : Math.floor(sb.age_seconds / 60) + 'm';
+      html += '<div class="sandbox-item">' +
+        '<span>' + escapeHtml(sb.namespace) + '</span>' +
+        '<span>' + escapeHtml(sb.repo) + ' #' + escapeHtml(sb.issue) + '</span>' +
+        '<span>Age: ' + age + '</span>' +
+        '<button class="btn btn-danger" onclick="teardownSandbox(\'' + escapeHtml(sb.namespace) + '\')" style="font-size:11px">Delete</button>' +
+      '</div>';
+    });
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('sandboxContainer').innerHTML = '<div class="empty">Failed to load</div>';
+  }
+}
+
+async function teardownSandbox(ns) {
+  if (!confirm('Delete sandbox ' + ns + '?')) return;
+  await fetchJSON('/api/admin/sandboxes/' + ns, { method: 'DELETE' });
+  loadSandboxes();
+}
+
+async function cleanupSandboxes() {
+  var data = await fetchJSON('/api/admin/sandboxes/cleanup', { method: 'POST' });
+  alert('Cleaned ' + (data.cleaned || 0) + ' sandbox(es)');
+  loadSandboxes();
+}
+
+// --- Init ---
+async function initAdmin() {
+  await Promise.all([loadRepos(), loadSettings(), loadSystem(), loadDeploymentPlans(), loadSandboxes()]);
+  testGithub();
+  testAi();
+}
+initAdmin();
+setInterval(function() { loadSystem(); loadSandboxes(); }, 15000);
+</script>
+
+</body>
+</html>
