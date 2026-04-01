@@ -268,6 +268,7 @@ def _create_app() -> Flask:
 
     @app.route("/api/admin/repos", methods=["DELETE"])
     def admin_repos_delete():
+        from database import delete_repo_data
         data = request.get_json()
         repo = data.get("name", "").strip()
         if not repo:
@@ -275,8 +276,13 @@ def _create_app() -> Flask:
         try:
             _admin_update_repo(repo, {}, delete=True)
         except Exception as exc:
-            log.error("Failed to delete repo %s: %s", repo, exc)
+            log.error("Failed to delete repo %s from ConfigMap: %s", repo, exc)
             return jsonify({"error": str(exc)}), 500
+        # Clean up database entries
+        try:
+            delete_repo_data(repo)
+        except Exception as exc:
+            log.warning("Failed to clean DB for %s: %s", repo, exc)
         return jsonify({"status": "deleted", "name": repo})
 
     @app.route("/api/admin/settings", methods=["GET"])
@@ -1046,6 +1052,40 @@ def _analyze_deployment(repo: str) -> dict:
     # Save to database
     save_deployment_plan(repo, json.dumps(plan_data))
     log.info("Saved deployment plan for %s with %d options", repo, len(plan_data.get("options", [])))
+
+    # Auto-update repo profile from analysis results
+    try:
+        project_type = plan_data.get("project_type", "")
+        deps_list = plan_data.get("dependencies", [])
+        deps_str = ", ".join(deps_list) if isinstance(deps_list, list) else str(deps_list)
+        deps_lower = deps_str.lower()
+
+        k8s_keywords = ("kubernetes", "k8s", "openshift", "operator", "istio", "kuadrant", "helm", "kustomize")
+        gpu_keywords = ("gpu", "cuda", "nvidia")
+        needs_k8s = any(kw in deps_lower for kw in k8s_keywords)
+        needs_gpu = any(kw in deps_lower for kw in gpu_keywords)
+
+        new_profile = {
+            "type": project_type or "other",
+            "build": "",
+            "run": "",
+            "health": "",
+            "deps": deps_str,
+            "k8s": needs_k8s,
+            "gpu": needs_gpu,
+        }
+        # Merge with existing profile (don't overwrite user-set build/run/health)
+        existing = _get_repo_profile(repo) or {}
+        for key in ("build", "run", "health"):
+            if existing.get(key):
+                new_profile[key] = existing[key]
+        if existing.get("type") and existing["type"] != "other":
+            new_profile["type"] = existing["type"]
+
+        _admin_update_repo(repo, new_profile, delete=False)
+        log.info("Updated repo profile for %s from analysis", repo)
+    except Exception as exc:
+        log.warning("Failed to update profile from analysis for %s: %s", repo, exc)
 
     return plan_data
 

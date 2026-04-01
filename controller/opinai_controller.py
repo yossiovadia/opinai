@@ -546,6 +546,32 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
 # ---------------------------------------------------------------------------
 
 
+def _cleanup_orphaned_jobs(batch_api: client.BatchV1Api):
+    """Delete jobs whose repo is no longer in the REPOS list."""
+    try:
+        jobs = batch_api.list_namespaced_job(
+            namespace=NAMESPACE, label_selector="app=opinai-runner"
+        )
+    except ApiException:
+        return
+
+    monitored = set(REPOS)
+    for job in jobs.items:
+        annotations = job.metadata.annotations or {}
+        repo = annotations.get("opinai/repo-full", "")
+        if repo and repo not in monitored:
+            name = job.metadata.name
+            try:
+                batch_api.delete_namespaced_job(
+                    name=name,
+                    namespace=NAMESPACE,
+                    propagation_policy="Background",
+                )
+                log.info("Deleted orphaned job %s (repo %s no longer monitored)", name, repo)
+            except ApiException:
+                pass
+
+
 def main():
     if not REPOS:
         log.error("REPOS env var is empty — nothing to watch")
@@ -559,6 +585,9 @@ def main():
 
     load_k8s()
     batch_api = client.BatchV1Api()
+
+    # Clean up orphaned jobs from previous runs
+    _cleanup_orphaned_jobs(batch_api)
 
     # Start the web dashboard
     start_dashboard()
@@ -597,6 +626,11 @@ def main():
             if is_k8s:
                 # k8s repos: show in dashboard but don't auto-create jobs
                 update_repo_stats(repo, pending=0, processed=stats["processed"], manual_only=True)
+                continue
+
+            # New repos (never polled): don't auto-create jobs, require manual trigger
+            if stats["processed"] == 0:
+                update_repo_stats(repo, pending=0, processed=0, manual_only=True)
                 continue
 
             log.info("Checking %s for new issues...", repo)

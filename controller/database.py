@@ -276,6 +276,16 @@ def update_deployment_plan_status(repo: str, status: str):
         conn.commit()
 
 
+def delete_repo_data(repo: str):
+    """Delete all data for a repo: deployment plans, repo memory, processed issues."""
+    with _lock:
+        conn = _get_conn()
+        conn.execute("DELETE FROM deployment_plans WHERE repo = ?", (repo,))
+        conn.execute("DELETE FROM repo_memory WHERE repo = ?", (repo,))
+        conn.execute("DELETE FROM processed_issues WHERE repo = ?", (repo,))
+        conn.commit()
+
+
 def _row_to_dict(row: sqlite3.Row) -> dict:
     """Convert a sqlite3.Row to a dict with API-compatible keys."""
     return {
