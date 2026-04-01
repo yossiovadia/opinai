@@ -226,27 +226,41 @@ async function smartAddRepo() {
   if (!repo) { status.innerHTML = '<span style="color:var(--red)">Invalid repo format. Use owner/repo or a GitHub URL.</span>'; return; }
 
   btn.disabled = true;
-  status.innerHTML = '&#x1F50D; Adding and analyzing <strong>' + escapeHtml(repo) + '</strong>...';
 
+  // Step 1: Add the repo
+  status.innerHTML = '&#x1F4E6; Adding <strong>' + escapeHtml(repo) + '</strong>...';
   try {
-    // Add the repo with empty profile
-    await fetchJSON('/api/admin/repos', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: repo, profile: {}}) });
-    status.innerHTML = '&#x2705; Repo added. &#x1F50D; Analyzing deployment (this may take 30-60s)...';
-    loadRepos();
-
-    // Trigger deployment analysis
-    try {
-      await fetchJSON('/api/admin/analyze-deployment', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({repo: repo}) });
-      status.innerHTML = '&#x2705; <strong>' + escapeHtml(repo) + '</strong> added and analyzed!';
-      loadRepos();
-      loadDeploymentPlans();
-    } catch(e) {
-      status.innerHTML = '&#x2705; Repo added. &#x26A0;&#xFE0F; Analysis failed — you can retry from Deployment Plans.';
+    var resp = await fetch('/api/admin/repos', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: repo, profile: {}}) });
+    var data = await resp.json();
+    if (!resp.ok) {
+      status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(data.error || 'unknown') + '</span>';
+      btn.disabled = false;
+      return;
     }
-    input.value = '';
   } catch(e) {
-    status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(e.message || 'unknown') + '</span>';
+    status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(e.message || 'network error') + '</span>';
+    btn.disabled = false;
+    return;
   }
+
+  input.value = '';
+  loadRepos();
+
+  // Step 2: Analyze deployment (separate request)
+  status.innerHTML = '&#x2705; Repo added. &#x1F50D; Analyzing deployment (this may take 30-60s)...';
+  try {
+    var resp2 = await fetch('/api/admin/analyze-deployment', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({repo: repo}) });
+    var data2 = await resp2.json();
+    if (resp2.ok && !data2.error) {
+      status.innerHTML = '&#x2705; <strong>' + escapeHtml(repo) + '</strong> added and analyzed!';
+    } else {
+      status.innerHTML = '&#x2705; Repo added. &#x26A0;&#xFE0F; Analysis incomplete — you can retry from Deployment Plans.';
+    }
+    loadDeploymentPlans();
+  } catch(e) {
+    status.innerHTML = '&#x2705; Repo added. &#x26A0;&#xFE0F; Analysis failed — you can retry from Deployment Plans.';
+  }
+
   btn.disabled = false;
 }
 
@@ -319,8 +333,13 @@ async function saveRepo(name, id) {
 
 async function deleteRepo(name) {
   if (!confirm('Delete ' + name + '?')) return;
-  await fetchJSON('/api/admin/repos', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name}) });
+  try {
+    var resp = await fetch('/api/admin/repos', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name: name}) });
+    var data = await resp.json();
+    if (!resp.ok) { alert('Delete failed: ' + (data.error || 'unknown')); return; }
+  } catch(e) { alert('Delete failed: ' + e.message); return; }
   loadRepos();
+  loadDeploymentPlans();
 }
 
 // --- Settings ---

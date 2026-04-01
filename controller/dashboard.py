@@ -245,7 +245,11 @@ def _create_app() -> Flask:
         profile = data.get("profile", {})
         if not repo:
             return jsonify({"error": "name required"}), 400
-        _admin_update_repo(repo, profile, delete=False)
+        try:
+            _admin_update_repo(repo, profile, delete=False)
+        except Exception as exc:
+            log.error("Failed to add repo %s: %s", repo, exc)
+            return jsonify({"error": str(exc)}), 500
         return jsonify({"status": "added", "name": repo})
 
     @app.route("/api/admin/repos", methods=["PUT"])
@@ -255,7 +259,11 @@ def _create_app() -> Flask:
         profile = data.get("profile", {})
         if not repo:
             return jsonify({"error": "name required"}), 400
-        _admin_update_repo(repo, profile, delete=False)
+        try:
+            _admin_update_repo(repo, profile, delete=False)
+        except Exception as exc:
+            log.error("Failed to update repo %s: %s", repo, exc)
+            return jsonify({"error": str(exc)}), 500
         return jsonify({"status": "updated", "name": repo})
 
     @app.route("/api/admin/repos", methods=["DELETE"])
@@ -264,7 +272,11 @@ def _create_app() -> Flask:
         repo = data.get("name", "").strip()
         if not repo:
             return jsonify({"error": "name required"}), 400
-        _admin_update_repo(repo, {}, delete=True)
+        try:
+            _admin_update_repo(repo, {}, delete=True)
+        except Exception as exc:
+            log.error("Failed to delete repo %s: %s", repo, exc)
+            return jsonify({"error": str(exc)}), 500
         return jsonify({"status": "deleted", "name": repo})
 
     @app.route("/api/admin/settings", methods=["GET"])
