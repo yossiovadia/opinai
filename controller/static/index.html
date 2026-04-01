@@ -69,6 +69,22 @@
   <a href="https://github.com/yossiovadia/opinai">OpinAI</a>
 </footer>
 
+<!-- Post preview modal -->
+<div class="modal-overlay" id="postModal" style="display:none" onclick="if(event.target===this)closePostModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>Review comment before posting to GitHub</h3>
+      <button class="chat-close" onclick="closePostModal()">&times;</button>
+    </div>
+    <div class="modal-meta" id="postModalMeta"></div>
+    <div class="modal-body expand-content" id="postModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closePostModal()">Cancel</button>
+      <button class="btn btn-post-confirm" id="postModalConfirm" onclick="confirmPost()">&#x2705; Post to GitHub</button>
+    </div>
+  </div>
+</div>
+
 <!-- Chat toggle button -->
 <button class="chat-toggle" id="chatToggle" onclick="toggleChat()" title="Ask OpinAI">&#x1F3B3;</button>
 
@@ -362,7 +378,7 @@ function renderIssues() {
       if (r.posted) {
         actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button> ';
       } else if (r.runId) {
-        actions += '<button class="btn" id="post-btn-' + r.runId + '" onclick="event.stopPropagation(); postComment(' + r.runId + ')" title="Post to GitHub">&#x1F4DD; Post</button> ';
+        actions += '<button class="btn" id="post-btn-' + r.runId + '" onclick="event.stopPropagation(); showPostPreview(' + r.runId + ', \'' + escapeHtml(r.repo) + '\', \'' + r.issue + '\')" title="Post to GitHub">&#x1F4DD; Post</button> ';
       }
     }
     if (r.repo && r.issue && r.status !== 'Running') {
@@ -442,23 +458,52 @@ async function checkNow() {
   }
 }
 
-async function postComment(runId) {
-  var btn = document.getElementById('post-btn-' + runId);
-  if (btn) { btn.disabled = true; btn.innerHTML = '&#x23F3; Posting...'; }
+var _pendingPostRunId = null;
+
+function showPostPreview(runId, repo, issue) {
+  // Find the report for this run from allRuns
+  var report = '';
+  for (var i = 0; i < allRuns.length; i++) {
+    if (allRuns[i].id === runId) { report = allRuns[i].report || '(no report)'; break; }
+  }
+  _pendingPostRunId = runId;
+  document.getElementById('postModalMeta').innerHTML =
+    '<strong>' + escapeHtml(repo) + '#' + escapeHtml(issue) + '</strong>';
+  document.getElementById('postModalBody').innerHTML = renderMarkdown(report);
+  document.getElementById('postModalConfirm').disabled = false;
+  document.getElementById('postModalConfirm').innerHTML = '&#x2705; Post to GitHub';
+  document.getElementById('postModal').style.display = '';
+}
+
+function closePostModal() {
+  document.getElementById('postModal').style.display = 'none';
+  _pendingPostRunId = null;
+}
+
+async function confirmPost() {
+  var runId = _pendingPostRunId;
+  if (!runId) return;
+  var confirmBtn = document.getElementById('postModalConfirm');
+  confirmBtn.disabled = true;
+  confirmBtn.innerHTML = '&#x23F3; Posting...';
   try {
     var resp = await fetch(API + '/api/runs/' + runId + '/post-comment', { method: 'POST' });
     var data = await resp.json();
     if (data.status === 'posted') {
       showToast('Comment posted to ' + data.repo + '#' + data.issue, 'success');
-      if (btn) { btn.innerHTML = '&#x2705; Posted'; btn.style.color = 'var(--green)'; btn.style.borderColor = 'var(--green)'; }
+      closePostModal();
+      var btn = document.getElementById('post-btn-' + runId);
+      if (btn) { btn.innerHTML = '&#x2705; Posted'; btn.disabled = true; btn.style.color = 'var(--green)'; btn.style.borderColor = 'var(--green)'; }
       setTimeout(refreshAll, 1000);
     } else {
       showToast('Failed: ' + (data.message || 'unknown error'), 'error');
-      if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F4DD; Post'; }
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = '&#x2705; Post to GitHub';
     }
   } catch(e) {
     showToast('Failed to post comment', 'error');
-    if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F4DD; Post'; }
+    confirmBtn.disabled = false;
+    confirmBtn.innerHTML = '&#x2705; Post to GitHub';
   }
 }
 
