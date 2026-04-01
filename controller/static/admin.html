@@ -33,6 +33,17 @@
     .repo-item-fields .admin-field { margin-bottom: 0; }
     .btn-danger { border-color: var(--red); color: var(--red); }
     .btn-danger:hover { background: rgba(248, 81, 73, 0.15); }
+    .deploy-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+    .deploy-opt { border: 2px solid var(--border); border-radius: 8px; padding: 14px; }
+    .deploy-opt.recommended { border-color: var(--green); }
+    .deploy-opt h4 { font-size: 14px; margin-bottom: 6px; }
+    .deploy-opt p { font-size: 12px; color: var(--text-dim); margin: 4px 0; }
+    .deploy-opt .deploy-meta { font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+    .deploy-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .deploy-badge.analyzed { background: rgba(88,166,255,0.2); color: var(--blue); }
+    .deploy-badge.tested { background: rgba(63,185,80,0.2); color: var(--green); }
+    .deploy-badge.failed { background: rgba(248,81,73,0.2); color: var(--red); }
+    .sandbox-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin: 4px 0; font-size: 12px; }
     @media (max-width: 900px) { .admin-grid { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -126,6 +137,27 @@
       <div class="admin-status">Namespace: <strong id="sysNamespace">--</strong></div>
       <div class="admin-status">Pod: <strong id="sysPod">--</strong></div>
       <div class="admin-status">Uptime: <strong id="sysUptime">--</strong></div>
+    </div>
+
+    <!-- Deployment Plans -->
+    <div class="admin-card" style="grid-column: 1 / -1;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>&#x1F680; Deployment Plans</h3>
+        <button class="btn" onclick="loadDeploymentPlans()">Refresh</button>
+      </div>
+      <div id="deployPlansContainer"><div class="empty">Loading...</div></div>
+    </div>
+
+    <!-- Sandboxes -->
+    <div class="admin-card" style="grid-column: 1 / -1;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>&#x1F4E6; Active Sandboxes</h3>
+        <div>
+          <button class="btn" onclick="loadSandboxes()">Refresh</button>
+          <button class="btn btn-danger" onclick="cleanupSandboxes()">Cleanup Old</button>
+        </div>
+      </div>
+      <div id="sandboxContainer"><div class="empty">Loading...</div></div>
     </div>
 
     <!-- AI Knowledge -->
@@ -380,14 +412,107 @@ async function loadDbRuns() {
   }
 }
 
+// --- Deployment Plans ---
+async function loadDeploymentPlans() {
+  try {
+    var repos = await fetchJSON('/api/admin/repos');
+    var container = document.getElementById('deployPlansContainer');
+    if (!repos.length) { container.innerHTML = '<div class="empty" style="padding:12px">No repos configured</div>'; return; }
+    var html = '';
+    for (var r of repos) {
+      html += '<div class="repo-item"><div class="repo-item-header"><span class="repo-item-name">' + escapeHtml(r.name) + '</span><div>';
+      try {
+        var plan = await fetchJSON('/api/admin/deployment-plan/' + r.name);
+        if (plan && plan.options) {
+          html += '<span class="deploy-badge ' + (plan.status || 'analyzed') + '">' + escapeHtml(plan.status || 'analyzed') + '</span> ';
+          html += '<button class="btn" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')">Re-analyze</button>';
+          html += '</div></div>';
+          html += '<div class="deploy-options">';
+          plan.options.forEach(function(opt) {
+            html += '<div class="deploy-opt' + (opt.recommended ? ' recommended' : '') + '">';
+            html += '<h4>' + (opt.recommended ? '&#x2705; ' : '') + escapeHtml(opt.name || opt.id) + '</h4>';
+            html += '<p>' + escapeHtml(opt.description || '') + '</p>';
+            html += '<div class="deploy-meta">';
+            html += '&#x23F1; ' + escapeHtml(opt.estimated_time || '?') + ' &nbsp; ';
+            html += '&#x1F4CB; ' + (opt.steps ? opt.steps.length : 0) + ' steps &nbsp; ';
+            if (opt.best_for) html += '&#x1F3AF; ' + escapeHtml(opt.best_for);
+            html += '</div>';
+            if (opt.requirements && opt.requirements.length) {
+              html += '<div class="deploy-meta">Requires: ' + opt.requirements.map(escapeHtml).join(', ') + '</div>';
+            }
+            if (opt.risks && opt.risks.length) {
+              html += '<div class="deploy-meta" style="color:var(--yellow)">Risks: ' + opt.risks.map(escapeHtml).join(', ') + '</div>';
+            }
+            html += '</div>';
+          });
+          html += '</div>';
+        } else {
+          throw 'no plan';
+        }
+      } catch(e) {
+        html += '<button class="btn btn-primary" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')">&#x1F50D; Analyze Deployment</button>';
+        html += '</div></div>';
+      }
+      html += '</div>';
+    }
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('deployPlansContainer').innerHTML = '<div class="empty">Failed to load</div>';
+  }
+}
+
+async function analyzeDeployment(repo) {
+  document.getElementById('deployPlansContainer').innerHTML = '<div class="empty" style="padding:20px">&#x23F3; Analyzing deployment for ' + escapeHtml(repo) + '... (this may take 30-60s)</div>';
+  try {
+    var data = await fetchJSON('/api/admin/analyze-deployment', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({repo: repo}) });
+    loadDeploymentPlans();
+  } catch(e) {
+    document.getElementById('deployPlansContainer').innerHTML = '<div class="empty" style="color:var(--red)">Analysis failed: ' + escapeHtml(e.message || 'unknown') + '</div>';
+  }
+}
+
+// --- Sandboxes ---
+async function loadSandboxes() {
+  try {
+    var sandboxes = await fetchJSON('/api/admin/sandboxes');
+    var container = document.getElementById('sandboxContainer');
+    if (!sandboxes.length) { container.innerHTML = '<div class="empty" style="padding:12px">No active sandboxes</div>'; return; }
+    var html = '';
+    sandboxes.forEach(function(sb) {
+      var age = sb.age_seconds < 60 ? sb.age_seconds + 's' : Math.floor(sb.age_seconds / 60) + 'm';
+      html += '<div class="sandbox-item">' +
+        '<span>' + escapeHtml(sb.namespace) + '</span>' +
+        '<span>' + escapeHtml(sb.repo) + ' #' + escapeHtml(sb.issue) + '</span>' +
+        '<span>Age: ' + age + '</span>' +
+        '<button class="btn btn-danger" onclick="teardownSandbox(\'' + escapeHtml(sb.namespace) + '\')">Delete</button>' +
+      '</div>';
+    });
+    container.innerHTML = html;
+  } catch(e) {
+    document.getElementById('sandboxContainer').innerHTML = '<div class="empty">Failed to load sandboxes</div>';
+  }
+}
+
+async function teardownSandbox(ns) {
+  if (!confirm('Delete sandbox ' + ns + '?')) return;
+  await fetchJSON('/api/admin/sandboxes/' + ns, { method: 'DELETE' });
+  loadSandboxes();
+}
+
+async function cleanupSandboxes() {
+  var data = await fetchJSON('/api/admin/sandboxes/cleanup', { method: 'POST' });
+  alert('Cleaned ' + (data.cleaned || 0) + ' sandbox(es)');
+  loadSandboxes();
+}
+
 // --- Init ---
 async function initAdmin() {
-  await Promise.all([loadRepos(), loadSettings(), loadSystem(), loadLogs(), loadMemory(), loadDbStats(), loadDbRuns()]);
+  await Promise.all([loadRepos(), loadSettings(), loadSystem(), loadLogs(), loadMemory(), loadDbStats(), loadDbRuns(), loadDeploymentPlans(), loadSandboxes()]);
   testGithub();
   testAi();
 }
 initAdmin();
-setInterval(function() { loadSystem(); loadLogs(); }, 15000);
+setInterval(function() { loadSystem(); loadLogs(); loadSandboxes(); }, 15000);
 </script>
 
 </body>

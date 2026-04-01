@@ -63,6 +63,15 @@ def init_db():
                 PRIMARY KEY(repo, issue)
             );
 
+            CREATE TABLE IF NOT EXISTS deployment_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo TEXT NOT NULL UNIQUE,
+                plan_json TEXT NOT NULL,
+                status TEXT DEFAULT 'analyzed',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_runs_repo ON runs(repo);
             CREATE INDEX IF NOT EXISTS idx_runs_repo_issue ON runs(repo, issue);
         """)
@@ -217,6 +226,54 @@ def get_total_stats() -> dict:
         total = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
         processed = conn.execute("SELECT COUNT(*) FROM processed_issues").fetchone()[0]
     return {"total_runs": total, "total_processed": processed}
+
+
+def save_deployment_plan(repo: str, plan_json: str) -> int:
+    """Save or replace a deployment plan for a repo."""
+    with _lock:
+        conn = _get_conn()
+        cur = conn.execute(
+            """INSERT INTO deployment_plans (repo, plan_json, status, updated_at)
+               VALUES (?, ?, 'analyzed', datetime('now'))
+               ON CONFLICT(repo) DO UPDATE SET
+                 plan_json = ?, status = 'analyzed', updated_at = datetime('now')""",
+            (repo, plan_json, plan_json),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_deployment_plan(repo: str) -> dict | None:
+    """Get the deployment plan for a repo."""
+    with _lock:
+        conn = _get_conn()
+        row = conn.execute(
+            "SELECT * FROM deployment_plans WHERE repo = ?", (repo,)
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "repo": row["repo"],
+        "plan_json": row["plan_json"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def update_deployment_plan_status(repo: str, status: str):
+    """Update the status of a deployment plan."""
+    valid = ("analyzed", "tested", "failed")
+    if status not in valid:
+        raise ValueError(f"Invalid status: {status}. Must be one of {valid}")
+    with _lock:
+        conn = _get_conn()
+        conn.execute(
+            "UPDATE deployment_plans SET status = ?, updated_at = datetime('now') WHERE repo = ?",
+            (status, repo),
+        )
+        conn.commit()
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:

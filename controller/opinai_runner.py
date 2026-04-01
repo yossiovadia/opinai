@@ -217,6 +217,64 @@ def ai_categorize(title: str, body: str) -> str:
     return "BUG"
 
 
+def ai_select_deployment_option(title: str, body: str, options: list[dict]) -> dict | None:
+    """Ask the AI to pick the best deployment option for this issue."""
+    if not _ai_available() or not options:
+        return None
+
+    options_text = "\n".join(
+        f"- {opt.get('id', '?')}: {opt.get('name', '?')} — {opt.get('description', '')} "
+        f"(best for: {opt.get('best_for', 'general')})"
+        for opt in options
+    )
+
+    prompt = (
+        "You are OpinAI. A user filed this bug report:\n\n"
+        f"Title: {title}\n"
+        f"Body: {body}\n\n"
+        "Available deployment options for reproducing this bug:\n"
+        f"{options_text}\n\n"
+        "Which deployment option is best for reproducing THIS specific bug? "
+        "Consider what the bug affects — if it's a controller/API bug, a lightweight option may suffice. "
+        "If it's an integration bug, a full deploy may be needed.\n\n"
+        "Respond with EXACTLY this format:\n"
+        "Selected: <option_id>\n"
+        "Reason: <one sentence explaining why>\n"
+    )
+
+    try:
+        content = _call_ai(prompt)
+    except Exception as exc:
+        log.error("AI deployment selection failed: %s", exc)
+        return None
+
+    if not content:
+        return None
+
+    # Parse selected option ID
+    selected_id = None
+    reason = ""
+    for line in content.splitlines():
+        if line.strip().lower().startswith("selected:"):
+            selected_id = line.split(":", 1)[1].strip().lower()
+        elif line.strip().lower().startswith("reason:"):
+            reason = line.split(":", 1)[1].strip()
+
+    if selected_id:
+        for opt in options:
+            if opt.get("id", "").lower() == selected_id:
+                log.info("AI selected deployment option: %s — %s", selected_id, reason)
+                print(f"--- OPINAI SELECTED DEPLOYMENT: {selected_id} ---")
+                print(f"--- OPINAI DEPLOYMENT REASON: {reason} ---")
+                return opt
+
+    # Fallback: pick recommended or first
+    for opt in options:
+        if opt.get("recommended"):
+            return opt
+    return options[0] if options else None
+
+
 def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str | None:
     """Ask the AI to generate a bash test script for the issue. Returns script text."""
     if not _ai_available():
@@ -644,10 +702,27 @@ def main():
     body = issue.get("body", "") or ""
     log.info("Issue: %s", title)
 
-    # Step 2: Load repo profile and start server inside the pod
+    # Step 2: Check for sandbox or start server in pod
     profile = load_repo_profile()
     server_proc = None
-    if profile:
+    sandbox_ns = os.environ.get("OPINAI_SANDBOX_NAMESPACE", "")
+    sandbox_endpoints = os.environ.get("OPINAI_SANDBOX_ENDPOINTS", "")
+
+    if sandbox_ns:
+        # Sandbox is already deployed by the controller — use it
+        log.info("Using sandbox deployment in namespace %s", sandbox_ns)
+        if sandbox_endpoints:
+            try:
+                endpoints = json.loads(sandbox_endpoints)
+                # Use the first endpoint as SERVER_URL
+                if endpoints:
+                    first_svc = next(iter(endpoints.values()))
+                    SERVER_URL = f"http://{first_svc}"
+                    os.environ["SERVER_URL"] = SERVER_URL
+                    log.info("Server URL from sandbox: %s", SERVER_URL)
+            except (json.JSONDecodeError, StopIteration):
+                pass
+    elif profile:
         log.info("Loaded repo profile: type=%s", profile.get("type", "?"))
         server_proc = _start_server(profile)
 

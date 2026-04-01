@@ -21,6 +21,7 @@ from dashboard import (
 )
 from database import (
     add_run,
+    get_deployment_plan,
     get_repo_memory,
     get_runs,
     init_db,
@@ -199,6 +200,39 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
 
     repo_safe = repo.replace("/", "-").lower()
 
+    # Check for deployment plan — create sandbox if available
+    sandbox_ns = ""
+    sandbox_endpoints_json = ""
+    deployment_plan_json = ""
+    plan = get_deployment_plan(repo)
+    if plan and plan.get("plan_json"):
+        deployment_plan_json = plan["plan_json"]
+        try:
+            plan_data = json.loads(plan["plan_json"])
+            options = plan_data.get("options", [])
+            if options:
+                # Pick recommended option (or first) for sandbox deployment
+                selected = next((o for o in options if o.get("recommended")), options[0])
+                steps = selected.get("steps", [])
+                if steps:
+                    from sandbox import create_sandbox, deploy_in_sandbox
+                    sandbox_ns = create_sandbox(repo, number)
+                    result = deploy_in_sandbox(sandbox_ns, steps)
+                    if result["success"]:
+                        sandbox_endpoints_json = json.dumps(result.get("endpoints", {}))
+                        log.info("Sandbox %s deployed for %s#%d", sandbox_ns, repo, number)
+                    else:
+                        log.warning("Sandbox deployment failed: %s — falling back", result["errors"])
+                        from sandbox import teardown_sandbox
+                        teardown_sandbox(sandbox_ns)
+                        sandbox_ns = ""
+        except Exception as exc:
+            log.error("Sandbox creation failed for %s#%d: %s", repo, number, exc)
+            if sandbox_ns:
+                from sandbox import teardown_sandbox
+                teardown_sandbox(sandbox_ns)
+                sandbox_ns = ""
+
     gcp_volume = client.V1Volume(
         name="gcp-credentials",
         secret=client.V1SecretVolumeSource(
@@ -226,6 +260,7 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
             annotations={
                 "opinai/title": issue.get("title", "")[:253],
                 "opinai/repo-full": repo,
+                **({"opinai/sandbox-namespace": sandbox_ns} if sandbox_ns else {}),
             },
         ),
         spec=client.V1JobSpec(
@@ -258,6 +293,18 @@ def create_job(batch_api: client.BatchV1Api, repo: str, issue: dict):
                                 client.V1EnvVar(
                                     name="OPINAI_HAS_KNOWLEDGE",
                                     value="true" if get_repo_memory(repo, key="description") else "false",
+                                ),
+                                client.V1EnvVar(
+                                    name="OPINAI_SANDBOX_NAMESPACE",
+                                    value=sandbox_ns,
+                                ),
+                                client.V1EnvVar(
+                                    name="OPINAI_SANDBOX_ENDPOINTS",
+                                    value=sandbox_endpoints_json,
+                                ),
+                                client.V1EnvVar(
+                                    name="OPINAI_DEPLOYMENT_PLAN",
+                                    value=deployment_plan_json[:30000],
                                 ),
                                 client.V1EnvVar(
                                     name="GOOGLE_APPLICATION_CREDENTIALS",
@@ -483,6 +530,16 @@ def check_completed_jobs(batch_api: client.BatchV1Api):
             "report": suggested_comment or pod_logs[-3000:] or "(no logs)",
         })
 
+        # Teardown sandbox if one was used
+        sandbox_ns = annotations.get("opinai/sandbox-namespace", "")
+        if sandbox_ns:
+            try:
+                from sandbox import teardown_sandbox
+                teardown_sandbox(sandbox_ns)
+                log.info("Tore down sandbox %s after job %s", sandbox_ns, name)
+            except Exception as exc:
+                log.warning("Failed to teardown sandbox %s: %s", sandbox_ns, exc)
+
 
 # ---------------------------------------------------------------------------
 # Main loop
@@ -554,6 +611,13 @@ def main():
 
         check_completed_jobs(batch_api)
         set_check_result(total_new)
+
+        # Cleanup orphaned sandboxes
+        try:
+            from sandbox import auto_cleanup
+            auto_cleanup()
+        except Exception:
+            pass
 
         elapsed = 0
         while elapsed < POLL_INTERVAL and not _shutdown:

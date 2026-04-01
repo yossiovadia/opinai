@@ -355,6 +355,57 @@ def _create_app() -> Flask:
             result[repo][r["key"]] = {"value": r["value"], "updated_at": r["updated_at"]}
         return jsonify(result)
 
+    # ----- Deployment Analysis & Sandbox routes -----
+
+    @app.route("/api/admin/analyze-deployment", methods=["POST"])
+    def admin_analyze_deployment():
+        data = request.get_json()
+        repo = data.get("repo", "").strip()
+        if not repo:
+            return jsonify({"error": "repo required"}), 400
+        try:
+            result = _analyze_deployment(repo)
+            return jsonify(result)
+        except Exception as exc:
+            log.error("Deployment analysis failed for %s: %s", repo, exc)
+            return jsonify({"error": str(exc)}), 500
+
+    @app.route("/api/admin/deployment-plan/<path:repo>", methods=["GET"])
+    def admin_get_deployment_plan(repo):
+        from database import get_deployment_plan
+        plan = get_deployment_plan(repo)
+        if not plan:
+            return jsonify({"error": "No plan found"}), 404
+        plan["options"] = json.loads(plan.get("plan_json", "{}")).get("options", [])
+        return jsonify(plan)
+
+    @app.route("/api/admin/deployment-plan/<path:repo>", methods=["PUT"])
+    def admin_update_deployment_plan(repo):
+        from database import get_deployment_plan, save_deployment_plan, update_deployment_plan_status
+        data = request.get_json()
+        if "plan_json" in data:
+            save_deployment_plan(repo, json.dumps(data["plan_json"]))
+        if "status" in data:
+            update_deployment_plan_status(repo, data["status"])
+        return jsonify({"status": "updated"})
+
+    @app.route("/api/admin/sandboxes", methods=["GET"])
+    def admin_list_sandboxes():
+        from sandbox import list_sandboxes
+        return jsonify(list_sandboxes())
+
+    @app.route("/api/admin/sandboxes/<path:namespace>", methods=["DELETE"])
+    def admin_teardown_sandbox(namespace):
+        from sandbox import teardown_sandbox
+        ok = teardown_sandbox(namespace)
+        return jsonify({"status": "deleted" if ok else "refused"})
+
+    @app.route("/api/admin/sandboxes/cleanup", methods=["POST"])
+    def admin_sandbox_cleanup():
+        from sandbox import auto_cleanup
+        count = auto_cleanup()
+        return jsonify({"cleaned": count})
+
     @app.route("/api/admin/system", methods=["GET"])
     def admin_system():
         state = get_state()
@@ -781,6 +832,191 @@ def _post_run_comment(run_id: int) -> dict:
     except Exception as exc:
         log.error("Failed to post comment for %s#%s: %s", repo, issue, exc)
         return {"status": "error", "message": str(exc)}
+
+
+def _analyze_deployment(repo: str) -> dict:
+    """Analyze a repo's deployment needs and generate options via AI."""
+    import requests as req
+    from database import save_deployment_plan
+
+    gh_token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {gh_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    # 1. Read deployment-related files from GitHub
+    deploy_files = {}
+    paths_to_check = [
+        "Dockerfile", "docker-compose.yml", "Makefile",
+        "requirements.txt", "package.json", "go.mod",
+    ]
+    # Also check directories
+    for d in ("k8s", "manifests", "deploy", "helm", "config", "kustomize"):
+        try:
+            resp = req.get(
+                f"https://api.github.com/repos/{repo}/contents/{d}",
+                headers=headers, timeout=10,
+            )
+            if resp.ok:
+                for item in resp.json():
+                    if isinstance(item, dict) and item.get("type") == "file":
+                        paths_to_check.append(item["path"])
+        except Exception:
+            pass
+
+    for path in paths_to_check[:20]:  # cap at 20 files
+        try:
+            resp = req.get(
+                f"https://api.github.com/repos/{repo}/contents/{path}",
+                headers=headers, timeout=10,
+            )
+            if resp.ok:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("content"):
+                    import base64
+                    content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+                    deploy_files[path] = content[:5000]
+        except Exception:
+            pass
+
+    # Read README
+    readme = ""
+    for rname in ("README.md", "readme.md", "README.rst"):
+        try:
+            resp = req.get(
+                f"https://api.github.com/repos/{repo}/contents/{rname}",
+                headers=headers, timeout=10,
+            )
+            if resp.ok:
+                import base64
+                readme = base64.b64decode(resp.json()["content"]).decode("utf-8", errors="replace")[:3000]
+                break
+        except Exception:
+            pass
+
+    # 2. Read cluster state
+    cluster_state = _read_cluster_state()
+
+    # 3. Build AI prompt
+    files_summary = "\n".join(f"--- {path} ---\n{content[:2000]}" for path, content in deploy_files.items())
+    profile = _get_repo_profile(repo)
+    profile_text = json.dumps(profile) if profile else "No profile configured"
+
+    prompt = (
+        f"You are OpinAI. Analyze this project for deployment on OpenShift/Kubernetes.\n\n"
+        f"Project: {repo}\n"
+        f"Profile: {profile_text}\n\n"
+        f"README (first 3000 chars):\n{readme}\n\n"
+        f"Deployment files found:\n{files_summary}\n\n"
+        f"Cluster state:\n"
+        f"- CRDs: {', '.join(cluster_state.get('crds', [])[:30]) or 'none detected'}\n"
+        f"- Operators: {', '.join(cluster_state.get('operators', [])) or 'none detected'}\n"
+        f"- Namespaces: {', '.join(cluster_state.get('namespaces', [])[:20])}\n\n"
+        "Generate deployment options as JSON (no markdown fences). Return ONLY valid JSON:\n"
+        "{\n"
+        '  "options": [\n'
+        '    {\n'
+        '      "id": "full",\n'
+        '      "name": "Full Deploy",\n'
+        '      "description": "Install everything from scratch",\n'
+        '      "estimated_time": "5-10 min",\n'
+        '      "best_for": "Integration bugs, end-to-end testing",\n'
+        '      "steps": [\n'
+        '        {"type": "manifest", "content": "apiVersion: v1\\nkind: ConfigMap\\n...", "required": true, "description": "Create config"}\n'
+        '      ],\n'
+        '      "requirements": ["operator1"],\n'
+        '      "risks": ["May conflict with..."],\n'
+        '      "recommended": false\n'
+        '    },\n'
+        '    {\n'
+        '      "id": "leverage",\n'
+        '      "name": "Leverage Existing",\n'
+        '      "description": "Reuse installed operators, deploy only app",\n'
+        '      "estimated_time": "1-3 min",\n'
+        '      "best_for": "Controller bugs, API issues",\n'
+        '      "steps": [...],\n'
+        '      "requirements": [...],\n'
+        '      "risks": [...],\n'
+        '      "recommended": true\n'
+        '    },\n'
+        '    {\n'
+        '      "id": "lightweight",\n'
+        '      "name": "Lightweight/Mock",\n'
+        '      "description": "Mock external deps, test core logic",\n'
+        '      "estimated_time": "30 sec",\n'
+        '      "best_for": "Unit-level bugs, logic errors",\n'
+        '      "steps": [...],\n'
+        '      "requirements": [],\n'
+        '      "risks": ["May miss integration bugs"],\n'
+        '      "recommended": false\n'
+        '    }\n'
+        '  ],\n'
+        '  "project_type": "operator/api-server/cli/...",\n'
+        '  "detected_deployment_method": "kustomize/helm/makefile/dockerfile/...",\n'
+        '  "dependencies": ["kuadrant", "istio", ...]\n'
+        "}\n\n"
+        "Generate real, working K8s manifests in the steps where possible. "
+        "Each step's content should be valid YAML for manifests or a valid shell command."
+    )
+
+    content = _call_ai_chat(prompt, "")
+    if not content:
+        raise RuntimeError("AI returned empty response")
+
+    # Parse JSON (strip fences if present)
+    content = content.strip()
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(l for l in lines if not l.strip().startswith("```"))
+
+    plan_data = json.loads(content)
+
+    # Save to database
+    save_deployment_plan(repo, json.dumps(plan_data))
+    log.info("Saved deployment plan for %s with %d options", repo, len(plan_data.get("options", [])))
+
+    return plan_data
+
+
+def _read_cluster_state() -> dict:
+    """Read cluster capabilities: CRDs, operators, namespaces."""
+    result = {"crds": [], "operators": [], "namespaces": []}
+    try:
+        from kubernetes import client as k8s_client
+        # Namespaces
+        core = k8s_client.CoreV1Api()
+        ns_list = core.list_namespace()
+        result["namespaces"] = [ns.metadata.name for ns in ns_list.items]
+
+        # CRDs
+        try:
+            ext = k8s_client.ApiextensionsV1Api()
+            crds = ext.list_custom_resource_definition()
+            result["crds"] = [crd.metadata.name for crd in crds.items]
+        except Exception:
+            pass
+
+        # Operators (OLM ClusterServiceVersions)
+        try:
+            custom = k8s_client.CustomObjectsApi()
+            csvs = custom.list_cluster_custom_object(
+                group="operators.coreos.com",
+                version="v1alpha1",
+                plural="clusterserviceversions",
+            )
+            result["operators"] = [
+                csv["metadata"]["name"]
+                for csv in csvs.get("items", [])
+                if csv.get("status", {}).get("phase") == "Succeeded"
+            ]
+        except Exception:
+            pass
+    except Exception as exc:
+        log.warning("Failed to read cluster state: %s", exc)
+
+    return result
 
 
 def _reproduce_issue(repo: str, issue_number: int) -> dict:

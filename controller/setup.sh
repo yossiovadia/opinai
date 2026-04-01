@@ -277,7 +277,12 @@ echo "  ✅ Configuration stored"
 for f in serviceaccount.yaml role.yaml rolebinding.yaml; do
   sed "s/namespace: opinai/namespace: $NAMESPACE/g" "$SCRIPT_DIR/manifests/$f" | oc apply -f - >/dev/null 2>&1
 done
-echo "  ✅ RBAC configured"
+
+# Apply ClusterRole + ClusterRoleBinding for sandbox management
+for f in clusterrole.yaml clusterrolebinding.yaml; do
+  sed "s/namespace: opinai/namespace: $NAMESPACE/g" "$SCRIPT_DIR/manifests/$f" | oc apply -f - >/dev/null 2>&1
+done
+echo "  ✅ RBAC configured (namespace + cluster)"
 
 # Create ImageStream + BuildConfig + build
 oc create imagestream opinai-controller -n "$NAMESPACE" 2>/dev/null || true
