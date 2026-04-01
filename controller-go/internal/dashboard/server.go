@@ -146,12 +146,29 @@ func (lb *LogBuffer) Last(n int) []string {
 // ReproduceFunc is the callback for creating reproduction jobs.
 type ReproduceFunc func(repo string, issue int) error
 
+// SandboxManagerIface abstracts sandbox operations for the dashboard.
+type SandboxManagerIface interface {
+	ListSandboxes() []SandboxInfo
+	TeardownSandbox(ns string) bool
+	AutoCleanup(maxAge int) int
+}
+
+// SandboxInfo matches sandbox.SandboxInfo.
+type SandboxInfo struct {
+	Namespace  string `json:"namespace"`
+	Repo       string `json:"repo"`
+	Issue      string `json:"issue"`
+	CreatedAt  string `json:"created_at"`
+	AgeSeconds int    `json:"age_seconds"`
+}
+
 // Server is the OpinAI dashboard HTTP/HTTPS server.
 type Server struct {
 	state     *State
 	router    chi.Router
 	logBuf    *LogBuffer
 	reproduce ReproduceFunc
+	sandbox   SandboxManagerIface
 }
 
 // New creates the dashboard server with all routes.
@@ -164,6 +181,11 @@ func New(state *State, logBuf *LogBuffer) *Server {
 // SetReproduceCallback sets the function called for /api/reproduce.
 func (s *Server) SetReproduceCallback(fn ReproduceFunc) {
 	s.reproduce = fn
+}
+
+// SetSandboxManager sets the sandbox manager for admin endpoints.
+func (s *Server) SetSandboxManager(sm SandboxManagerIface) {
+	s.sandbox = sm
 }
 
 func (s *Server) buildRouter() chi.Router {
@@ -195,6 +217,12 @@ func (s *Server) buildRouter() chi.Router {
 	// Health
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+
+	// SSE streaming endpoints (outside jsonContentType middleware)
+	r.Get("/api/admin/analyze-stream", s.handleAnalyzeStream)
+	r.Get("/api/reproduce-stream", s.handleReproduceStream)
+	r.Post("/api/chat-stream", s.handleChatStream)
+	r.Get("/api/check-now-stream", s.handleCheckNowStream)
 
 	// Core API
 	r.Route("/api", func(r chi.Router) {

@@ -16,6 +16,7 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
 	"github.com/yossiovadia/opinai/controller-go/internal/dashboard"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
 
 func main() {
@@ -81,6 +82,12 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 	// Dashboard
 	srv := dashboard.New(state, logBuf)
 
+	// Wire sandbox manager
+	if k8sClient != nil {
+		sbMgr := sandbox.NewManager(k8sClient, namespace)
+		srv.SetSandboxManager(&sandboxAdapter{mgr: sbMgr})
+	}
+
 	// Wire reproduce callback
 	if jobMgr != nil {
 		srv.SetReproduceCallback(func(repo string, issue int) error {
@@ -133,4 +140,32 @@ func initK8sClient() (kubernetes.Interface, error) {
 		return nil, fmt.Errorf("no K8s config available: %w", err)
 	}
 	return kubernetes.NewForConfig(config)
+}
+
+// sandboxAdapter bridges sandbox.Manager to dashboard.SandboxManagerIface.
+type sandboxAdapter struct {
+	mgr *sandbox.Manager
+}
+
+func (a *sandboxAdapter) ListSandboxes() []dashboard.SandboxInfo {
+	sbList := a.mgr.ListSandboxes()
+	result := make([]dashboard.SandboxInfo, len(sbList))
+	for i, sb := range sbList {
+		result[i] = dashboard.SandboxInfo{
+			Namespace:  sb.Namespace,
+			Repo:       sb.Repo,
+			Issue:      sb.Issue,
+			CreatedAt:  sb.CreatedAt,
+			AgeSeconds: sb.AgeSeconds,
+		}
+	}
+	return result
+}
+
+func (a *sandboxAdapter) TeardownSandbox(ns string) bool {
+	return a.mgr.TeardownSandbox(ns)
+}
+
+func (a *sandboxAdapter) AutoCleanup(maxAge int) int {
+	return a.mgr.AutoCleanup(maxAge)
 }

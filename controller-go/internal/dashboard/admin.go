@@ -335,20 +335,42 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 // --- GET /api/admin/sandboxes ---
 
 func (s *Server) handleAdminSandboxes(w http.ResponseWriter, r *http.Request) {
-	// Stub: sandbox integration in Phase 7
-	json.NewEncoder(w).Encode([]any{})
+	if s.sandbox == nil {
+		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+	sandboxes := s.sandbox.ListSandboxes()
+	if sandboxes == nil {
+		sandboxes = []SandboxInfo{}
+	}
+	json.NewEncoder(w).Encode(sandboxes)
 }
 
 // --- DELETE /api/admin/sandboxes/{ns} ---
 
 func (s *Server) handleAdminSandboxDelete(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(map[string]string{"status": "not_implemented"})
+	ns := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if s.sandbox == nil {
+		jsonError(w, "sandbox manager not available", 503)
+		return
+	}
+	ok := s.sandbox.TeardownSandbox(ns)
+	status := "deleted"
+	if !ok {
+		status = "refused"
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": status})
 }
 
 // --- POST /api/admin/sandboxes/cleanup ---
 
 func (s *Server) handleAdminSandboxCleanup(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(map[string]int{"cleaned": 0})
+	if s.sandbox == nil {
+		json.NewEncoder(w).Encode(map[string]int{"cleaned": 0})
+		return
+	}
+	count := s.sandbox.AutoCleanup(1800)
+	json.NewEncoder(w).Encode(map[string]int{"cleaned": count})
 }
 
 // --- repo profile helpers ---
