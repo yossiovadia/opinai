@@ -421,35 +421,32 @@ async function loadDeploymentPlans() {
     var html = '';
     for (var r of repos) {
       html += '<div class="repo-item"><div class="repo-item-header"><span class="repo-item-name">' + escapeHtml(r.name) + '</span><div>';
-      try {
-        var plan = await fetchJSON('/api/admin/deployment-plan/' + r.name);
-        if (plan && plan.options) {
-          html += '<span class="deploy-badge ' + (plan.status || 'analyzed') + '">' + escapeHtml(plan.status || 'analyzed') + '</span> ';
-          html += '<button class="btn" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')">Re-analyze</button>';
-          html += '</div></div>';
-          html += '<div class="deploy-options">';
-          plan.options.forEach(function(opt) {
-            html += '<div class="deploy-opt' + (opt.recommended ? ' recommended' : '') + '">';
-            html += '<h4>' + (opt.recommended ? '&#x2705; ' : '') + escapeHtml(opt.name || opt.id) + '</h4>';
-            html += '<p>' + escapeHtml(opt.description || '') + '</p>';
-            html += '<div class="deploy-meta">';
-            html += '&#x23F1; ' + escapeHtml(opt.estimated_time || '?') + ' &nbsp; ';
-            html += '&#x1F4CB; ' + (opt.steps ? opt.steps.length : 0) + ' steps &nbsp; ';
-            if (opt.best_for) html += '&#x1F3AF; ' + escapeHtml(opt.best_for);
-            html += '</div>';
-            if (opt.requirements && opt.requirements.length) {
-              html += '<div class="deploy-meta">Requires: ' + opt.requirements.map(escapeHtml).join(', ') + '</div>';
-            }
-            if (opt.risks && opt.risks.length) {
-              html += '<div class="deploy-meta" style="color:var(--yellow)">Risks: ' + opt.risks.map(escapeHtml).join(', ') + '</div>';
-            }
-            html += '</div>';
-          });
+      var plan = null;
+      try { plan = await fetchJSON('/api/admin/deployment-plan/' + r.name); } catch(e) { /* network error */ }
+      if (plan && plan.options && plan.options.length) {
+        html += '<span class="deploy-badge ' + (plan.status || 'analyzed') + '">' + escapeHtml(plan.status || 'analyzed') + '</span> ';
+        html += '<button class="btn" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')">Re-analyze</button>';
+        html += '</div></div>';
+        html += '<div class="deploy-options">';
+        plan.options.forEach(function(opt) {
+          html += '<div class="deploy-opt' + (opt.recommended ? ' recommended' : '') + '">';
+          html += '<h4>' + (opt.recommended ? '&#x2705; ' : '') + escapeHtml(opt.name || opt.id) + '</h4>';
+          html += '<p>' + escapeHtml(opt.description || '') + '</p>';
+          html += '<div class="deploy-meta">';
+          html += '&#x23F1; ' + escapeHtml(opt.estimated_time || '?') + ' &nbsp; ';
+          html += '&#x1F4CB; ' + (opt.steps ? opt.steps.length : 0) + ' steps &nbsp; ';
+          if (opt.best_for) html += '&#x1F3AF; ' + escapeHtml(opt.best_for);
           html += '</div>';
-        } else {
-          throw 'no plan';
-        }
-      } catch(e) {
+          if (opt.requirements && opt.requirements.length) {
+            html += '<div class="deploy-meta">Requires: ' + opt.requirements.map(escapeHtml).join(', ') + '</div>';
+          }
+          if (opt.risks && opt.risks.length) {
+            html += '<div class="deploy-meta" style="color:var(--yellow)">Risks: ' + opt.risks.map(escapeHtml).join(', ') + '</div>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+      } else {
         html += '<button class="btn btn-primary" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')">&#x1F50D; Analyze Deployment</button>';
         html += '</div></div>';
       }

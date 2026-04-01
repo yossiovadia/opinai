@@ -375,7 +375,7 @@ def _create_app() -> Flask:
         from database import get_deployment_plan
         plan = get_deployment_plan(repo)
         if not plan:
-            return jsonify({"error": "No plan found"}), 404
+            return jsonify({"status": "not_analyzed"})
         plan["options"] = json.loads(plan.get("plan_json", "{}")).get("options", [])
         return jsonify(plan)
 
