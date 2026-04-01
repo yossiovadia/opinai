@@ -87,9 +87,7 @@ func (s *Server) handleAdminReposDelete(w http.ResponseWriter, r *http.Request) 
 		slog.Warn("failed to clean DB for repo", "repo", req.Name, "error", err)
 	}
 	// Remove from state
-	s.state.mu.Lock()
-	delete(s.state.Repos, req.Name)
-	s.state.mu.Unlock()
+	s.state.DeleteRepo(req.Name)
 
 	json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "name": req.Name})
 }

@@ -91,6 +91,25 @@ func (s *State) TriggerCheckNow() {
 	}
 }
 
+func (s *State) SetPollInfo(count int, lastPoll string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PollCount = count
+	s.LastPoll = lastPoll
+}
+
+func (s *State) SetCheckResult(result *CheckResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.CheckResult = result
+}
+
+func (s *State) DeleteRepo(repo string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.Repos, repo)
+}
+
 // LogBuffer captures recent log lines for the admin page.
 type LogBuffer struct {
 	mu    sync.Mutex
