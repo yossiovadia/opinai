@@ -298,11 +298,11 @@ spec:
     git:
       uri: https://github.com/yossiovadia/opinai.git
       ref: main
-    contextDir: controller
+    contextDir: .
   strategy:
     type: Docker
     dockerStrategy:
-      dockerfilePath: Dockerfile
+      dockerfilePath: controller/Dockerfile
       noCache: true
   output:
     to:
