@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 log = logging.getLogger("opinai-dashboard")
 
@@ -437,7 +437,409 @@ def _create_app() -> Flask:
             "python": sys.version.split()[0],
         })
 
+    # ----- SSE Streaming Endpoints -----
+
+    def _sse_event(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    def _sse_response(generator):
+        return Response(
+            generator,
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.route("/api/admin/analyze-stream")
+    def admin_analyze_stream():
+        repo = request.args.get("repo", "").strip()
+        if not repo:
+            return jsonify({"error": "repo required"}), 400
+        return _sse_response(_stream_analyze(repo))
+
+    @app.route("/api/reproduce-stream")
+    def reproduce_stream():
+        repo = request.args.get("repo", "").strip()
+        issue = request.args.get("issue", "")
+        if not repo or not issue:
+            return jsonify({"error": "repo and issue required"}), 400
+        return _sse_response(_stream_reproduce(repo, int(issue)))
+
+    @app.route("/api/chat-stream", methods=["POST"])
+    def chat_stream():
+        data = request.get_json()
+        message = data.get("message", "")
+        context = data.get("context", {})
+        if not message.strip():
+            return jsonify({"error": "message required"}), 400
+        return _sse_response(_stream_chat(message, context))
+
+    @app.route("/api/check-now-stream")
+    def check_now_stream():
+        return _sse_response(_stream_check_now())
+
     return app
+
+
+def _stream_analyze(repo: str):
+    """SSE generator for deployment analysis."""
+    import base64
+    import requests as req
+    from database import save_deployment_plan
+
+    def _evt(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    yield _evt("progress", {"stage": "reading_repo", "message": "Reading repository files..."})
+
+    gh_token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {gh_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    deploy_files = {}
+    paths_to_check = [
+        "Dockerfile", "docker-compose.yml", "Makefile",
+        "requirements.txt", "package.json", "go.mod",
+    ]
+    for d in ("k8s", "manifests", "deploy", "helm", "config", "kustomize"):
+        try:
+            resp = req.get(f"https://api.github.com/repos/{repo}/contents/{d}", headers=headers, timeout=10)
+            if resp.ok:
+                for item in resp.json():
+                    if isinstance(item, dict) and item.get("type") == "file":
+                        paths_to_check.append(item["path"])
+        except Exception:
+            pass
+
+    for path in paths_to_check[:20]:
+        try:
+            resp = req.get(f"https://api.github.com/repos/{repo}/contents/{path}", headers=headers, timeout=10)
+            if resp.ok:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("content"):
+                    content = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+                    deploy_files[path] = content[:5000]
+        except Exception:
+            pass
+
+    readme = ""
+    for rname in ("README.md", "readme.md", "README.rst"):
+        try:
+            resp = req.get(f"https://api.github.com/repos/{repo}/contents/{rname}", headers=headers, timeout=10)
+            if resp.ok:
+                readme = base64.b64decode(resp.json()["content"]).decode("utf-8", errors="replace")[:3000]
+                break
+        except Exception:
+            pass
+
+    yield _evt("progress", {"stage": "reading_cluster", "message": "Scanning cluster operators and CRDs..."})
+
+    cluster_state = _read_cluster_state()
+
+    yield _evt("progress", {"stage": "calling_ai", "message": "AI analyzing deployment options (30-60s)..."})
+
+    try:
+        files_summary = "\n".join(f"--- {p} ---\n{c[:2000]}" for p, c in deploy_files.items())
+        profile = _get_repo_profile(repo)
+        profile_text = json.dumps(profile) if profile else "No profile configured"
+
+        prompt = (
+            f"You are OpinAI. Analyze this project for deployment on OpenShift/Kubernetes.\n\n"
+            f"Project: {repo}\nProfile: {profile_text}\n\n"
+            f"README (first 3000 chars):\n{readme}\n\n"
+            f"Deployment files found:\n{files_summary}\n\n"
+            f"Cluster state:\n"
+            f"- CRDs: {', '.join(cluster_state.get('crds', [])[:30]) or 'none'}\n"
+            f"- Operators: {', '.join(cluster_state.get('operators', [])) or 'none'}\n"
+            f"- Namespaces: {', '.join(cluster_state.get('namespaces', [])[:20])}\n\n"
+            "Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with "
+            "an \"options\" array. Each option: id, name, description, estimated_time, best_for, "
+            "steps (array of {type, content, required, description}), requirements, risks, recommended (bool).\n"
+            "Also include: project_type, detected_deployment_method, dependencies."
+        )
+
+        ai_content = _call_ai_chat(prompt, "", max_tokens=8192)
+        if not ai_content:
+            yield _evt("error", {"message": "AI returned empty response"})
+            return
+
+        plan_data = _parse_ai_json(ai_content)
+
+        yield _evt("progress", {"stage": "saving", "message": "Saving deployment plan..."})
+
+        save_deployment_plan(repo, json.dumps(plan_data))
+        n_opts = len(plan_data.get("options", []))
+
+        # Auto-update repo profile
+        try:
+            deps_list = plan_data.get("dependencies", [])
+            deps_str = ", ".join(deps_list) if isinstance(deps_list, list) else str(deps_list)
+            deps_lower = deps_str.lower()
+            k8s_kw = ("kubernetes", "k8s", "openshift", "operator", "istio", "kuadrant", "helm", "kustomize")
+            gpu_kw = ("gpu", "cuda", "nvidia")
+            new_profile = {
+                "type": plan_data.get("project_type", "other"),
+                "build": "", "run": "", "health": "",
+                "deps": deps_str,
+                "k8s": any(kw in deps_lower for kw in k8s_kw),
+                "gpu": any(kw in deps_lower for kw in gpu_kw),
+            }
+            existing = _get_repo_profile(repo) or {}
+            for k in ("build", "run", "health"):
+                if existing.get(k):
+                    new_profile[k] = existing[k]
+            if existing.get("type") and existing["type"] != "other":
+                new_profile["type"] = existing["type"]
+            _admin_update_repo(repo, new_profile, delete=False)
+        except Exception:
+            pass
+
+        yield _evt("done", {"message": f"Analysis complete — {n_opts} options generated"})
+
+    except Exception as exc:
+        log.error("Deployment analysis failed for %s: %s", repo, exc)
+        yield _evt("error", {"message": f"Analysis failed: {exc}"})
+
+
+def _stream_reproduce(repo: str, issue: int):
+    """SSE generator for issue reproduction."""
+    def _evt(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    yield _evt("progress", {"stage": "creating_job", "message": f"Creating reproduction job for {repo}#{issue}..."})
+
+    try:
+        if _reproduce_callback is None:
+            yield _evt("error", {"message": "Controller not ready"})
+            return
+        _reproduce_callback(repo, issue)
+        yield _evt("progress", {"stage": "job_created", "message": "Job created. Waiting for pod to start..."})
+    except Exception as exc:
+        yield _evt("error", {"message": f"Failed to create job: {exc}"})
+        return
+
+    # Poll job status
+    try:
+        from kubernetes import client as k8s_client
+        batch_api = k8s_client.BatchV1Api()
+        core_api = k8s_client.CoreV1Api()
+        namespace = os.environ.get("NAMESPACE", "opinai")
+        repo_safe = repo.replace("/", "-").lower()
+        job_name = f"opinai-{repo_safe}-{issue}"
+        prev_log_len = 0
+
+        for _ in range(120):  # 10 minutes max
+            time.sleep(5)
+            try:
+                job = batch_api.read_namespaced_job(name=job_name, namespace=namespace)
+            except Exception:
+                continue
+
+            # Stream pod logs incrementally
+            try:
+                pods = core_api.list_namespaced_pod(namespace=namespace, label_selector=f"job-name={job_name}")
+                if pods.items:
+                    pod_log = core_api.read_namespaced_pod_log(
+                        name=pods.items[0].metadata.name, namespace=namespace, tail_lines=50
+                    )
+                    if len(pod_log) > prev_log_len:
+                        new_lines = pod_log[prev_log_len:]
+                        prev_log_len = len(pod_log)
+                        yield _evt("progress", {"stage": "job_running", "message": "Running...", "logs": new_lines[-500:]})
+            except Exception:
+                pass
+
+            if job.status.succeeded:
+                yield _evt("done", {"message": f"Reproduction complete for {repo}#{issue}"})
+                return
+            if job.status.failed:
+                yield _evt("error", {"message": f"Job failed for {repo}#{issue}"})
+                return
+
+        yield _evt("error", {"message": "Timed out waiting for job"})
+    except Exception as exc:
+        yield _evt("error", {"message": f"Error monitoring job: {exc}"})
+
+
+def _stream_chat(message: str, context: dict):
+    """SSE generator for AI chat — streams partial responses."""
+    import requests as req
+
+    def _evt(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    # Build context (same as _handle_chat)
+    system_context = (
+        "You are OpinAI, an AI bug reproduction assistant running on a Kubernetes cluster. "
+        "You help developers understand bugs, analyze reproduction results, and suggest fixes. "
+        "Be concise, technical, and helpful. Use markdown formatting.\n\n"
+    )
+
+    repo = context.get("repo")
+    issue_number = context.get("issue_number")
+
+    if repo and issue_number:
+        issue = _fetch_issue(repo, int(issue_number))
+        if issue:
+            system_context += f"Current issue: {repo}#{issue_number}\n"
+            system_context += f"Title: {issue.get('title', '')}\n"
+            body = issue.get("body", "") or ""
+            system_context += f"Body: {body[:2000]}\n\n"
+        from database import get_runs as db_get_runs
+        prev_runs = db_get_runs(repo=repo, limit=3)
+        for run in prev_runs:
+            if str(run.get("issue")) == str(issue_number):
+                system_context += f"Previous reproduction result:\n{(run.get('report') or '')[:1000]}\n\n"
+                break
+        profile = _get_repo_profile(repo)
+        if profile:
+            system_context += f"Project profile: {json.dumps(profile)}\n\n"
+    else:
+        from database import get_total_stats
+        state = get_state()
+        repos = list(state.get("repos", {}).keys())
+        db_stats = get_total_stats()
+        system_context += f"Monitored repos: {', '.join(repos) if repos else 'none'}\n"
+        system_context += f"Total runs: {db_stats['total_runs']}\n"
+        pending = sum(r.get("pending", 0) for r in state.get("repos", {}).values())
+        system_context += f"Pending issues: {pending}\n\n"
+
+    # Try streaming API call
+    ai_provider = os.environ.get("AI_PROVIDER", "").lower()
+    ai_api_key = os.environ.get("AI_API_KEY", "")
+    ai_model = os.environ.get("AI_MODEL", "claude-sonnet-4-20250514")
+    ai_base_url = os.environ.get("AI_BASE_URL", "https://api.anthropic.com")
+
+    full_prompt = f"{system_context}\n\nUser question: {message}"
+
+    try:
+        if ai_provider == "vertex" or "openai" not in ai_base_url.lower():
+            # Anthropic streaming
+            if ai_provider == "vertex":
+                import google.auth
+                import google.auth.transport.requests as google_requests
+                scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+                credentials, _ = google.auth.default(scopes=scopes)
+                credentials.refresh(google_requests.Request())
+                ai_project = os.environ.get("AI_PROJECT", "")
+                ai_region = os.environ.get("AI_REGION", "")
+                url = (f"https://{ai_region}-aiplatform.googleapis.com/v1/"
+                       f"projects/{ai_project}/locations/{ai_region}/"
+                       f"publishers/anthropic/models/{ai_model}:streamRawPredict")
+                headers = {"Authorization": f"Bearer {credentials.token}", "Content-Type": "application/json"}
+                payload = {"anthropic_version": "vertex-2023-10-16",
+                           "messages": [{"role": "user", "content": full_prompt}],
+                           "max_tokens": 2048, "stream": True}
+            else:
+                url = f"{ai_base_url}/v1/messages"
+                headers = {"x-api-key": ai_api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+                payload = {"model": ai_model,
+                           "messages": [{"role": "user", "content": full_prompt}],
+                           "max_tokens": 2048, "stream": True}
+
+            resp = req.post(url, headers=headers, json=payload, timeout=120, stream=True)
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    if chunk.get("type") == "content_block_delta":
+                        text = chunk.get("delta", {}).get("text", "")
+                        if text:
+                            yield _evt("chunk", {"text": text})
+                except json.JSONDecodeError:
+                    pass
+        else:
+            # OpenAI streaming
+            url = f"{ai_base_url}/v1/chat/completions"
+            headers = {"Authorization": f"Bearer {ai_api_key}", "Content-Type": "application/json"}
+            payload = {"model": ai_model,
+                       "messages": [{"role": "user", "content": full_prompt}],
+                       "max_tokens": 2048, "stream": True}
+            resp = req.post(url, headers=headers, json=payload, timeout=120, stream=True)
+            resp.raise_for_status()
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                    text = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if text:
+                        yield _evt("chunk", {"text": text})
+                except json.JSONDecodeError:
+                    pass
+
+        yield _evt("done", {"message": ""})
+
+    except Exception as exc:
+        # Fallback: non-streaming
+        log.warning("Streaming chat failed, falling back: %s", exc)
+        try:
+            reply = _call_ai_chat(system_context, message)
+            # Sanitize
+            for key in ("AI_API_KEY", "GITHUB_TOKEN"):
+                secret = os.environ.get(key, "")
+                if secret and len(secret) > 8:
+                    reply = reply.replace(secret, "REDACTED")
+            yield _evt("chunk", {"text": reply})
+            yield _evt("done", {"message": ""})
+        except Exception as exc2:
+            yield _evt("error", {"message": f"Chat failed: {exc2}"})
+
+
+def _stream_check_now():
+    """SSE generator for check-now — streams per-repo results."""
+    def _evt(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    repos_str = os.environ.get("REPOS", "")
+    repos = [r.strip() for r in repos_str.split(",") if r.strip()]
+
+    if not repos:
+        yield _evt("done", {"message": "No repos configured", "total": 0})
+        return
+
+    total_new = 0
+    for repo in repos:
+        yield _evt("progress", {"stage": "checking", "message": f"Checking {repo}...", "repo": repo})
+
+        try:
+            import requests as req
+            gh_token = os.environ.get("GITHUB_TOKEN", "")
+            gh_headers = {
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {gh_token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            resp = req.get(
+                f"https://api.github.com/repos/{repo}/issues",
+                headers=gh_headers, params={"state": "open", "per_page": 100}, timeout=30
+            )
+            if resp.ok:
+                issues = [i for i in resp.json() if "pull_request" not in i]
+                count = len(issues)
+                total_new += count
+                yield _evt("progress", {
+                    "stage": "found",
+                    "message": f"{repo}: {count} open issue{'s' if count != 1 else ''}",
+                    "repo": repo,
+                    "count": count,
+                })
+            else:
+                yield _evt("progress", {"stage": "error", "message": f"{repo}: HTTP {resp.status_code}", "repo": repo})
+        except Exception as exc:
+            yield _evt("progress", {"stage": "error", "message": f"{repo}: {exc}", "repo": repo})
+
+    yield _evt("done", {"message": f"Found {total_new} total open issues across {len(repos)} repos", "total": total_new})
 
 
 def _format_duration(seconds: float) -> str:

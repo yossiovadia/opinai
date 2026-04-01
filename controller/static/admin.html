@@ -246,22 +246,8 @@ async function smartAddRepo() {
   input.value = '';
   loadRepos();
 
-  // Step 2: Analyze deployment (separate request)
-  status.innerHTML = '&#x2705; Repo added. &#x1F50D; Analyzing deployment (this may take 30-60s)...';
-  try {
-    var resp2 = await fetch('/api/admin/analyze-deployment', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({repo: repo}) });
-    var data2 = await resp2.json();
-    if (resp2.ok && !data2.error) {
-      status.innerHTML = '&#x2705; <strong>' + escapeHtml(repo) + '</strong> added and analyzed!';
-    } else {
-      status.innerHTML = '&#x2705; Repo added. &#x26A0;&#xFE0F; Analysis incomplete — you can retry from Deployment Plans.';
-    }
-    loadDeploymentPlans();
-  } catch(e) {
-    status.innerHTML = '&#x2705; Repo added. &#x26A0;&#xFE0F; Analysis failed — you can retry from Deployment Plans.';
-  }
-
-  btn.disabled = false;
+  // Step 2: Analyze via SSE stream
+  streamAnalyze(repo, status, function() { btn.disabled = false; loadRepos(); loadDeploymentPlans(); });
 }
 
 document.getElementById('addRepoInput').addEventListener('keydown', function(e) {
@@ -515,14 +501,31 @@ async function loadDeploymentPlans() {
   }
 }
 
+function streamAnalyze(repo, statusEl, onDone) {
+  var source = new EventSource('/api/admin/analyze-stream?repo=' + encodeURIComponent(repo));
+  source.addEventListener('progress', function(e) {
+    var d = JSON.parse(e.data);
+    statusEl.innerHTML = d.message;
+  });
+  source.addEventListener('done', function(e) {
+    var d = JSON.parse(e.data);
+    statusEl.innerHTML = '&#x2705; ' + escapeHtml(d.message);
+    source.close();
+    if (onDone) onDone();
+  });
+  source.addEventListener('error', function(e) {
+    try { var d = JSON.parse(e.data); statusEl.innerHTML = '&#x26A0;&#xFE0F; ' + escapeHtml(d.message); }
+    catch(x) { statusEl.innerHTML = '&#x26A0;&#xFE0F; Analysis failed — you can retry.'; }
+    source.close();
+    if (onDone) onDone();
+  });
+}
+
 async function analyzeDeployment(repo) {
-  document.getElementById('deployPlansContainer').innerHTML = '<div class="empty" style="padding:20px">&#x23F3; Analyzing deployment for ' + escapeHtml(repo) + '... (30-60s)</div>';
-  try {
-    await fetchJSON('/api/admin/analyze-deployment', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({repo: repo}) });
-    loadDeploymentPlans();
-  } catch(e) {
-    document.getElementById('deployPlansContainer').innerHTML = '<div class="empty" style="color:var(--red)">Analysis failed. Try again.</div>';
-  }
+  var container = document.getElementById('deployPlansContainer');
+  container.innerHTML = '<div class="empty" style="padding:20px" id="analyzeStatus">&#x23F3; Starting analysis...</div>';
+  var statusEl = document.getElementById('analyzeStatus');
+  streamAnalyze(repo, statusEl, function() { loadDeploymentPlans(); loadRepos(); });
 }
 
 // --- Sandboxes ---

@@ -427,35 +427,23 @@ function toggleExpand(id) {
 
 // --- Actions ---
 async function checkNow() {
-  try {
-    showToast('Checking for new issues...', 'info');
-    await fetch(API + '/api/check-now', { method: 'POST' });
-    animateRefresh();
-    // Poll for result
-    var attempts = 0;
-    var poll = setInterval(async function() {
-      attempts++;
-      try {
-        var data = await fetchJSON('/api/check-now/result');
-        if (data.status === 'done') {
-          clearInterval(poll);
-          if (data.total > 0) {
-            showToast('Found ' + data.total + ' new issue' + (data.total > 1 ? 's' : ''), 'success');
-          } else {
-            showToast('No new issues found', 'info');
-          }
-          refreshAll();
-        } else if (attempts > 60) {
-          clearInterval(poll);
-          showToast('Check is taking a while...', 'info');
-        }
-      } catch(e) {
-        clearInterval(poll);
-      }
-    }, 2000);
-  } catch(e) {
-    showToast('Failed to trigger check', 'error');
-  }
+  showToast('Checking for new issues...', 'info');
+  animateRefresh();
+  var source = new EventSource(API + '/api/check-now-stream');
+  source.addEventListener('progress', function(e) {
+    var d = JSON.parse(e.data);
+    showToast(d.message, 'info');
+  });
+  source.addEventListener('done', function(e) {
+    var d = JSON.parse(e.data);
+    showToast(d.message, d.total > 0 ? 'success' : 'info');
+    source.close();
+    refreshAll();
+  });
+  source.addEventListener('error', function() {
+    source.close();
+    showToast('Check failed', 'error');
+  });
 }
 
 var _pendingPostRunId = null;
@@ -540,24 +528,24 @@ async function reproduceFromUrl() {
       return;
     }
   } catch(e) { /* proceed anyway, server will validate */ }
-  try {
-    showToast('Reproducing ' + parsed.repo + '#' + parsed.issue + '...', 'info');
-    var resp = await fetch(API + '/api/reproduce', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: parsed.repo, issue_number: parsed.issue })
-    });
-    var data = await resp.json();
-    if (data.status === 'triggered') {
-      showToast('Job created for ' + parsed.repo + '#' + parsed.issue, 'success');
-      input.value = '';
-      setTimeout(refreshAll, 2000);
-    } else {
-      showToast('Error: ' + (data.message || 'unknown'), 'error');
-    }
-  } catch(e) {
-    showToast('Failed to create reproduction job', 'error');
-  }
+  showToast('Reproducing ' + parsed.repo + '#' + parsed.issue + '...', 'info');
+  input.value = '';
+  var source = new EventSource(API + '/api/reproduce-stream?repo=' + encodeURIComponent(parsed.repo) + '&issue=' + parsed.issue);
+  source.addEventListener('progress', function(e) {
+    var d = JSON.parse(e.data);
+    showToast(d.message, 'info');
+  });
+  source.addEventListener('done', function(e) {
+    var d = JSON.parse(e.data);
+    showToast(d.message, 'success');
+    source.close();
+    refreshAll();
+  });
+  source.addEventListener('error', function(e) {
+    try { var d = JSON.parse(e.data); showToast(d.message, 'error'); } catch(x) { showToast('Reproduction failed', 'error'); }
+    source.close();
+    refreshAll();
+  });
 }
 
 // Enter key on reproduce input
@@ -765,16 +753,37 @@ async function sendChat() {
   document.getElementById('chatSend').disabled = true;
   showTypingIndicator();
 
+  // Stream AI response via SSE (POST body sent as query-safe fetch, then EventSource)
+  // EventSource only supports GET, so we use fetch with streaming reader
   try {
-    var resp = await fetch(API + '/api/chat', {
+    var resp = await fetch(API + '/api/chat-stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: message, context: chatContext })
     });
-    var data = await resp.json();
     removeTypingIndicator();
-    chatHistory.push({ role: 'ai', content: data.reply || 'No response.' });
-    renderChatMessages();
+    var aiContent = '';
+    chatHistory.push({ role: 'ai', content: '' });
+    var aiIdx = chatHistory.length - 1;
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+      var lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (var ln of lines) {
+        if (ln.startsWith('data: ')) {
+          try {
+            var d = JSON.parse(ln.substring(6));
+            if (d.text) { aiContent += d.text; chatHistory[aiIdx].content = aiContent; renderChatMessages(); }
+          } catch(x) {}
+        }
+      }
+    }
+    if (!aiContent) { chatHistory[aiIdx].content = 'No response.'; renderChatMessages(); }
   } catch(e) {
     removeTypingIndicator();
     chatHistory.push({ role: 'ai', content: 'Failed to reach the AI service. Please try again.' });
