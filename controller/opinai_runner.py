@@ -703,6 +703,8 @@ def main():
     log.info("Issue: %s", title)
 
     # Step 2: Check for sandbox or start server in pod
+    global SERVER_URL
+    SERVER_URL = os.environ.get("SERVER_URL", "")
     profile = load_repo_profile()
     server_proc = None
     sandbox_ns = os.environ.get("OPINAI_SANDBOX_NAMESPACE", "")
@@ -714,7 +716,6 @@ def main():
         if sandbox_endpoints:
             try:
                 endpoints = json.loads(sandbox_endpoints)
-                # Use the first endpoint as SERVER_URL
                 if endpoints:
                     first_svc = next(iter(endpoints.values()))
                     SERVER_URL = f"http://{first_svc}"
