@@ -576,7 +576,7 @@ def _get_repo_profile(repo: str) -> dict | None:
         return None
 
 
-def _call_ai_chat(system_context: str, user_message: str) -> str:
+def _call_ai_chat(system_context: str, user_message: str, max_tokens: int = 2048) -> str:
     """Call the AI API for chat. Reuses the same auth pattern as opinai_runner."""
     import requests as req
 
@@ -612,7 +612,7 @@ def _call_ai_chat(system_context: str, user_message: str) -> str:
             payload = {
                 "anthropic_version": "vertex-2023-10-16",
                 "messages": messages,
-                "max_tokens": 2048,
+                "max_tokens": max_tokens,
             }
         elif "openai" in ai_base_url.lower():
             url = f"{ai_base_url}/v1/chat/completions"
@@ -622,7 +622,7 @@ def _call_ai_chat(system_context: str, user_message: str) -> str:
             }
             payload = {
                 "model": ai_model,
-                "max_tokens": 2048,
+                "max_tokens": max_tokens,
                 "messages": messages,
             }
         else:
@@ -634,7 +634,7 @@ def _call_ai_chat(system_context: str, user_message: str) -> str:
             }
             payload = {
                 "model": ai_model,
-                "max_tokens": 2048,
+                "max_tokens": max_tokens,
                 "messages": messages,
             }
 
@@ -834,6 +834,70 @@ def _post_run_comment(run_id: int) -> dict:
         return {"status": "error", "message": str(exc)}
 
 
+def _parse_ai_json(raw: str) -> dict:
+    """Parse JSON from AI response with repair for truncated output."""
+    text = raw.strip()
+
+    # Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(l for l in lines if not l.strip().startswith("```")).strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to repair truncated JSON by closing open braces/brackets
+    repaired = text
+    open_braces = repaired.count("{") - repaired.count("}")
+    open_brackets = repaired.count("[") - repaired.count("]")
+
+    # Strip trailing comma before closing
+    repaired = repaired.rstrip().rstrip(",")
+    repaired += "]" * max(open_brackets, 0)
+    repaired += "}" * max(open_braces, 0)
+
+    try:
+        result = json.loads(repaired)
+        log.warning("Repaired truncated AI JSON (%d braces, %d brackets closed)", open_braces, open_brackets)
+        if "options" not in result:
+            result["options"] = []
+        result["_warning"] = "Response was truncated — some options may be incomplete"
+        return result
+    except json.JSONDecodeError:
+        pass
+
+    # Last resort: extract any complete option objects via regex-free scanning
+    log.warning("JSON repair failed — attempting partial extraction")
+    options = []
+    # Find complete {...} blocks that look like options
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 1 and start == -1:
+                start = i  # potential option start (inside top-level "options" array)
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 1 and start >= 0:
+                candidate = text[start : i + 1]
+                try:
+                    obj = json.loads(candidate)
+                    if "id" in obj or "name" in obj or "steps" in obj:
+                        options.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = -1
+
+    return {
+        "options": options,
+        "_warning": f"AI response could not be fully parsed. Extracted {len(options)} option(s).",
+    }
+
+
 def _analyze_deployment(repo: str) -> dict:
     """Analyze a repo's deployment needs and generate options via AI."""
     import requests as req
@@ -961,17 +1025,11 @@ def _analyze_deployment(repo: str) -> dict:
         "Each step's content should be valid YAML for manifests or a valid shell command."
     )
 
-    content = _call_ai_chat(prompt, "")
+    content = _call_ai_chat(prompt, "", max_tokens=8192)
     if not content:
         raise RuntimeError("AI returned empty response")
 
-    # Parse JSON (strip fences if present)
-    content = content.strip()
-    if content.startswith("```"):
-        lines = content.splitlines()
-        content = "\n".join(l for l in lines if not l.strip().startswith("```"))
-
-    plan_data = json.loads(content)
+    plan_data = _parse_ai_json(content)
 
     # Save to database
     save_deployment_plan(repo, json.dumps(plan_data))
