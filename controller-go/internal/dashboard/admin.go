@@ -1,8 +1,10 @@
 package dashboard
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
 
@@ -150,11 +153,12 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 // --- POST /api/admin/test-ai ---
 
 func (s *Server) handleAdminTestAI(w http.ResponseWriter, r *http.Request) {
-	// Stub: AI integration in Phase 4
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"reply":   "AI test not yet implemented in Go controller.",
-	})
+	reply, err := ai.Call("You are OpinAI. Respond with exactly: OpinAI is online.", 64)
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]string{"status": "error", "message": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "reply": ai.Sanitize(reply)})
 }
 
 // --- POST /api/admin/test-github ---
@@ -294,10 +298,38 @@ func (s *Server) handleAdminUpdatePlan(w http.ResponseWriter, r *http.Request) {
 // --- POST /api/admin/analyze-deployment ---
 
 func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
-	// Stub: AI integration in Phase 4
-	json.NewEncoder(w).Encode(map[string]string{
-		"error": "Deployment analysis not yet implemented in Go controller. Use the Python dashboard on port 8080.",
-	})
+	var req struct {
+		Repo string `json:"repo"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.Repo == "" {
+		jsonError(w, "repo required", 400)
+		return
+	}
+
+	// Read repo files from GitHub
+	files := fetchRepoDeployFiles(req.Repo)
+	readme := fetchRepoReadme(req.Repo)
+	profile := loadProfile(req.Repo)
+	profileJSON, _ := json.Marshal(profile)
+
+	// Read cluster state
+	clusterState := readClusterState()
+
+	// Call AI
+	planData, err := ai.AnalyzeDeployment(req.Repo, readme, files, clusterState, string(profileJSON))
+	if err != nil {
+		jsonError(w, "Analysis failed: "+err.Error(), 500)
+		return
+	}
+
+	// Save to DB
+	planBytes, _ := json.Marshal(planData)
+	database.SaveDeploymentPlan(req.Repo, string(planBytes))
+
+	// Auto-update profile from analysis
+	autoUpdateProfileFromPlan(req.Repo, planData)
+
+	json.NewEncoder(w).Encode(planData)
 }
 
 // --- GET /api/admin/sandboxes ---
@@ -370,6 +402,147 @@ func updateRepoEnv(repo string, profile map[string]any, delete bool) error {
 			os.Setenv(key, string(b))
 		}
 	}
-	// TODO: update K8s ConfigMap (Phase 3)
+	// TODO: update K8s ConfigMap
 	return nil
+}
+
+// --- GitHub file reading for deployment analysis ---
+
+func fetchRepoDeployFiles(repo string) map[string]string {
+	files := make(map[string]string)
+	paths := []string{"Dockerfile", "docker-compose.yml", "Makefile", "requirements.txt", "package.json", "go.mod"}
+
+	// Check deploy directories
+	for _, dir := range []string{"k8s", "manifests", "deploy", "helm", "config", "kustomize"} {
+		body, code, _ := ghGetDashboard(fmt.Sprintf("/repos/%s/contents/%s", repo, dir))
+		if code == 200 {
+			var items []struct {
+				Type string `json:"type"`
+				Path string `json:"path"`
+			}
+			json.Unmarshal(body, &items)
+			for _, item := range items {
+				if item.Type == "file" {
+					paths = append(paths, item.Path)
+				}
+			}
+		}
+	}
+
+	for i, path := range paths {
+		if i >= 20 {
+			break
+		}
+		body, code, _ := ghGetDashboard(fmt.Sprintf("/repos/%s/contents/%s", repo, path))
+		if code == 200 {
+			var file struct {
+				Content string `json:"content"`
+			}
+			json.Unmarshal(body, &file)
+			if file.Content != "" {
+					decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
+				if err == nil {
+					c := string(decoded)
+					if len(c) > 5000 {
+						c = c[:5000]
+					}
+					files[path] = c
+				}
+			}
+		}
+	}
+	return files
+}
+
+func fetchRepoReadme(repo string) string {
+	for _, name := range []string{"README.md", "readme.md", "README.rst"} {
+		body, code, _ := ghGetDashboard(fmt.Sprintf("/repos/%s/contents/%s", repo, name))
+		if code == 200 {
+			var file struct {
+				Content string `json:"content"`
+			}
+			json.Unmarshal(body, &file)
+			if file.Content != "" {
+					decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
+				if err == nil {
+					c := string(decoded)
+					if len(c) > 3000 {
+						c = c[:3000]
+					}
+					return c
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func readClusterState() map[string][]string {
+	// Return empty for now — K8s cluster state reading done in Phase 7
+	return map[string][]string{
+		"crds":       {},
+		"operators":  {},
+		"namespaces": {},
+	}
+}
+
+func autoUpdateProfileFromPlan(repo string, planData map[string]any) {
+	projectType, _ := planData["project_type"].(string)
+	depsRaw, _ := planData["dependencies"].([]any)
+	var depsList []string
+	for _, d := range depsRaw {
+		if s, ok := d.(string); ok {
+			depsList = append(depsList, s)
+		}
+	}
+	depsStr := strings.Join(depsList, ", ")
+	depsLower := strings.ToLower(depsStr)
+
+	k8sKw := []string{"kubernetes", "k8s", "openshift", "operator", "istio", "kuadrant", "helm", "kustomize"}
+	gpuKw := []string{"gpu", "cuda", "nvidia"}
+	needsK8s := false
+	needsGPU := false
+	for _, kw := range k8sKw {
+		if strings.Contains(depsLower, kw) {
+			needsK8s = true
+			break
+		}
+	}
+	for _, kw := range gpuKw {
+		if strings.Contains(depsLower, kw) {
+			needsGPU = true
+			break
+		}
+	}
+
+	newProfile := map[string]any{
+		"type": projectType, "build": "", "run": "", "health": "",
+		"deps": depsStr, "k8s": needsK8s, "gpu": needsGPU,
+	}
+	existing := loadProfile(repo)
+	for _, k := range []string{"build", "run", "health"} {
+		if v, ok := existing[k]; ok && v != "" {
+			newProfile[k] = v
+		}
+	}
+	if t, ok := existing["type"]; ok && t != "" && t != "other" {
+		newProfile["type"] = t
+	}
+	updateRepoEnv(repo, newProfile, false)
+}
+
+func ghGetDashboard(path string) ([]byte, int, error) {
+	token := os.Getenv("GITHUB_TOKEN")
+	req, _ := http.NewRequest("GET", "https://api.github.com"+path, nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return body, resp.StatusCode, nil
 }
