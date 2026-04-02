@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
 
 // JobManager handles K8s Job creation and result harvesting.
@@ -25,6 +26,7 @@ type JobManager struct {
 	namespace string
 	image     string
 	recorded  map[string]bool // tracks jobs already harvested this session
+	sandbox   *sandbox.Manager
 }
 
 // NewJobManager creates a new JobManager.
@@ -34,6 +36,7 @@ func NewJobManager(client kubernetes.Interface, namespace, image string) *JobMan
 		namespace: namespace,
 		image:     image,
 		recorded:  make(map[string]bool),
+		sandbox:   sandbox.NewManager(client, namespace),
 	}
 }
 
@@ -69,6 +72,9 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	// Collect REPO_PROFILE_* env vars
 	profileEnvs := collectProfileEnvVars()
 
+	// Check if repo needs K8s sandbox deployment
+	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
+
 	// Build env vars list
 	env := []corev1.EnvVar{
 		{Name: "REPO", Value: repo},
@@ -77,6 +83,9 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		{Name: "OPINAI_VERIFY_FIX", Value: os.Getenv("_OPINAI_VERIFY_FIX_PENDING")},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
 		{Name: "OPINAI_HAS_KNOWLEDGE", Value: hasKnowledge},
+		{Name: "OPINAI_SANDBOX_NAMESPACE", Value: sandboxNS},
+		{Name: "OPINAI_SANDBOX_ENDPOINTS", Value: sandboxEndpointsJSON},
+		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 	}
 	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)
@@ -101,8 +110,9 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 				"opinai/issue": fmt.Sprintf("%d", issueNumber),
 			},
 			Annotations: map[string]string{
-				"opinai/title":     titleTrunc,
-				"opinai/repo-full": repo,
+				"opinai/title":             titleTrunc,
+				"opinai/repo-full":         repo,
+				"opinai/sandbox-namespace": sandboxNS,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -272,6 +282,14 @@ func (jm *JobManager) HarvestCompletedJobs() {
 			Report:     report,
 			CreatedAt:  ts,
 		})
+
+		// Teardown sandbox if one was used
+		sbNS := annotations["opinai/sandbox-namespace"]
+		if sbNS != "" && jm.sandbox != nil {
+			if jm.sandbox.TeardownSandbox(sbNS) {
+				slog.Info("torn down sandbox after job", "namespace", sbNS, "job", name)
+			}
+		}
 	}
 }
 
@@ -293,6 +311,112 @@ func (jm *JobManager) CreateVerifyFixJob(repo string, issueNumber int, issueTitl
 	defer os.Unsetenv("_OPINAI_VERIFY_FIX_PENDING")
 
 	return jm.CreateReproductionJob(repo, issueNumber, issueTitle)
+}
+
+// trySandboxDeploy checks if the repo needs K8s sandbox deployment and creates one if so.
+// Returns (sandboxNS, endpointsJSON, planJSON). On failure, returns empty strings (fallback to code analysis).
+func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle string) (string, string, string) {
+	if jm.sandbox == nil {
+		return "", "", ""
+	}
+
+	// Check repo profile for k8s=true
+	profile := loadRepoProfileForJob(repo)
+	isK8s := false
+	if profile != nil {
+		if b, ok := profile["k8s"].(bool); ok {
+			isK8s = b
+		}
+	}
+
+	// Get deployment plan from DB
+	plan, err := database.GetDeploymentPlan(repo)
+	if err != nil || plan == nil {
+		if isK8s {
+			slog.Info("K8s repo has no deployment plan — job will do code analysis", "repo", repo)
+		}
+		return "", "", ""
+	}
+
+	planJSON := plan.PlanJSON
+	if !isK8s {
+		// Non-K8s repo: pass the plan for AI reference but don't create sandbox
+		return "", "", planJSON
+	}
+
+	// Parse plan options
+	var planData struct {
+		Options []struct {
+			ID          string           `json:"id"`
+			Name        string           `json:"name"`
+			Recommended bool             `json:"recommended"`
+			Steps       []map[string]any `json:"steps"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &planData); err != nil || len(planData.Options) == 0 {
+		slog.Warn("failed to parse deployment plan", "repo", repo, "error", err)
+		return "", "", planJSON
+	}
+
+	// Pick recommended option (or first)
+	selected := 0
+	for i, opt := range planData.Options {
+		if opt.Recommended {
+			selected = i
+			break
+		}
+	}
+	opt := planData.Options[selected]
+	slog.Info("selected deployment option for sandbox", "repo", repo, "option", opt.Name)
+
+	// Create sandbox namespace
+	sandboxNS, err := jm.sandbox.CreateSandbox(repo, issueNumber)
+	if err != nil {
+		slog.Error("sandbox creation failed — falling back to code analysis", "repo", repo, "error", err)
+		return "", "", planJSON
+	}
+
+	// Deploy the selected option
+	result, err := jm.sandbox.DeployInSandbox(sandboxNS, opt.Steps)
+	if err != nil {
+		slog.Error("sandbox deployment failed — tearing down and falling back", "namespace", sandboxNS, "error", err)
+		jm.sandbox.TeardownSandbox(sandboxNS)
+		return "", "", planJSON
+	}
+
+	success, _ := result["success"].(bool)
+	if !success {
+		errs, _ := result["errors"].([]string)
+		slog.Warn("sandbox deployment had failures — tearing down", "namespace", sandboxNS, "errors", errs)
+		jm.sandbox.TeardownSandbox(sandboxNS)
+		return "", "", planJSON
+	}
+
+	// Get endpoints
+	endpoints, _ := result["endpoints"].(map[string]string)
+	endpointsJSON, _ := json.Marshal(endpoints)
+
+	slog.Info("sandbox deployed successfully", "namespace", sandboxNS, "endpoints", len(endpoints))
+	return sandboxNS, string(endpointsJSON), planJSON
+}
+
+func loadRepoProfileForJob(repo string) map[string]any {
+	r := strings.NewReplacer("/", "_", "-", "_", ".", "_")
+	key := "REPO_PROFILE_" + r.Replace(repo)
+	raw := os.Getenv(key)
+	if raw == "" {
+		return nil
+	}
+	var profile map[string]any
+	json.Unmarshal([]byte(raw), &profile)
+	return profile
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // DeleteJob deletes a Job by name.
