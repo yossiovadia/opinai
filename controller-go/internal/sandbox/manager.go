@@ -33,7 +33,14 @@ const (
 var AllowedKinds = map[string]bool{
 	"Deployment": true, "StatefulSet": true, "Service": true,
 	"ConfigMap": true, "Secret": true, "ServiceAccount": true,
-	"PersistentVolumeClaim": true, "Job": true,
+	"PersistentVolumeClaim": true, "Job": true, "CronJob": true,
+	"Role": true, "RoleBinding": true, "NetworkPolicy": true,
+	"Ingress": true, "HorizontalPodAutoscaler": true, "Route": true,
+}
+
+// SkippedKinds are silently skipped (cluster-scoped or already handled).
+var SkippedKinds = map[string]bool{
+	"Namespace": true, "ClusterRole": true, "ClusterRoleBinding": true,
 }
 
 // Manager handles sandbox namespace lifecycle.
@@ -204,7 +211,8 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 			}
 		case "shell", "command":
 			slog.Info("executing command step", "step", i+1, "desc", desc)
-			cmd := exec.Command("sh", "-c", content)
+			cmdStr := injectNamespace(content, ns)
+			cmd := exec.Command("sh", "-c", cmdStr)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				stepErr = fmt.Errorf("%s: %s", err, string(out))
@@ -420,8 +428,13 @@ func applySingleManifest(client kubernetes.Interface, ns, content string) error 
 	if kind == "" {
 		return fmt.Errorf("manifest missing 'kind' field")
 	}
+	if SkippedKinds[kind] {
+		slog.Info("skipping resource — cluster-scoped or already exists", "kind", kind)
+		return nil
+	}
 	if !AllowedKinds[kind] {
-		return fmt.Errorf("resource kind %q not allowed in sandbox", kind)
+		slog.Warn("skipping unsupported resource kind", "kind", kind)
+		return nil
 	}
 
 	// Force namespace and managed label
@@ -480,6 +493,22 @@ func applySingleManifest(client kubernetes.Interface, ns, content string) error 
 	default:
 		return fmt.Errorf("kind %q not yet supported for apply", kind)
 	}
+}
+
+// injectNamespace adds -n {namespace} to oc/kubectl commands if not already present.
+func injectNamespace(cmd, ns string) string {
+	// Check if command uses oc or kubectl
+	for _, prefix := range []string{"oc ", "kubectl "} {
+		if strings.Contains(cmd, prefix) {
+			// Skip if -n or --namespace already specified
+			if strings.Contains(cmd, " -n ") || strings.Contains(cmd, " --namespace") {
+				return cmd
+			}
+			// Insert -n after the first oc/kubectl subcommand
+			return strings.Replace(cmd, prefix, prefix+"-n "+ns+" ", 1)
+		}
+	}
+	return cmd
 }
 
 func truncLog(s string, n int) string {
