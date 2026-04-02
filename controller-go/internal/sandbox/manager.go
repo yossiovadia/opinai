@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -177,6 +179,16 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 		return nil, fmt.Errorf("namespace %s is not managed by OpinAI", ns)
 	}
 
+	// Clone target repo for command steps (once, reused for all steps)
+	repo := ""
+	if nsObj.Annotations != nil {
+		repo = nsObj.Annotations["opinai.dev/repo-full"]
+	}
+	cloneDir, cloneOK := cloneRepoForDeploy(repo)
+	if cloneDir != "" {
+		defer os.RemoveAll(cloneDir)
+	}
+
 	result := map[string]any{
 		"success":         true,
 		"steps_completed": 0,
@@ -210,9 +222,15 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 				stepErr = fmt.Errorf("timeout waiting for %s", content)
 			}
 		case "shell", "command":
+			if !cloneOK {
+				slog.Warn("skipping command step — repo clone failed", "step", i+1, "desc", desc)
+				break
+			}
 			slog.Info("executing command step", "step", i+1, "desc", desc)
 			cmdStr := injectNamespace(content, ns)
 			cmd := exec.Command("sh", "-c", cmdStr)
+			cmd.Dir = cloneDir
+			cmd.Env = commandEnv(ns)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				stepErr = fmt.Errorf("%s: %s", err, string(out))
@@ -493,6 +511,50 @@ func applySingleManifest(client kubernetes.Interface, ns, content string) error 
 	default:
 		return fmt.Errorf("kind %q not yet supported for apply", kind)
 	}
+}
+
+// cloneRepoForDeploy clones the target repo into a temp directory for command steps.
+// Returns (cloneDir, success). On failure returns ("", false) — command steps should be skipped.
+func cloneRepoForDeploy(repo string) (string, bool) {
+	if repo == "" {
+		return "", false
+	}
+
+	repoShort := repo
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		repoShort = repo[idx+1:]
+	}
+	cloneDir := filepath.Join(os.TempDir(), "opinai-deploy-"+repoShort)
+
+	// Remove any previous clone
+	os.RemoveAll(cloneDir)
+
+	slog.Info("cloning repo for deployment steps", "repo", repo, "dir", cloneDir)
+	cmd := exec.Command("git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		slog.Warn("repo clone failed — command steps will be skipped", "repo", repo, "error", err, "output", truncLog(string(out), 200))
+		return "", false
+	}
+	slog.Info("repo cloned for deployment", "dir", cloneDir)
+	return cloneDir, true
+}
+
+// commandEnv builds the environment for command step execution.
+func commandEnv(namespace string) []string {
+	env := os.Environ()
+	// Ensure commands target the sandbox namespace
+	env = append(env, "NAMESPACE="+namespace)
+	// Add pip paths in case commands need Python
+	env = append(env, "PYTHONUSERBASE=/tmp/pip-user")
+	// Update PATH
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=/tmp/pip-user/bin:/usr/local/bin:" + kv[5:]
+			return env
+		}
+	}
+	return env
 }
 
 // injectNamespace adds -n {namespace} to oc/kubectl commands if not already present.
