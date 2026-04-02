@@ -103,6 +103,7 @@ func migrate() error {
 	}
 	// Migrations for existing DBs
 	db.Exec("ALTER TABLE deployment_plans ADD COLUMN commit_sha TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE runs ADD COLUMN suggested_questions TEXT DEFAULT ''")
 	return nil
 }
 
@@ -119,9 +120,10 @@ type Run struct {
 	Report     string  `json:"report"`
 	Posted     bool    `json:"posted"`
 	PostedAt   *string `json:"posted_at"`
-	AIPowered  bool    `json:"ai"`
-	Duration   string  `json:"duration"`
-	CreatedAt  string  `json:"timestamp"`
+	AIPowered          bool    `json:"ai"`
+	Duration           string  `json:"duration"`
+	SuggestedQuestions string  `json:"suggested_questions,omitempty"`
+	CreatedAt          string  `json:"timestamp"`
 }
 
 func AddRun(r Run) (int64, error) {
@@ -129,10 +131,10 @@ func AddRun(r Run) (int64, error) {
 	defer mu.Unlock()
 	res, err := db.Exec(
 		`INSERT OR REPLACE INTO runs
-		 (repo, issue, title, category, verdict, confidence, report, posted, ai_powered, duration, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (repo, issue, title, category, verdict, confidence, report, posted, ai_powered, duration, suggested_questions, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Repo, r.Issue, r.Title, r.Category, r.Verdict, r.Confidence,
-		r.Report, r.Posted, r.AIPowered, r.Duration, r.CreatedAt,
+		r.Report, r.Posted, r.AIPowered, r.Duration, r.SuggestedQuestions, r.CreatedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -144,9 +146,9 @@ func GetRuns(repo string, limit int) ([]Run, error) {
 	var rows *sql.Rows
 	var err error
 	if repo != "" {
-		rows, err = db.Query("SELECT * FROM runs WHERE repo = ? ORDER BY created_at DESC LIMIT ?", repo, limit)
+		rows, err = db.Query("SELECT id,repo,issue,title,category,verdict,confidence,report,posted,posted_at,ai_powered,duration,suggested_questions,created_at FROM runs WHERE repo = ? ORDER BY created_at DESC LIMIT ?", repo, limit)
 	} else {
-		rows, err = db.Query("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", limit)
+		rows, err = db.Query("SELECT id,repo,issue,title,category,verdict,confidence,report,posted,posted_at,ai_powered,duration,suggested_questions,created_at FROM runs ORDER BY created_at DESC LIMIT ?", limit)
 	}
 	if err != nil {
 		return nil, err
@@ -156,7 +158,7 @@ func GetRuns(repo string, limit int) ([]Run, error) {
 }
 
 func GetRun(id int64) (*Run, error) {
-	row := db.QueryRow("SELECT * FROM runs WHERE id = ?", id)
+	row := db.QueryRow("SELECT id,repo,issue,title,category,verdict,confidence,report,posted,posted_at,ai_powered,duration,suggested_questions,created_at FROM runs WHERE id = ?", id)
 	return scanRun(row)
 }
 
@@ -182,7 +184,7 @@ func scanRuns(rows *sql.Rows) ([]Run, error) {
 func scanRunFromRows(rows *sql.Rows) (*Run, error) {
 	var r Run
 	err := rows.Scan(&r.ID, &r.Repo, &r.Issue, &r.Title, &r.Category, &r.Verdict,
-		&r.Confidence, &r.Report, &r.Posted, &r.PostedAt, &r.AIPowered, &r.Duration, &r.CreatedAt)
+		&r.Confidence, &r.Report, &r.Posted, &r.PostedAt, &r.AIPowered, &r.Duration, &r.SuggestedQuestions, &r.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +194,7 @@ func scanRunFromRows(rows *sql.Rows) (*Run, error) {
 func scanRun(row *sql.Row) (*Run, error) {
 	var r Run
 	err := row.Scan(&r.ID, &r.Repo, &r.Issue, &r.Title, &r.Category, &r.Verdict,
-		&r.Confidence, &r.Report, &r.Posted, &r.PostedAt, &r.AIPowered, &r.Duration, &r.CreatedAt)
+		&r.Confidence, &r.Report, &r.Posted, &r.PostedAt, &r.AIPowered, &r.Duration, &r.SuggestedQuestions, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

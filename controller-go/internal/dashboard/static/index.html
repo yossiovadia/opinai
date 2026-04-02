@@ -91,13 +91,13 @@
 <!-- Chat panel -->
 <div class="chat-panel" id="chatPanel">
   <div class="chat-panel-header">
-    <div>
+    <div class="chat-header-top">
       <div class="chat-panel-title">&#x1F3B3; Ask OpinAI</div>
-      <div class="chat-context-label" id="chatContextLabel">General context</div>
+      <button class="chat-close-btn" onclick="toggleChat()">&times;</button>
     </div>
-    <div>
-      <button class="btn" onclick="clearChatHistoryDB()" title="Clear history" style="font-size:11px;margin-right:4px">&#x1F5D1; Clear</button>
-      <button class="chat-close" onclick="toggleChat()">&times;</button>
+    <div class="chat-header-sub">
+      <span class="chat-context-label" id="chatContextLabel">General context</span>
+      <a class="chat-clear-link" onclick="clearChatHistoryDB()">clear history</a>
     </div>
   </div>
   <div class="chat-messages" id="chatMessages"></div>
@@ -617,6 +617,7 @@ async function setChatContext(repo, issue, title) {
       chatHistory = msgs.map(function(m) { return { role: m.role, content: m.content }; });
     }
   } catch(e) { /* ignore */ }
+  loadDynamicSuggestions(repo, issue);
   renderChatMessages();
   renderSuggestions();
   if (!chatOpen) toggleChat();
@@ -650,10 +651,16 @@ async function clearChatHistoryDB() {
   showToast('Chat history cleared', 'info');
 }
 
+var _dynamicSuggestions = null;
+
 function renderSuggestions() {
   var container = document.getElementById('chatSuggestions');
+  if (chatHistory.length > 0) { container.innerHTML = ''; return; }
+
   var chips = [];
-  if (chatContext.repo && chatContext.issue_number) {
+  if (_dynamicSuggestions && _dynamicSuggestions.length > 0) {
+    chips = _dynamicSuggestions;
+  } else if (chatContext.repo && chatContext.issue_number) {
     chips = [
       'Is this a real bug or user error?',
       'How would you reproduce this?',
@@ -668,11 +675,26 @@ function renderSuggestions() {
       'What repos am I monitoring?'
     ];
   }
-  // Don't show suggestions if there's already chat history
-  if (chatHistory.length > 0) { container.innerHTML = ''; return; }
   container.innerHTML = chips.map(function(c) {
     return '<button class="chat-chip" onclick="sendSuggestion(\'' + escapeHtml(c).replace(/'/g, "\\'") + '\')">' + escapeHtml(c) + '</button>';
   }).join('');
+}
+
+function loadDynamicSuggestions(repo, issue) {
+  _dynamicSuggestions = null;
+  // Find the run for this issue and check for suggested_questions
+  for (var i = 0; i < allRuns.length; i++) {
+    var r = allRuns[i];
+    if (r.repo === repo && r.issue == issue && r.suggested_questions) {
+      try {
+        var qs = JSON.parse(r.suggested_questions);
+        if (Array.isArray(qs) && qs.length > 0) {
+          _dynamicSuggestions = qs;
+        }
+      } catch(e) {}
+      break;
+    }
+  }
 }
 
 function sendSuggestion(text) {

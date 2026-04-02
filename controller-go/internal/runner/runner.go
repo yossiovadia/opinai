@@ -173,6 +173,14 @@ func Run() {
 	fmt.Printf("--- OPINAI VERDICT: %s ---\n", vr.Verdict)
 	fmt.Printf("--- OPINAI CONFIDENCE: %s ---\n", vr.Confidence)
 
+	// Step 6b: Generate suggested follow-up questions
+	suggestedQs := generateSuggestedQuestions(title, body, vr.Text)
+	if suggestedQs != "" {
+		fmt.Println("--- OPINAI SUGGESTED_QUESTIONS ---")
+		fmt.Println(suggestedQs)
+		fmt.Println("--- END SUGGESTED_QUESTIONS ---")
+	}
+
 	// Step 7: Build report
 	resultsTable := parseResultsTable(testOutput)
 	serverInfo := ""
@@ -522,6 +530,37 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func generateSuggestedQuestions(title, body, verdictText string) string {
+	cfg := ai.LoadConfig()
+	if !cfg.Available() {
+		return ""
+	}
+	prompt := "Based on this issue and reproduction results, suggest 5 specific follow-up questions " +
+		"a developer would want to ask. Make them specific to THIS issue, not generic.\n\n" +
+		"Issue title: " + title + "\nIssue body: " + truncStr(body, 500) + "\n" +
+		"Reproduction verdict: " + truncStr(verdictText, 500) + "\n\n" +
+		"Format as a JSON array of strings. Output ONLY the JSON array, nothing else."
+	reply, err := ai.Call(prompt, 512)
+	if err != nil || reply == "" {
+		return ""
+	}
+	// Validate it's valid JSON array
+	reply = strings.TrimSpace(reply)
+	if !strings.HasPrefix(reply, "[") {
+		// Try to extract array from response
+		if idx := strings.Index(reply, "["); idx >= 0 {
+			if end := strings.LastIndex(reply, "]"); end > idx {
+				reply = reply[idx : end+1]
+			}
+		}
+	}
+	var arr []string
+	if json.Unmarshal([]byte(reply), &arr) != nil {
+		return ""
+	}
+	return reply
 }
 
 func isK8sProject() bool {
