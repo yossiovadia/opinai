@@ -283,7 +283,15 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
 
     # Re-read SERVER_URL — _start_server updates the global after import
     current_server_url = os.environ.get("SERVER_URL", "") or SERVER_URL
-    server_context = f"\nThe server is already running at {current_server_url}. Do NOT start the server yourself — just test it with curl." if current_server_url else ""
+    if current_server_url:
+        server_context = (
+            f"\n\nCRITICAL: The server is ALREADY running and healthy at {current_server_url}. "
+            "Do NOT install anything. Do NOT start any server. Do NOT use pip. Do NOT use apt-get. "
+            "Just use curl to test the running server. The following environment is pre-configured: "
+            f"SERVER_URL={current_server_url}. The server is already responding to health checks.\n"
+        )
+    else:
+        server_context = ""
     profile_context = format_profile_context(profile) if profile else ""
     repo_context = _load_repo_context()
 
@@ -297,10 +305,12 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
         f"{repo_context}\n\n"
         "Your task:\n"
         "1. Analyze what the bug claims\n"
-        "2. Write a bash test script that would prove or disprove this bug\n"
-        "3. The script should use curl to test endpoints and capture results\n"
+        "2. Write a bash test script that ONLY contains curl commands and result checking\n"
+        f"3. The script should use curl to test the server at {current_server_url} and capture results\n"
         "4. Print each test result as a JSON line: "
         '{"test": "name", "status": "pass|fail", "details": "..."}\n\n'
+        "IMPORTANT: Do NOT include any pip install, apt-get, git clone, or server startup commands. "
+        "The server is already running. Just test it.\n\n"
         "Output ONLY the bash script, no explanation."
     )
 
