@@ -1,0 +1,32 @@
+run:
+  timeout: 3m
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  disable:
+    - structcheck
+    - deadcode
+    - varcheck
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - fmt.Fprintf
+      - fmt.Println
+      - fmt.Printf
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+    - text: "Error return value of .*(Close|Remove|Unsetenv)"
+      linters:
+        - errcheck

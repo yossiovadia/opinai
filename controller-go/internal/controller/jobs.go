@@ -134,8 +134,9 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	// Check if repo needs K8s sandbox deployment
 	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
-	// Extract install command and resource requirements from deployment plan
-	installCommand, cpuReq, memReq, cpuLim, memLim := extractPlanResources(deploymentPlanJSON)
+	// Extract install command, resources, and timeout from deployment plan
+	planRes := extractPlanResources(deploymentPlanJSON)
+	activeDeadline := int64(planRes.TimeoutMinutes * 60)
 
 	// Build env vars list
 	env := []corev1.EnvVar{
@@ -145,7 +146,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		{Name: "OPINAI_VERIFY_FIX", Value: os.Getenv("_OPINAI_VERIFY_FIX_PENDING")},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
 		{Name: "OPINAI_HAS_KNOWLEDGE", Value: hasKnowledge},
-		{Name: "OPINAI_INSTALL_COMMAND", Value: installCommand},
+		{Name: "OPINAI_INSTALL_COMMAND", Value: planRes.InstallCommand},
 		{Name: "OPINAI_SANDBOX_NAMESPACE", Value: sandboxNS},
 		{Name: "OPINAI_SANDBOX_ENDPOINTS", Value: sandboxEndpointsJSON},
 		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
@@ -180,6 +181,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoff,
+			ActiveDeadlineSeconds:   &activeDeadline,
 			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
@@ -217,12 +219,12 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    mustParseQuantity(cpuReq),
-									corev1.ResourceMemory: mustParseQuantity(memReq),
+									corev1.ResourceCPU:    mustParseQuantity(planRes.CPUReq),
+									corev1.ResourceMemory: mustParseQuantity(planRes.MemReq),
 								},
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    mustParseQuantity(cpuLim),
-									corev1.ResourceMemory: mustParseQuantity(memLim),
+									corev1.ResourceCPU:    mustParseQuantity(planRes.CPULim),
+									corev1.ResourceMemory: mustParseQuantity(planRes.MemLim),
 								},
 							},
 						},
@@ -525,41 +527,48 @@ func orderOptions(repo string, options []struct {
 
 // extractPlanResources reads install_command and resource_requirements from a deployment plan.
 // Returns (installCmd, cpuReq, memReq, cpuLim, memLim) with sensible defaults.
-func extractPlanResources(planJSON string) (string, string, string, string, string) {
-	// Defaults
-	installCmd := ""
-	cpuReq := "200m"
-	memReq := "512Mi"
-	cpuLim := "500m"
-	memLim := "1Gi"
+// PlanResources holds extracted deployment plan configuration for Job pods.
+type PlanResources struct {
+	InstallCommand string
+	CPUReq, MemReq string
+	CPULim, MemLim string
+	TimeoutMinutes int
+}
 
-	if planJSON == "" {
-		return installCmd, cpuReq, memReq, cpuLim, memLim
+func extractPlanResources(planJSON string) PlanResources {
+	r := PlanResources{
+		CPUReq: "200m", MemReq: "512Mi",
+		CPULim: "500m", MemLim: "1Gi",
+		TimeoutMinutes: 10,
 	}
-
+	if planJSON == "" {
+		return r
+	}
 	var plan struct {
-		InstallCommand       string         `json:"install_command"`
-		ResourceRequirements map[string]string `json:"resource_requirements"`
+		InstallCommand       string            `json:"install_command"`
+		ResourceRequirements map[string]string  `json:"resource_requirements"`
+		JobTimeoutMinutes    int               `json:"job_timeout_minutes"`
 	}
 	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
-		return installCmd, cpuReq, memReq, cpuLim, memLim
+		return r
 	}
-
 	if plan.InstallCommand != "" {
-		installCmd = plan.InstallCommand
+		r.InstallCommand = plan.InstallCommand
+	}
+	if plan.JobTimeoutMinutes > 0 {
+		r.TimeoutMinutes = plan.JobTimeoutMinutes
 	}
 	if plan.ResourceRequirements != nil {
 		if v := plan.ResourceRequirements["cpu"]; v != "" {
-			cpuReq = v
+			r.CPUReq = v
 		}
 		if v := plan.ResourceRequirements["memory"]; v != "" {
-			memReq = v
-			// Set limit to 2x request
-			memLim = v
+			r.MemReq = v
+			r.MemLim = v
 		}
 	}
-
-	return installCmd, cpuReq, memReq, cpuLim, memLim
+	slog.Info("job resources", "cpu", r.CPUReq+"/"+r.CPULim, "mem", r.MemReq+"/"+r.MemLim, "timeout", r.TimeoutMinutes)
+	return r
 }
 
 func loadRepoProfileForJob(repo string) map[string]any {

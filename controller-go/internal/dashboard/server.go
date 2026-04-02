@@ -222,6 +222,10 @@ func (s *Server) buildRouter() chi.Router {
 					return
 				}
 				w.Header().Set("Content-Type", ct)
+				// No caching for HTML (ensure fresh JS/CSS after deploys)
+				if strings.HasSuffix(name, ".html") {
+					w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				}
 				w.Write(data)
 			}
 		}
@@ -243,6 +247,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Post("/api/chat-stream", s.handleChatStream)
 	r.Get("/api/check-now-stream", s.handleCheckNowStream)
 	r.Get("/api/job-logs", s.handleJobLogs)
+	r.Post("/api/webhook/github", s.handleGitHubWebhook)
 
 	// Core API
 	r.Route("/api", func(r chi.Router) {
@@ -258,6 +263,9 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/chat-history/clear", s.handleClearChatHistory)
 		r.Post("/runs/{id}/post-comment", s.handlePostComment)
 		r.Post("/rerun/*", s.handleRerun)
+		r.Post("/rerun-all/*", s.handleRerunAll)
+		r.Get("/report/{id}", s.handleReport)
+		r.Get("/run-history", s.handleRunHistory)
 
 		// Admin
 		r.Route("/admin", func(r chi.Router) {

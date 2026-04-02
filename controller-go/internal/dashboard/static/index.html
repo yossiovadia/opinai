@@ -31,6 +31,14 @@
 
 <main class="main">
 
+  <!-- Hero -->
+  <section class="section" style="text-align:center;padding:12px 0 4px;">
+    <p style="color:var(--text-dim);font-size:13px;margin:0;">
+      OpinAI automatically reproduces bug reports by deploying your project, generating AI-powered test scripts, and verifying if the bug is real.
+    </p>
+    <div id="heroStats" style="display:flex;justify-content:center;gap:24px;margin-top:8px;font-size:12px;color:var(--text-dim);"></div>
+  </section>
+
   <!-- Reproduce input -->
   <section class="section">
     <div class="reproduce-bar">
@@ -212,6 +220,12 @@ async function loadStatus() {
     document.getElementById('pollCount').textContent = data.poll_count;
     document.getElementById('statusDot').className = 'status-dot green';
     document.getElementById('clusterName').textContent = 'Connected';
+    // Update hero stats
+    var hs = document.getElementById('heroStats');
+    if (hs) hs.innerHTML =
+      '<span>&#x1F534; ' + (data.total_runs || 0) + ' runs</span>' +
+      '<span>&#x1F4E6; ' + (data.repos_count || 0) + ' repos</span>' +
+      '<span>&#x2705; ' + (data.total_processed || 0) + ' processed</span>';
   } catch(e) {
     document.getElementById('statusDot').className = 'status-dot red';
     document.getElementById('clusterName').textContent = 'Disconnected';
@@ -230,7 +244,8 @@ async function loadRepos() {
     container.innerHTML = repos.map(function(r) {
       var footerAction = r.manual_only
         ? '<span class="verdict verdict-warn" style="font-size:11px">&#x1F527; Manual</span>'
-        : '<button class="btn" onclick="checkNow()">Check Now</button>';
+        : '<button class="btn" onclick="checkNow()">Check Now</button> ' +
+          '<button class="btn" onclick="rerunAll(\'' + escapeHtml(r.name) + '\')" title="Re-run all issues" style="font-size:11px">&#x1F504; All</button>';
       return '<div class="card">' +
         '<div class="card-header">' +
           '<a class="card-title" href="https://github.com/' + escapeHtml(r.name) + '" target="_blank">' + escapeHtml(r.name) + '</a>' +
@@ -409,6 +424,7 @@ function renderIssues() {
     }
     if (r.repo && r.issue && r.status !== 'Running') {
       actions += '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
+      if (r.runId) actions += '<button class="btn" onclick="event.stopPropagation(); shareReport(' + r.runId + ')" title="Share report">&#x1F4CB;</button> ';
     }
     var isPending = pendingReRuns[(r.repo || '') + '#' + (r.issue || '')];
     if ((r.status === 'Done' || r.status === 'Failed') && !isPending) {
@@ -603,6 +619,28 @@ async function rerun(repo, issue, btn) {
 }
 
 // verifyFix merged into rerun — runner auto-detects closed issues
+
+function shareReport(runId) {
+  var url = location.origin + '/api/report/' + runId + '?format=html';
+  navigator.clipboard.writeText(url).then(function() {
+    showToast('Report URL copied to clipboard', 'success');
+  }).catch(function() {
+    window.open(url, '_blank');
+  });
+}
+
+async function rerunAll(repo) {
+  if (!confirm('Re-run ALL issues for ' + repo + '? This may take a while.')) return;
+  showToast('Re-running all issues for ' + repo + '...', 'info');
+  try {
+    var resp = await fetch(API + '/api/rerun-all/' + repo, { method: 'POST' });
+    var data = await resp.json();
+    showToast('Triggered ' + (data.triggered || 0) + ' re-runs for ' + repo, 'success');
+    setTimeout(refreshAll, 3000);
+  } catch(e) {
+    showToast('Failed to re-run all', 'error');
+  }
+}
 
 function parseIssueUrl(url) {
   // Match: https://github.com/owner/repo/issues/42
