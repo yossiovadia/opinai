@@ -1044,8 +1044,14 @@ refreshAll();
 connectWebSocket();
 
 // Fallback: poll every 15s if WebSocket is down
+var _wsFailed = false;
 setInterval(function() {
   if (!_ws || _ws.readyState !== WebSocket.OPEN) {
+    if (!_wsFailed) {
+      _wsFailed = true;
+      document.getElementById('statusDot').className = 'status-dot green';
+      document.getElementById('clusterName').textContent = 'Connected (polling)';
+    }
     refreshAll();
   }
 }, 15000);
