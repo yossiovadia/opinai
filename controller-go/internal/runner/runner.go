@@ -142,6 +142,21 @@ func Run() {
 	}
 	repoCtx = repoCtx + stateCtx
 
+	// Tell the AI it has server control for config-dependent bugs
+	profile2 := loadProfile()
+	runCommand := ""
+	if profile2 != nil {
+		runCommand, _ = profile2["run"].(string)
+	}
+	if runCommand != "" && serverURL != "" {
+		repoCtx += fmt.Sprintf(
+			"\n\nYou have full control of the server. If the bug requires restarting with different "+
+				"configuration (env vars, flags), you can kill the existing server and restart it.\n"+
+				"Current start command: %s\n"+
+				"Server binary directory: /tmp/opinai-repo\n"+
+				"Environment: PYTHONUSERBASE=/tmp/pip-user HOME=/tmp/home\n", runCommand)
+	}
+
 	script, err := ai.GenerateTests(title, body, serverURL, profileCtx, repoCtx)
 	if err != nil || script == "" {
 		fmt.Println("--- OPINAI VERDICT: ERROR ---")
@@ -257,31 +272,26 @@ func startServer() (*os.Process, string) {
 	// Analyze README on first run
 	analyzeReadme(cloneDir)
 
+	// Set up writable container environment BEFORE any commands
+	setupContainerEnv()
+
 	// Install: use saved working command if available, otherwise profile command as-is
 	if buildCmd != "" {
 		installCmd := buildCmd
-		// Check if we already know a working install command for this repo
 		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
-		if idx := strings.Index(repoCtx, "working_install_command:"); idx >= 0 {
-			line := repoCtx[idx:]
-			if nl := strings.Index(line, "\n"); nl > 0 {
-				line = line[:nl]
-			}
-			parts := strings.SplitN(line, ": ", 2)
-			if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
-				installCmd = strings.TrimSpace(parts[1])
-				slog.Info("using saved working install command", "cmd", installCmd)
-			}
+		if saved := extractMemoryValue(repoCtx, "working_install_command"); saved != "" {
+			installCmd = saved
+			slog.Info("using saved working install command", "cmd", installCmd)
 		}
 
 		slog.Info("installing", "cmd", installCmd)
-		out, err := runCmd2(installCmd, cloneDir)
+		out, err := runInEnv(installCmd, cloneDir)
 		if err != nil {
 			slog.Warn("install failed, asking AI for fix", "error", err)
 			fixedCmd := askAIForFix(installCmd, out)
 			if fixedCmd != "" && fixedCmd != installCmd {
 				slog.Info("trying AI-suggested install command", "cmd", fixedCmd)
-				out2, err2 := runCmd2(fixedCmd, cloneDir)
+				out2, err2 := runInEnv(fixedCmd, cloneDir)
 				if err2 == nil {
 					slog.Info("AI fix worked — saving for future runs")
 					emitRepoMemory(map[string]string{"working_install_command": fixedCmd})
@@ -290,11 +300,8 @@ func startServer() (*os.Process, string) {
 					slog.Warn("AI fix also failed", "error", err2, "output", truncStr(out2, 200))
 				}
 			}
-		} else {
-			// Original command worked — save it if not already saved
-			if !strings.Contains(repoCtx, "working_install_command:") {
-				emitRepoMemory(map[string]string{"working_install_command": installCmd})
-			}
+		} else if !strings.Contains(repoCtx, "working_install_command:") {
+			emitRepoMemory(map[string]string{"working_install_command": installCmd})
 		}
 	}
 
@@ -302,16 +309,24 @@ func startServer() (*os.Process, string) {
 		return nil, ""
 	}
 
+	// Check for saved working run command
+	if saved := extractMemoryValue(os.Getenv("OPINAI_REPO_CONTEXT"), "working_run_command"); saved != "" {
+		runCmd = saved
+		slog.Info("using saved working run command", "cmd", runCmd)
+	}
+
 	// Start server
 	slog.Info("starting server", "cmd", runCmd)
 	cmd = exec.Command("sh", "-c", runCmd)
 	cmd.Dir = cloneDir
+	cmd.Env = containerEnv
 	if err := cmd.Start(); err != nil {
 		slog.Warn("server start failed, asking AI for fix", "error", err)
 		fixedCmd := askAIForFix(runCmd, err.Error())
 		if fixedCmd != "" {
 			cmd = exec.Command("sh", "-c", fixedCmd)
 			cmd.Dir = cloneDir
+			cmd.Env = containerEnv
 			if err2 := cmd.Start(); err2 != nil {
 				slog.Warn("server start still failed", "error", err2)
 				return nil, ""
@@ -359,7 +374,11 @@ func runTests(script string) string {
 	defer os.Remove(tmpFile)
 
 	cmd := exec.Command("/bin/bash", tmpFile)
-	cmd.Env = os.Environ()
+	if containerEnv != nil {
+		cmd.Env = containerEnv
+	} else {
+		cmd.Env = os.Environ()
+	}
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 	if err != nil {
@@ -519,12 +538,59 @@ func parseResultsTable(output string) string {
 	return table
 }
 
-// runCmd2 executes a shell command and returns combined output and error.
-func runCmd2(command, workDir string) (string, error) {
+// containerEnv is the pre-configured environment for all subprocess calls.
+var containerEnv []string
+
+// setupContainerEnv creates writable directories and builds a clean environment.
+func setupContainerEnv() {
+	os.MkdirAll("/tmp/pip-user/bin", 0o755)
+	os.MkdirAll("/tmp/pip-cache", 0o755)
+	os.MkdirAll("/tmp/home", 0o755)
+
+	// Build env with writable paths
+	env := os.Environ()
+	set := func(key, val string) {
+		prefix := key + "="
+		for i, kv := range env {
+			if strings.HasPrefix(kv, prefix) {
+				env[i] = prefix + val
+				return
+			}
+		}
+		env = append(env, prefix+val)
+	}
+
+	set("PYTHONUSERBASE", "/tmp/pip-user")
+	set("PIP_CACHE_DIR", "/tmp/pip-cache")
+	set("HOME", "/tmp/home")
+	set("PATH", "/tmp/pip-user/bin:/usr/local/bin:/usr/bin:/bin:"+os.Getenv("PATH"))
+
+	containerEnv = env
+	slog.Info("container env configured", "HOME", "/tmp/home", "PYTHONUSERBASE", "/tmp/pip-user")
+}
+
+// runInEnv executes a shell command with the container env.
+func runInEnv(command, workDir string) (string, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = workDir
+	cmd.Env = containerEnv
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// extractMemoryValue reads a "key: value" line from the repo context string.
+func extractMemoryValue(ctx, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(ctx, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- "+prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, "- "+prefix))
+		}
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	return ""
 }
 
 func atoi(s string) int {
