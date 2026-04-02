@@ -1038,10 +1038,17 @@ function connectWebSocket() {
   };
 }
 
+// Load data immediately via HTTP (don't depend on WebSocket)
+refreshAll();
+
 connectWebSocket();
 
-// Fallback: refresh status every 60s in case WebSocket disconnects
-setInterval(loadStatus, 60000);
+// Fallback: poll every 15s if WebSocket is down
+setInterval(function() {
+  if (!_ws || _ws.readyState !== WebSocket.OPEN) {
+    refreshAll();
+  }
+}, 15000);
 </script>
 
 </body>
