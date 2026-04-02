@@ -13,6 +13,12 @@ import (
 	"strings"
 	"time"
 
+	k8sCorev1 "k8s.io/api/core/v1"
+	k8sMetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sKubernetes "k8s.io/client-go/kubernetes"
+	k8sRest "k8s.io/client-go/rest"
+	k8sClientcmd "k8s.io/client-go/tools/clientcmd"
+
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
@@ -302,6 +308,116 @@ func (s *Server) handleCheckNowStream(w http.ResponseWriter, r *http.Request) {
 		"message": fmt.Sprintf("Found %d total open issues across %d repos", totalNew, len(repos)),
 		"total":   totalNew,
 	})
+}
+
+// --- GET /api/job-logs?repo=X&issue=N ---
+
+func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	issueStr := r.URL.Query().Get("issue")
+	if repo == "" || issueStr == "" {
+		http.Error(w, `{"error":"repo and issue required"}`, 400)
+		return
+	}
+
+	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
+	jobName := fmt.Sprintf("opinai-%s-%s", repoSafe, issueStr)
+	namespace := os.Getenv("NAMESPACE")
+	if namespace == "" {
+		namespace = "opinai"
+	}
+
+	sseHeaders(w)
+	writeSSE(w, "progress", map[string]string{"message": "Waiting for pod..."})
+
+	// Get K8s client
+	k8sClient, err := getK8sClient()
+	if err != nil {
+		writeSSE(w, "error", map[string]string{"message": "K8s client unavailable: " + err.Error()})
+		return
+	}
+
+	// Wait for pod to exist (up to 60s)
+	ctx := r.Context()
+	var podName string
+	for i := 0; i < 30; i++ {
+		pods, err := k8sClient.CoreV1().Pods(namespace).List(ctx, k8sMetav1.ListOptions{
+			LabelSelector: "job-name=" + jobName,
+		})
+		if err == nil && len(pods.Items) > 0 {
+			podName = pods.Items[0].Name
+			phase := string(pods.Items[0].Status.Phase)
+			if phase == "Running" || phase == "Succeeded" || phase == "Failed" {
+				break
+			}
+			writeSSE(w, "progress", map[string]string{"message": "Pod " + phase + "..."})
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
+
+	if podName == "" {
+		writeSSE(w, "error", map[string]string{"message": "No pod found for job " + jobName})
+		return
+	}
+
+	writeSSE(w, "progress", map[string]string{"message": "Streaming logs from " + podName + "..."})
+
+	// Stream logs with Follow
+	follow := true
+	logReq := k8sClient.CoreV1().Pods(namespace).GetLogs(podName, &k8sCorev1.PodLogOptions{
+		Follow: follow,
+	})
+	stream, err := logReq.Stream(ctx)
+	if err != nil {
+		writeSSE(w, "error", map[string]string{"message": "Log stream failed: " + err.Error()})
+		return
+	}
+	defer stream.Close()
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := stream.Read(buf)
+		if n > 0 {
+			lines := strings.Split(string(buf[:n]), "\n")
+			for _, line := range lines {
+				if line != "" {
+					writeSSE(w, "log", map[string]string{"line": line})
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	writeSSE(w, "done", map[string]string{"message": "Log stream ended"})
+}
+
+// lazy K8s client for SSE handlers
+var _sseK8sClient k8sKubernetes.Interface
+
+func getK8sClient() (k8sKubernetes.Interface, error) {
+	if _sseK8sClient != nil {
+		return _sseK8sClient, nil
+	}
+	config, err := k8sRest.InClusterConfig()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		config, err = k8sClientcmd.BuildConfigFromFlags("", home+"/.kube/config")
+		if err != nil {
+			return nil, err
+		}
+	}
+	client, err := k8sKubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	_sseK8sClient = client
+	return client, nil
 }
 
 // --- streaming AI helpers ---

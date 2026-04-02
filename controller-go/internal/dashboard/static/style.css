@@ -335,6 +335,21 @@ tr:hover td {
   font-size: 12px;
 }
 
+.live-logs {
+  background: #0d1117;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .expand-content pre {
   background: #161b22;
   border: 1px solid var(--border);

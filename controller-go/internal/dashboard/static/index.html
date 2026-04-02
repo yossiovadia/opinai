@@ -416,10 +416,7 @@ function renderIssues() {
     } else if (isPending) {
       actions += '<button class="btn" disabled><span class="spin">&#x1F504;</span></button>';
     }
-    // Verify Fix button for closed/fixed issues
-    if (r.status === 'Done' && (r.verdict === 'BUG_FIXED' || r.verdict === 'BUG_REGRESSION' || r.verdict === 'NOT_REPRODUCIBLE')) {
-      actions += ' <button class="btn" onclick="event.stopPropagation(); verifyFix(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ')" title="Verify the fix with full deployment">&#x1F50D; Verify Fix</button>';
-    }
+    // Verify Fix merged into Re-run (runner auto-detects closed issues)
 
     html += '<tr class="expandable" onclick="toggleExpand(\'' + rowId + '\')">' +
       '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(r.issue + '') + '</a></td>' +
@@ -433,7 +430,11 @@ function renderIssues() {
       '<td>' + actions + '</td>' +
     '</tr>' +
     '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
-      '<td colspan="9"><div class="expand-content">' + renderMarkdown(expandContent) + '</div></td>' +
+      '<td colspan="9"><div class="expand-content" id="expand-' + rowId + '">' +
+        (isPending
+          ? '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x1F504; Waiting for logs...</span></div>'
+          : renderMarkdown(expandContent)) +
+      '</div></td>' +
     '</tr>';
   });
 
@@ -447,16 +448,64 @@ function renderIssues() {
   });
 }
 
+var _logStreams = {}; // track active log SSE connections by rowId
+
 function toggleExpand(id) {
   var el = document.getElementById(id);
   if (!el) return;
   if (el.style.display === 'none') {
     el.style.display = '';
     expandedRows.add(id);
+    // Start live log stream if this row is re-running
+    var logsEl = document.getElementById('logs-' + id);
+    if (logsEl && !_logStreams[id]) {
+      startLogStream(id, logsEl);
+    }
   } else {
     el.style.display = 'none';
     expandedRows.delete(id);
+    // Stop stream when collapsed
+    if (_logStreams[id]) {
+      _logStreams[id].close();
+      delete _logStreams[id];
+    }
   }
+}
+
+function startLogStream(rowId, logsEl) {
+  // Extract repo+issue from rowId: "issue-owner-repo-42"
+  var parts = rowId.replace('issue-', '').split('-');
+  var issue = parts.pop();
+  var repo = parts.join('-');
+  // Reconstruct owner/repo from dashed form — find it in allRuns
+  var realRepo = '';
+  for (var i = 0; i < allRuns.length; i++) {
+    if (allRuns[i].issue == issue) { realRepo = allRuns[i].repo; break; }
+  }
+  if (!realRepo) return;
+
+  var source = new EventSource(API + '/api/job-logs?repo=' + encodeURIComponent(realRepo) + '&issue=' + issue);
+  _logStreams[rowId] = source;
+
+  source.addEventListener('log', function(e) {
+    var d = JSON.parse(e.data);
+    logsEl.textContent += d.line + '\n';
+    logsEl.scrollTop = logsEl.scrollHeight;
+  });
+  source.addEventListener('progress', function(e) {
+    var d = JSON.parse(e.data);
+    logsEl.textContent += '[' + d.message + ']\n';
+  });
+  source.addEventListener('done', function(e) {
+    source.close();
+    delete _logStreams[rowId];
+    logsEl.textContent += '\n[Stream ended — refreshing results...]\n';
+    setTimeout(loadIssues, 2000);
+  });
+  source.addEventListener('error', function() {
+    source.close();
+    delete _logStreams[rowId];
+  });
 }
 
 // --- Actions ---
@@ -553,24 +602,7 @@ async function rerun(repo, issue, btn) {
   }
 }
 
-async function verifyFix(repo, issue) {
-  try {
-    showToast('Verifying fix for ' + repo + '#' + issue + ' (full deployment)...', 'info');
-    var resp = await fetch(API + '/api/verify-fix', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: repo, issue_number: issue })
-    });
-    var data = await resp.json();
-    if (data.status === 'triggered') {
-      showToast('Verify-fix job created for ' + repo + '#' + issue, 'success');
-      setTimeout(refreshAll, 3000);
-    } else {
-      showToast('Error: ' + (data.error || 'unknown'), 'error');
-    }
-  } catch(e) {
-    showToast('Failed to trigger verify-fix', 'error');
-  }
+// verifyFix merged into rerun — runner auto-detects closed issues
 }
 
 function parseIssueUrl(url) {

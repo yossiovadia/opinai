@@ -242,6 +242,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Get("/api/reproduce-stream", s.handleReproduceStream)
 	r.Post("/api/chat-stream", s.handleChatStream)
 	r.Get("/api/check-now-stream", s.handleCheckNowStream)
+	r.Get("/api/job-logs", s.handleJobLogs)
 
 	// Core API
 	r.Route("/api", func(r chi.Router) {
@@ -252,7 +253,6 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/jobs", s.handleJobs)
 		r.Post("/check-now", s.handleCheckNow)
 		r.Post("/reproduce", s.handleReproduce)
-		r.Post("/verify-fix", s.handleVerifyFix)
 		r.Post("/chat", s.handleChatFull)
 		r.Get("/chat-history", s.handleChatHistory)
 		r.Post("/chat-history/clear", s.handleClearChatHistory)
