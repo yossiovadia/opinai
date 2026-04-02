@@ -220,17 +220,8 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 	repo := strings.Join(parts[:len(parts)-1], "/")
 	issue, _ := strconv.Atoi(parts[len(parts)-1])
 
-	ghToken := os.Getenv("GITHUB_TOKEN")
-	doneLabel := Env("DONE_LABEL", "opinai-done")
-
-	// Remove label
-	url := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d/labels/%s", repo, issue, doneLabel)
-	req2, _ := http.NewRequest("DELETE", url, nil)
-	req2.Header.Set("Accept", "application/vnd.github+json")
-	req2.Header.Set("Authorization", "Bearer "+ghToken)
-	http.DefaultClient.Do(req2)
-
-	// TODO: delete K8s Job (Phase 3)
+	// No GitHub label to remove — tracking is DB-only
+	// TODO: delete K8s Job
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "rerun_triggered",

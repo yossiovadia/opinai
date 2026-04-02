@@ -31,7 +31,6 @@ func NewPoller(state *dashboard.State, jobs *JobManager, interval time.Duration,
 
 // Start begins the polling loop. Blocks forever.
 func (p *Poller) Start() {
-	doneLabel := envOr("DONE_LABEL", "opinai-done")
 	pollCount := 0
 
 	for {
@@ -53,7 +52,7 @@ func (p *Poller) Start() {
 			since := ensureMonitoredSince(repo, stats)
 
 			slog.Info("checking repo for issues", "repo", repo, "since", since)
-			issues, err := FetchOpenIssues(repo, doneLabel, since)
+			issues, err := FetchOpenIssues(repo, since)
 			if err != nil {
 				slog.Error("failed to fetch issues", "repo", repo, "error", err)
 				continue
@@ -173,8 +172,7 @@ func ensureMonitoredSince(repo string, stats database.RepoStats) string {
 // markBacklogProcessed marks all currently-open issues as processed (DB only, no analysis).
 // This prevents the auto-poller from creating Jobs for the entire backlog.
 func markBacklogProcessed(repo string) {
-	doneLabel := envOr("DONE_LABEL", "opinai-done")
-	issues, err := FetchOpenIssues(repo, doneLabel, "")
+	issues, err := FetchOpenIssues(repo, "")
 	if err != nil {
 		return
 	}

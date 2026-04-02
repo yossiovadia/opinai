@@ -364,7 +364,11 @@ func postComment(repo string, issue int, body string) {
 	fmt.Println("--- END SUGGESTED COMMENT ---")
 
 	if !autoPost {
-		slog.Info("auto-post disabled — comment saved for review")
+		if os.Getenv("OPINAI_AUTO_POST") == "" {
+			slog.Info("auto-post is OFF (default safe mode) — comment saved for review, not posted to GitHub")
+		} else {
+			slog.Info("auto-post disabled — comment saved for review")
+		}
 		return
 	}
 
@@ -374,11 +378,7 @@ func postComment(repo string, issue int, body string) {
 }
 
 func addLabel(repo string, issue int) {
-	label := os.Getenv("DONE_LABEL")
-	if label == "" {
-		label = "opinai-done"
-	}
-	controller.AddLabel(repo, issue, label)
+	// No-op: tracking is done via database only, no GitHub labels
 }
 
 func emitRepoMemory(data map[string]string) {

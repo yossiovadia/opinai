@@ -84,9 +84,10 @@ type Issue struct {
 	PullRequest *struct{} `json:"pull_request,omitempty"`
 }
 
-// FetchOpenIssues returns open issues (not PRs) without the done label.
-// If since is non-empty, only returns issues created after that ISO timestamp.
-func FetchOpenIssues(repo, doneLabel, since string) ([]Issue, error) {
+// FetchOpenIssues returns open issues (not PRs).
+// If since is non-empty, only returns issues created/updated after that ISO timestamp.
+// Filtering for "already processed" is done by the caller via database.IsProcessed.
+func FetchOpenIssues(repo, since string) ([]Issue, error) {
 	url := fmt.Sprintf("/repos/%s/issues?state=open&per_page=100&sort=created&direction=desc", repo)
 	if since != "" {
 		url += "&since=" + since
@@ -106,19 +107,7 @@ func FetchOpenIssues(repo, doneLabel, since string) ([]Issue, error) {
 
 	var filtered []Issue
 	for _, issue := range all {
-		// Skip PRs
 		if issue.PullRequest != nil {
-			continue
-		}
-		// Skip issues with done label
-		hasLabel := false
-		for _, lbl := range issue.Labels {
-			if lbl.Name == doneLabel {
-				hasLabel = true
-				break
-			}
-		}
-		if hasLabel {
 			continue
 		}
 		filtered = append(filtered, issue)
