@@ -20,13 +20,25 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
 
+// BroadcastEvent matches dashboard.WSEvent.
+type BroadcastEvent struct {
+	Type string `json:"type"`
+	Data any    `json:"data,omitempty"`
+}
+
+// Broadcaster is the interface for pushing WebSocket events.
+type Broadcaster interface {
+	Broadcast(event BroadcastEvent)
+}
+
 // JobManager handles K8s Job creation and result harvesting.
 type JobManager struct {
 	client    kubernetes.Interface
 	namespace string
 	image     string
-	recorded  map[string]bool // tracks jobs already harvested this session
+	recorded  map[string]bool
 	sandbox   *sandbox.Manager
+	ws        Broadcaster
 }
 
 // NewJobManager creates a new JobManager.
@@ -38,6 +50,18 @@ func NewJobManager(client kubernetes.Interface, namespace, image string) *JobMan
 		recorded:  make(map[string]bool),
 		sandbox:   sandbox.NewManager(client, namespace),
 	}
+}
+
+// SetBroadcaster sets the WebSocket hub for push notifications.
+func (jm *JobManager) SetBroadcaster(b Broadcaster) {
+	jm.ws = b
+}
+
+func (jm *JobManager) broadcast(eventType string, data any) {
+	if jm.ws == nil {
+		return
+	}
+	jm.ws.Broadcast(BroadcastEvent{Type: eventType, Data: data})
 }
 
 // JobName generates the K8s job name for a repo+issue.
@@ -175,6 +199,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	}
 
 	database.MarkProcessed(repo, issueNumber, name)
+	jm.broadcast("job_update", map[string]any{"repo": repo, "issue": issueNumber, "status": "created"})
 	slog.Info("created job", "job", name, "repo", repo, "issue", issueNumber, "title", issueTitle)
 	return nil
 }
@@ -325,6 +350,7 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		AIPowered: true, Duration: duration, Posted: false,
 		Report: report, SuggestedQuestions: suggestedQuestions, CreatedAt: ts,
 	})
+	jm.broadcast("run_update", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
 
 	sbNS := annotations["opinai/sandbox-namespace"]
 	if sbNS != "" && jm.sandbox != nil {

@@ -170,6 +170,7 @@ type Server struct {
 	state     *State
 	router    chi.Router
 	logBuf    *LogBuffer
+	hub       *Hub
 	reproduce ReproduceFunc
 	verifyFix VerifyFixFunc
 	sandbox   SandboxManagerIface
@@ -177,10 +178,13 @@ type Server struct {
 
 // New creates the dashboard server with all routes.
 func New(state *State, logBuf *LogBuffer) *Server {
-	s := &Server{state: state, logBuf: logBuf}
+	s := &Server{state: state, logBuf: logBuf, hub: NewHub()}
 	s.router = s.buildRouter()
 	return s
 }
+
+// GetHub returns the WebSocket hub for broadcasting from external code.
+func (s *Server) GetHub() *Hub { return s.hub }
 
 // SetReproduceCallback sets the function called for /api/reproduce.
 func (s *Server) SetReproduceCallback(fn ReproduceFunc) {
@@ -226,6 +230,9 @@ func (s *Server) buildRouter() chi.Router {
 	// Health
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+
+	// WebSocket
+	r.Get("/ws", s.hub.HandleWS)
 
 	// SSE streaming endpoints (outside jsonContentType middleware)
 	r.Get("/api/admin/analyze-stream", s.handleAnalyzeStream)

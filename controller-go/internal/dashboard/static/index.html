@@ -892,9 +892,69 @@ document.getElementById('chatInput').addEventListener('input', function() {
   this.style.height = Math.min(this.scrollHeight, 100) + 'px';
 });
 
-// Initial load + auto-refresh
+// Initial load
 refreshAll();
-setInterval(refreshAll, REFRESH_INTERVAL);
+
+// WebSocket push — replace polling with real-time updates
+var _ws = null;
+var _wsRetryDelay = 1000;
+
+function connectWebSocket() {
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  _ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+  _ws.onopen = function() {
+    _wsRetryDelay = 1000;
+    document.getElementById('statusDot').className = 'status-dot green';
+  };
+
+  _ws.onmessage = function(e) {
+    try {
+      var msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case 'run_update':
+          loadIssues(); // re-fetch runs + jobs
+          loadRepos();
+          break;
+        case 'job_update':
+          loadIssues();
+          break;
+        case 'repo_update':
+          loadRepos();
+          break;
+        case 'sandbox_update':
+          // admin page handles its own refresh
+          break;
+        case 'chat_update':
+          // refresh chat if viewing this issue
+          if (chatContext.repo === msg.repo && chatContext.issue_number === msg.issue) {
+            // New message from another source — could reload history
+          }
+          break;
+        default:
+          refreshAll();
+      }
+    } catch(err) {}
+  };
+
+  _ws.onclose = function() {
+    document.getElementById('statusDot').className = 'status-dot red';
+    // Reconnect with exponential backoff
+    setTimeout(function() {
+      _wsRetryDelay = Math.min(_wsRetryDelay * 2, 30000);
+      connectWebSocket();
+    }, _wsRetryDelay);
+  };
+
+  _ws.onerror = function() {
+    _ws.close();
+  };
+}
+
+connectWebSocket();
+
+// Fallback: refresh status every 60s in case WebSocket disconnects
+setInterval(loadStatus, 60000);
 </script>
 
 </body>

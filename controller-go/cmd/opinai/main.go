@@ -82,6 +82,11 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 	// Dashboard
 	srv := dashboard.New(state, logBuf)
 
+	// Wire WebSocket hub to job manager for push notifications
+	if jobMgr != nil {
+		jobMgr.SetBroadcaster(&hubAdapter{hub: srv.GetHub()})
+	}
+
 	// Wire sandbox manager
 	if k8sClient != nil {
 		sbMgr := sandbox.NewManager(k8sClient, namespace)
@@ -180,4 +185,13 @@ func (a *sandboxAdapter) TeardownSandbox(ns string) bool {
 
 func (a *sandboxAdapter) AutoCleanup(maxAge int) int {
 	return a.mgr.AutoCleanup(maxAge)
+}
+
+// hubAdapter bridges dashboard.Hub to controller.Broadcaster interface.
+type hubAdapter struct {
+	hub *dashboard.Hub
+}
+
+func (a *hubAdapter) Broadcast(event controller.BroadcastEvent) {
+	a.hub.Broadcast(dashboard.WSEvent{Type: event.Type, Data: event.Data})
 }
