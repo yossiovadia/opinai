@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"time"
+
+	sigYAML "sigs.k8s.io/yaml"
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -190,7 +193,7 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 		var stepErr error
 		switch stepType {
 		case "manifest":
-			stepErr = applyManifest(m.client, ns, content)
+			stepErr = applyManifests(m.client, ns, content)
 		case "wait":
 			timeout := 120
 			if t, ok := step["timeout_seconds"].(float64); ok {
@@ -199,8 +202,15 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 			if !waitForReady(m.client, ns, content, timeout) {
 				stepErr = fmt.Errorf("timeout waiting for %s", content)
 			}
-		case "shell":
-			slog.Info("shell step skipped (not implemented)", "step", i+1, "desc", desc)
+		case "shell", "command":
+			slog.Info("executing command step", "step", i+1, "desc", desc)
+			cmd := exec.Command("sh", "-c", content)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				stepErr = fmt.Errorf("%s: %s", err, string(out))
+			} else {
+				slog.Info("command step output", "output", truncLog(string(out), 200))
+			}
 		}
 
 		if stepErr != nil {
@@ -334,14 +344,82 @@ func (m *Manager) AutoCleanup(maxAge int) int {
 
 // --- manifest helpers ---
 
-func applyManifest(client kubernetes.Interface, ns, yamlContent string) error {
+// applyManifests handles multi-document YAML/JSON content.
+func applyManifests(client kubernetes.Interface, ns, content string) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return fmt.Errorf("empty manifest content")
+	}
+
+	// Split multi-document YAML on "---" separator
+	docs := splitYAMLDocs(content)
+	for i, doc := range docs {
+		doc = strings.TrimSpace(doc)
+		if doc == "" || doc == "---" {
+			continue
+		}
+		if err := applySingleManifest(client, ns, doc); err != nil {
+			return fmt.Errorf("document %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+// splitYAMLDocs splits multi-document YAML on "---" lines.
+func splitYAMLDocs(content string) []string {
+	// If it looks like single JSON object, don't split
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "{") {
+		return []string{content}
+	}
+
+	var docs []string
+	var current strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		if strings.TrimSpace(line) == "---" {
+			if current.Len() > 0 {
+				docs = append(docs, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteString(line)
+		current.WriteString("\n")
+	}
+	if current.Len() > 0 {
+		docs = append(docs, current.String())
+	}
+	if len(docs) == 0 {
+		docs = []string{content}
+	}
+	return docs
+}
+
+// applySingleManifest parses a single YAML or JSON manifest and creates the resource.
+func applySingleManifest(client kubernetes.Interface, ns, content string) error {
+	// Parse content — try JSON first, then YAML
 	var doc map[string]any
-	if err := json.Unmarshal([]byte(yamlContent), &doc); err != nil {
-		// Try as JSON first, could also be YAML but we'd need a yaml parser
-		return fmt.Errorf("invalid manifest: %w", err)
+	content = strings.TrimSpace(content)
+
+	if err := json.Unmarshal([]byte(content), &doc); err != nil {
+		// Try YAML → JSON conversion
+		jsonBytes, yamlErr := sigYAML.YAMLToJSON([]byte(content))
+		if yamlErr != nil {
+			return fmt.Errorf("invalid manifest (not valid JSON or YAML): json=%v, yaml=%v", err, yamlErr)
+		}
+		if err2 := json.Unmarshal(jsonBytes, &doc); err2 != nil {
+			return fmt.Errorf("YAML converted but failed to parse as JSON: %w", err2)
+		}
+	}
+
+	if doc == nil {
+		return nil // empty document
 	}
 
 	kind, _ := doc["kind"].(string)
+	if kind == "" {
+		return fmt.Errorf("manifest missing 'kind' field")
+	}
 	if !AllowedKinds[kind] {
 		return fmt.Errorf("resource kind %q not allowed in sandbox", kind)
 	}
@@ -369,6 +447,11 @@ func applyManifest(client kubernetes.Interface, ns, yamlContent string) error {
 		json.Unmarshal(data, &dep)
 		_, err := client.AppsV1().Deployments(ns).Create(ctx, &dep, metav1.CreateOptions{})
 		return err
+	case "StatefulSet":
+		var sts appsv1.StatefulSet
+		json.Unmarshal(data, &sts)
+		_, err := client.AppsV1().StatefulSets(ns).Create(ctx, &sts, metav1.CreateOptions{})
+		return err
 	case "Service":
 		var svc corev1.Service
 		json.Unmarshal(data, &svc)
@@ -389,9 +472,21 @@ func applyManifest(client kubernetes.Interface, ns, yamlContent string) error {
 		json.Unmarshal(data, &sa)
 		_, err := client.CoreV1().ServiceAccounts(ns).Create(ctx, &sa, metav1.CreateOptions{})
 		return err
+	case "PersistentVolumeClaim":
+		var pvc corev1.PersistentVolumeClaim
+		json.Unmarshal(data, &pvc)
+		_, err := client.CoreV1().PersistentVolumeClaims(ns).Create(ctx, &pvc, metav1.CreateOptions{})
+		return err
 	default:
-		return fmt.Errorf("kind %s not yet supported for apply", kind)
+		return fmt.Errorf("kind %q not yet supported for apply", kind)
 	}
+}
+
+func truncLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func waitForReady(client kubernetes.Interface, ns, resourceRef string, timeout int) bool {
