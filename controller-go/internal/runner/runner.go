@@ -257,57 +257,70 @@ func startServer() (*os.Process, string) {
 	// Analyze README on first run
 	analyzeReadme(cloneDir)
 
-	// Apply learned fixes from previous runs
-	env := buildEnv()
+	// Install: use saved working command if available, otherwise profile command as-is
 	if buildCmd != "" {
-		buildCmd, env = applyLearnedFixes(buildCmd, env)
-	}
+		installCmd := buildCmd
+		// Check if we already know a working install command for this repo
+		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+		if idx := strings.Index(repoCtx, "working_install_command:"); idx >= 0 {
+			line := repoCtx[idx:]
+			if nl := strings.Index(line, "\n"); nl > 0 {
+				line = line[:nl]
+			}
+			parts := strings.SplitN(line, ": ", 2)
+			if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+				installCmd = strings.TrimSpace(parts[1])
+				slog.Info("using saved working install command", "cmd", installCmd)
+			}
+		}
 
-	// Build with self-healing retries
-	var buildRetry RetryResult
-	if buildCmd != "" {
-		resolved := strings.ReplaceAll(buildCmd, "pip install", "python3 -m pip install --user")
-		slog.Info("installing", "cmd", resolved)
-		var err error
-		_, buildRetry, err = runWithRetry(resolved, cloneDir, buildEnv())
+		slog.Info("installing", "cmd", installCmd)
+		out, err := runCmd2(installCmd, cloneDir)
 		if err != nil {
-			slog.Warn("build failed after retries", "error", err, "retries", buildRetry.Retries)
-			// Continue anyway — the AI tests may still be useful
-		} else if buildRetry.Retries > 0 {
-			slog.Info("build succeeded after retries", "retries", buildRetry.Retries, "fixes", buildRetry.FixesApplied)
+			slog.Warn("install failed, asking AI for fix", "error", err)
+			fixedCmd := askAIForFix(installCmd, out)
+			if fixedCmd != "" && fixedCmd != installCmd {
+				slog.Info("trying AI-suggested install command", "cmd", fixedCmd)
+				out2, err2 := runCmd2(fixedCmd, cloneDir)
+				if err2 == nil {
+					slog.Info("AI fix worked — saving for future runs")
+					emitRepoMemory(map[string]string{"working_install_command": fixedCmd})
+					setupRetryInfo = "AI fixed install: " + truncStr(fixedCmd, 80)
+				} else {
+					slog.Warn("AI fix also failed", "error", err2, "output", truncStr(out2, 200))
+				}
+			}
+		} else {
+			// Original command worked — save it if not already saved
+			if !strings.Contains(repoCtx, "working_install_command:") {
+				emitRepoMemory(map[string]string{"working_install_command": installCmd})
+			}
 		}
 	}
-	// Store retry info for report + save learned fixes
-	setupRetryInfo = formatRetryInfo(buildRetry)
-	emitLearnedFixes(buildRetry)
 
 	if runCmd == "" {
 		return nil, ""
 	}
 
-	// Start server with retry on initial failures
+	// Start server
 	slog.Info("starting server", "cmd", runCmd)
 	cmd = exec.Command("sh", "-c", runCmd)
 	cmd.Dir = cloneDir
-	cmd.Env = buildEnv()
 	if err := cmd.Start(); err != nil {
-		// Try common fixes for server start
-		slog.Warn("server start failed, attempting fix", "error", err)
-		fixedCmd := runCmd
-		if strings.Contains(err.Error(), "not found") {
-			fixedCmd = "export PATH=/tmp/pip-user/bin:$PATH && " + runCmd
-		}
-		cmd = exec.Command("sh", "-c", fixedCmd)
-		cmd.Dir = cloneDir
-		cmd.Env = buildEnv()
-		if err2 := cmd.Start(); err2 != nil {
-			slog.Warn("server start failed after fix", "error", err2)
+		slog.Warn("server start failed, asking AI for fix", "error", err)
+		fixedCmd := askAIForFix(runCmd, err.Error())
+		if fixedCmd != "" {
+			cmd = exec.Command("sh", "-c", fixedCmd)
+			cmd.Dir = cloneDir
+			if err2 := cmd.Start(); err2 != nil {
+				slog.Warn("server start still failed", "error", err2)
+				return nil, ""
+			}
+			emitRepoMemory(map[string]string{"working_run_command": fixedCmd})
+			setupRetryInfo += "AI fixed server start"
+		} else {
 			return nil, ""
 		}
-		if setupRetryInfo != "" {
-			setupRetryInfo += "; "
-		}
-		setupRetryInfo += "fixed server start command (PATH)"
 	}
 
 	// Derive server URL
@@ -346,7 +359,7 @@ func runTests(script string) string {
 	defer os.Remove(tmpFile)
 
 	cmd := exec.Command("/bin/bash", tmpFile)
-	cmd.Env = buildEnv()
+	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 	if err != nil {
@@ -506,17 +519,12 @@ func parseResultsTable(output string) string {
 	return table
 }
 
-func buildEnv() []string {
-	env := os.Environ()
-	// Ensure pip user bin is on PATH
-	env = append(env, "PYTHONUSERBASE=/tmp/pip-user")
-	for i, kv := range env {
-		if strings.HasPrefix(kv, "PATH=") {
-			env[i] = "PATH=/tmp/pip-user/bin:/usr/local/bin:/root/.local/bin:" + kv[5:]
-			break
-		}
-	}
-	return env
+// runCmd2 executes a shell command and returns combined output and error.
+func runCmd2(command, workDir string) (string, error) {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func atoi(s string) int {
