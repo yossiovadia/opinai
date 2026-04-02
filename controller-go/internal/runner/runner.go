@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -155,6 +156,28 @@ func Run() {
 				"Current start command: %s\n"+
 				"Server binary directory: /tmp/opinai-repo\n"+
 				"Environment: PYTHONUSERBASE=/tmp/pip-user HOME=/tmp/home\n", runCommand)
+	}
+
+	// Determine test strategy from analysis
+	repoMemCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+	testStrategy := extractMemoryValue(repoMemCtx, "test_strategy")
+	needsCluster := extractMemoryValue(repoMemCtx, "needs_cluster")
+	sandboxNS2 := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
+
+	if needsCluster == "true" && sandboxNS2 == "" && serverURL == "" {
+		// K8s project with no sandbox and no running server — fall back to code review
+		if testStrategy == "" || testStrategy == "deploy-and-curl" {
+			testStrategy = "code-review"
+		}
+		repoCtx += "\n\nThis project requires Kubernetes but no cluster deployment is available. " +
+			"Use a CODE REVIEW strategy: analyze the source code to determine if the reported bug exists. " +
+			"Check the relevant source files, look for the described behavior, and give your verdict " +
+			"based on code analysis rather than runtime testing.\n" +
+			"The project source is at: /tmp/opinai-repo\n" +
+			"You can use: find, grep, cat to examine the code.\n"
+	}
+	if testStrategy != "" && testStrategy != "code-review" {
+		repoCtx += fmt.Sprintf("\n\nRecommended test strategy: %s\n", testStrategy)
 	}
 
 	script, err := ai.GenerateTests(title, body, serverURL, profileCtx, repoCtx)
@@ -526,33 +549,92 @@ func analyzeReadme(cloneDir string) map[string]string {
 		readme = readme[:3000]
 	}
 
-	// Read dependency files for install analysis
+	// Read dependency files
 	depsInfo := ""
-	for _, depFile := range []string{"pyproject.toml", "setup.py", "requirements.txt", "setup.cfg", "go.mod", "package.json"} {
-		depData, err := os.ReadFile(cloneDir + "/" + depFile)
+	for _, depFile := range []string{
+		"pyproject.toml", "setup.py", "requirements.txt", "setup.cfg",
+		"go.mod", "package.json", "Cargo.toml", "Gemfile",
+	} {
+		depData, err := os.ReadFile(filepath.Join(cloneDir, depFile))
 		if err == nil {
-			content := string(depData)
-			if len(content) > 1500 {
-				content = content[:1500]
+			c := string(depData)
+			if len(c) > 1500 {
+				c = c[:1500]
 			}
-			depsInfo += fmt.Sprintf("\n--- %s ---\n%s\n", depFile, content)
+			depsInfo += fmt.Sprintf("\n--- %s ---\n%s\n", depFile, c)
 		}
 	}
 
-	slog.Info("analyzing README + deps for first-time knowledge")
+	// Scan for deployment/infrastructure indicators
+	deployIndicators := []string{
+		"Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+		"Makefile", "Taskfile.yml",
+		"kustomization.yaml", "kustomization.yml",
+		"deployment/kustomization.yaml", "deploy/kustomization.yaml",
+		"config/manager/kustomization.yaml",
+		"helm/Chart.yaml", "charts/Chart.yaml", "chart/Chart.yaml",
+		"scripts/deploy.sh", "scripts/install.sh", "deploy.sh",
+		"config/crd", "config/rbac", "config/samples",
+		"bundle/manifests", "operator.yaml",
+		"skaffold.yaml", "tilt_config.json",
+	}
+	var foundIndicators []string
+	for _, ind := range deployIndicators {
+		target := filepath.Join(cloneDir, ind)
+		if info, err := os.Stat(target); err == nil {
+			kind := "file"
+			if info.IsDir() {
+				kind = "dir"
+			}
+			foundIndicators = append(foundIndicators, ind+" ("+kind+")")
+		}
+	}
+
+	// Read key deployment files content (first 1000 chars each)
+	deployFileContents := ""
+	for _, df := range []string{
+		"Makefile", "Dockerfile", "kustomization.yaml",
+		"deployment/kustomization.yaml", "config/manager/kustomization.yaml",
+	} {
+		dfData, err := os.ReadFile(filepath.Join(cloneDir, df))
+		if err == nil {
+			c := string(dfData)
+			if len(c) > 1000 {
+				c = c[:1000]
+			}
+			deployFileContents += fmt.Sprintf("\n--- %s ---\n%s\n", df, c)
+		}
+	}
+
+	indicatorsStr := "none found"
+	if len(foundIndicators) > 0 {
+		indicatorsStr = strings.Join(foundIndicators, ", ")
+	}
+
+	slog.Info("analyzing project", "repo", os.Getenv("REPO"), "deploy_indicators", len(foundIndicators))
 	prompt := fmt.Sprintf(
-		"Analyze this project from %s.\n\nREADME:\n%s\n\nDependency files:%s\n\n"+
+		"Analyze this project from %s.\n\nREADME:\n%s\n\n"+
+			"Dependency files:%s\n\n"+
+			"Deployment/infrastructure files found: %s\n\n"+
+			"Deployment file contents:%s\n\n"+
 			"Provide a JSON summary (no markdown fences, just raw JSON):\n"+
 			"{\n"+
 			"  \"description\": \"what this project does in 1-2 sentences\",\n"+
 			"  \"tech_stack\": \"languages and frameworks\",\n"+
-			"  \"how_to_test\": \"how to test bugs in this project\",\n"+
-			"  \"deployment_needs\": \"infrastructure needed\",\n"+
-			"  \"install_command\": \"the MINIMAL shell command to install this for API testing in a rootless container with 512Mi RAM, no GPU. "+
-			"Use --user --break-system-packages for pip. Use --no-deps if heavy deps (torch, tensorflow, vllm) "+
-			"are listed but not needed for echo/test mode. Example: pip install --user --no-deps myapp && pip install --user fastapi uvicorn\"\n"+
-			"}",
-		os.Getenv("REPO"), readme, depsInfo,
+			"  \"deployment_type\": \"kustomize|helm|docker|script|pip|go|npm|operator|none — based on what you found\",\n"+
+			"  \"deployment_command\": \"the command to deploy this for testing (e.g. kustomize build deployment/overlays/test | kubectl apply -f -)\",\n"+
+			"  \"needs_cluster\": \"true if this requires Kubernetes/OpenShift to run, false if it can run as a local process\",\n"+
+			"  \"test_strategy\": \"deploy-and-curl (deploy then test API) | start-and-curl (pip install then test) | code-review (analyze code without running) | unit-test (run existing tests)\",\n"+
+			"  \"how_to_test\": \"specific steps to test bugs in this project\",\n"+
+			"  \"deployment_needs\": \"infrastructure needed (CRDs, operators, databases, etc)\",\n"+
+			"  \"install_command\": \"MINIMAL shell command to install for testing in a rootless container with 512Mi RAM, no GPU. "+
+			"Use --user --break-system-packages for pip. Use --no-deps if heavy deps exist but aren't needed for testing. "+
+			"If this is a K8s operator/controller, the install_command should be empty (deployment_command handles it instead).\"\n"+
+			"}\n\n"+
+			"IMPORTANT: Determine deployment_type and needs_cluster from the actual files found, not assumptions. "+
+			"If you see kustomization.yaml or helm Chart.yaml, it's a K8s project. "+
+			"If you see only setup.py/pyproject.toml with no K8s files, it's a pip project.",
+		os.Getenv("REPO"), readme, depsInfo, indicatorsStr, deployFileContents,
 	)
 	content, err := ai.Call(prompt, 1500)
 	if err != nil || content == "" {
