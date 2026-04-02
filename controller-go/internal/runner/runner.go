@@ -497,13 +497,13 @@ func loadProfileContext() string {
 		profile["type"], profile["build"], profile["run"], profile["health"], gpu, k8s, profile["deps"])
 }
 
-func analyzeReadme(cloneDir string) {
+func analyzeReadme(cloneDir string) map[string]string {
 	if os.Getenv("OPINAI_HAS_KNOWLEDGE") == "true" {
-		return
+		return nil
 	}
 	cfg := ai.LoadConfig()
 	if !cfg.Available() {
-		return
+		return nil
 	}
 
 	// Read README
@@ -513,7 +513,7 @@ func analyzeReadme(cloneDir string) {
 		readmePath = cloneDir + "/readme.md"
 		data, err = os.ReadFile(readmePath)
 		if err != nil {
-			return
+			return nil
 		}
 	}
 	readme := string(data)
@@ -551,7 +551,7 @@ func analyzeReadme(cloneDir string) {
 	)
 	content, err := ai.Call(prompt, 1500)
 	if err != nil || content == "" {
-		return
+		return nil
 	}
 	// Strip fences
 	content = strings.TrimSpace(content)
@@ -571,9 +571,10 @@ func analyzeReadme(cloneDir string) {
 		if cmd, ok := result["install_command"]; ok && cmd != "" {
 			slog.Info("AI generated install command from analysis", "cmd", cmd)
 		}
-	} else {
-		emitRepoMemory(map[string]string{"description": truncStr(content, 500)})
+		return result
 	}
+	emitRepoMemory(map[string]string{"description": truncStr(content, 500)})
+	return nil
 }
 
 func parseResultsTable(output string) string {
