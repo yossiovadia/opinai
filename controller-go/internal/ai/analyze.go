@@ -41,7 +41,12 @@ func AnalyzeDeployment(repo, readme string, files map[string]string, clusterStat
 			"Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with "+
 			"an \"options\" array. Each option: id, name, description, estimated_time, best_for, "+
 			"steps (array of {type, content, required, description}), requirements, risks, recommended (bool).\n"+
-			"Also include: project_type, detected_deployment_method, dependencies.",
+			"Also include at the top level:\n"+
+			"- project_type, detected_deployment_method, dependencies\n"+
+			"- install_command: the exact shell command to install/build this project for testing "+
+			"(e.g. \"pip install --user llm-katan\" or \"go build ./cmd/server\")\n"+
+			"- install_notes: any special flags needed (e.g. \"use --no-deps to skip GPU deps in echo mode\")\n"+
+			"- resource_requirements: {\"cpu\": \"200m\", \"memory\": \"512Mi\"} — resources needed by the runner pod",
 		repo, profileJSON, readme, filesSummary, crds, operators, namespaces,
 	)
 

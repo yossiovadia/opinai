@@ -275,14 +275,21 @@ func startServer() (*os.Process, string) {
 	// Set up writable container environment BEFORE any commands
 	setupContainerEnv()
 
-	// Install: use saved working command if available, otherwise profile command as-is
-	if buildCmd != "" {
+	// Install: priority order: saved working command > OPINAI_INSTALL_COMMAND > profile build command
+	{
 		installCmd := buildCmd
+		// 1. Check deployment-plan install command (from AI analysis)
+		if planCmd := os.Getenv("OPINAI_INSTALL_COMMAND"); planCmd != "" {
+			installCmd = planCmd
+			slog.Info("using deployment plan install command", "cmd", installCmd)
+		}
+		// 2. Check saved working command from previous successful run (highest priority)
 		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
 		if saved := extractMemoryValue(repoCtx, "working_install_command"); saved != "" {
 			installCmd = saved
 			slog.Info("using saved working install command", "cmd", installCmd)
 		}
+		if installCmd != "" {
 
 		slog.Info("installing", "cmd", installCmd)
 		out, err := runInEnv(installCmd, cloneDir)
@@ -302,6 +309,7 @@ func startServer() (*os.Process, string) {
 			}
 		} else if !strings.Contains(repoCtx, "working_install_command:") {
 			emitRepoMemory(map[string]string{"working_install_command": installCmd})
+		}
 		}
 	}
 

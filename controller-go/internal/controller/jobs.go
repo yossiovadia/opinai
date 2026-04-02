@@ -134,6 +134,9 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	// Check if repo needs K8s sandbox deployment
 	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
+	// Extract install command and resource requirements from deployment plan
+	installCommand, cpuReq, memReq, cpuLim, memLim := extractPlanResources(deploymentPlanJSON)
+
 	// Build env vars list
 	env := []corev1.EnvVar{
 		{Name: "REPO", Value: repo},
@@ -142,6 +145,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		{Name: "OPINAI_VERIFY_FIX", Value: os.Getenv("_OPINAI_VERIFY_FIX_PENDING")},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
 		{Name: "OPINAI_HAS_KNOWLEDGE", Value: hasKnowledge},
+		{Name: "OPINAI_INSTALL_COMMAND", Value: installCommand},
 		{Name: "OPINAI_SANDBOX_NAMESPACE", Value: sandboxNS},
 		{Name: "OPINAI_SANDBOX_ENDPOINTS", Value: sandboxEndpointsJSON},
 		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
@@ -213,12 +217,12 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    mustParseQuantity("100m"),
-									corev1.ResourceMemory: mustParseQuantity("256Mi"),
+									corev1.ResourceCPU:    mustParseQuantity(cpuReq),
+									corev1.ResourceMemory: mustParseQuantity(memReq),
 								},
 								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    mustParseQuantity("500m"),
-									corev1.ResourceMemory: mustParseQuantity("512Mi"),
+									corev1.ResourceCPU:    mustParseQuantity(cpuLim),
+									corev1.ResourceMemory: mustParseQuantity(memLim),
 								},
 							},
 						},
@@ -517,6 +521,45 @@ func orderOptions(repo string, options []struct {
 		}
 	}
 	return append(first, rest...)
+}
+
+// extractPlanResources reads install_command and resource_requirements from a deployment plan.
+// Returns (installCmd, cpuReq, memReq, cpuLim, memLim) with sensible defaults.
+func extractPlanResources(planJSON string) (string, string, string, string, string) {
+	// Defaults
+	installCmd := ""
+	cpuReq := "200m"
+	memReq := "512Mi"
+	cpuLim := "500m"
+	memLim := "1Gi"
+
+	if planJSON == "" {
+		return installCmd, cpuReq, memReq, cpuLim, memLim
+	}
+
+	var plan struct {
+		InstallCommand       string         `json:"install_command"`
+		ResourceRequirements map[string]string `json:"resource_requirements"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		return installCmd, cpuReq, memReq, cpuLim, memLim
+	}
+
+	if plan.InstallCommand != "" {
+		installCmd = plan.InstallCommand
+	}
+	if plan.ResourceRequirements != nil {
+		if v := plan.ResourceRequirements["cpu"]; v != "" {
+			cpuReq = v
+		}
+		if v := plan.ResourceRequirements["memory"]; v != "" {
+			memReq = v
+			// Set limit to 2x request
+			memLim = v
+		}
+	}
+
+	return installCmd, cpuReq, memReq, cpuLim, memLim
 }
 
 func loadRepoProfileForJob(repo string) map[string]any {
