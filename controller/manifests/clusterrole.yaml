@@ -4,26 +4,71 @@ metadata:
   name: opinai-sandbox-manager
 rules:
   # Namespace lifecycle for sandbox namespaces
-  # (opinai-sandbox- prefix enforced in code)
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["create", "get", "list", "watch", "delete"]
-  # Full resource management within sandbox namespaces
+  # Full resource management within namespaces
   - apiGroups: [""]
     resources: ["pods", "pods/log", "pods/exec", "services", "configmaps",
                 "secrets", "serviceaccounts", "resourcequotas",
                 "persistentvolumeclaims"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "replicasets"]
+    resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
+    resources: ["networkpolicies", "ingresses"]
     verbs: ["create", "get", "list", "watch", "delete"]
-  # Read-only cluster discovery
+  # CRDs — create/apply for deploying apps that need their own CRDs
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
-    verbs: ["list"]
+    verbs: ["create", "get", "list", "watch", "update", "patch"]
+  # Operators — install/manage for full deployment
   - apiGroups: ["operators.coreos.com"]
-    resources: ["clusterserviceversions"]
-    verbs: ["list"]
+    resources: ["clusterserviceversions", "subscriptions", "installplans",
+                "catalogsources", "operatorgroups"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Batch — Jobs for reproduction
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # RBAC — create roles in sandbox namespaces
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Routes — OpenShift
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Gateway API
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes", "grpcroutes"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Istio / Service Mesh
+  - apiGroups: ["networking.istio.io"]
+    resources: ["envoyfilters", "virtualservices", "destinationrules"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Kuadrant / Authorino
+  - apiGroups: ["authorino.kuadrant.io", "kuadrant.io"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # KServe
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Knative
+  - apiGroups: ["serving.knative.dev"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # MaaS custom resources
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Monitoring
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors", "prometheusrules"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Autoscaling
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
