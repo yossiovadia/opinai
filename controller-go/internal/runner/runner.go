@@ -275,56 +275,77 @@ func startServer() (*os.Process, string) {
 	// Set up writable container environment BEFORE any commands
 	setupContainerEnv()
 
-	// Install: priority order:
-	// 1. working_install_command (proven to work from previous run)
-	// 2. install_command (from AI README analysis)
-	// 3. OPINAI_INSTALL_COMMAND env var (from deployment plan)
-	// 4. profile build command
-	// 5. AI generates on-the-spot if nothing else exists
+	// Install chain:
+	// 1. Resolve command: working > analyzed > env > profile
+	// 2. Try it
+	// 3. If fails: AI self-heal fix
+	// 4. If self-heal fails: generateInstallCommand (reads repo files, asks AI for minimal)
+	// 5. If that works: save as working_install_command
 	{
 		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
 		installCmd := buildCmd
 
-		// 4→3: env var overrides profile
 		if planCmd := os.Getenv("OPINAI_INSTALL_COMMAND"); planCmd != "" {
 			installCmd = planCmd
 			slog.Info("using deployment plan install command", "cmd", installCmd)
 		}
-		// 3→2: AI-analyzed install from repo memory
 		if analyzed := extractMemoryValue(repoCtx, "install_command"); analyzed != "" {
 			installCmd = analyzed
 			slog.Info("using AI-analyzed install command", "cmd", installCmd)
 		}
-		// 2→1: previously proven working command (highest priority)
 		if saved := extractMemoryValue(repoCtx, "working_install_command"); saved != "" {
 			installCmd = saved
 			slog.Info("using saved working install command", "cmd", installCmd)
 		}
-		// 5: if still empty, ask AI to generate one on the spot
-		if installCmd == "" {
-			installCmd = generateInstallCommand(cloneDir)
-		}
-		if installCmd != "" {
 
-		slog.Info("installing", "cmd", installCmd)
-		out, err := runInEnv(installCmd, cloneDir)
-		if err != nil {
-			slog.Warn("install failed, asking AI for fix", "error", err)
-			fixedCmd := askAIForFix(installCmd, out)
-			if fixedCmd != "" && fixedCmd != installCmd {
-				slog.Info("trying AI-suggested install command", "cmd", fixedCmd)
-				out2, err2 := runInEnv(fixedCmd, cloneDir)
-				if err2 == nil {
-					slog.Info("AI fix worked — saving for future runs")
-					emitRepoMemory(map[string]string{"working_install_command": fixedCmd})
-					setupRetryInfo = "AI fixed install: " + truncStr(fixedCmd, 80)
+		if installCmd != "" {
+			slog.Info("installing", "cmd", installCmd)
+			out, err := runInEnv(installCmd, cloneDir)
+			if err != nil {
+				slog.Warn("install failed, trying AI self-heal", "error", err)
+
+				// Step 3: AI self-heal
+				fixedCmd := askAIForFix(installCmd, out)
+				if fixedCmd != "" && fixedCmd != installCmd {
+					slog.Info("trying AI-suggested fix", "cmd", fixedCmd)
+					_, err2 := runInEnv(fixedCmd, cloneDir)
+					if err2 == nil {
+						slog.Info("AI fix worked — saving")
+						emitRepoMemory(map[string]string{"working_install_command": fixedCmd})
+						setupRetryInfo = "AI fixed install: " + truncStr(fixedCmd, 80)
+					} else {
+						slog.Warn("AI fix also failed, trying fresh generation", "error", err2)
+
+						// Step 4: generate from scratch by reading repo files
+						freshCmd := generateInstallCommand(cloneDir)
+						if freshCmd != "" && freshCmd != installCmd && freshCmd != fixedCmd {
+							slog.Info("trying AI-generated fresh install", "cmd", freshCmd)
+							_, err3 := runInEnv(freshCmd, cloneDir)
+							if err3 == nil {
+								slog.Info("fresh install worked — saving")
+								emitRepoMemory(map[string]string{"working_install_command": freshCmd})
+								setupRetryInfo = "AI generated install: " + truncStr(freshCmd, 80)
+							} else {
+								slog.Warn("all install attempts failed", "error", err3)
+							}
+						}
+					}
 				} else {
-					slog.Warn("AI fix also failed", "error", err2, "output", truncStr(out2, 200))
+					// No self-heal suggestion — try fresh generation directly
+					freshCmd := generateInstallCommand(cloneDir)
+					if freshCmd != "" && freshCmd != installCmd {
+						slog.Info("trying AI-generated fresh install", "cmd", freshCmd)
+						_, err3 := runInEnv(freshCmd, cloneDir)
+						if err3 == nil {
+							slog.Info("fresh install worked — saving")
+							emitRepoMemory(map[string]string{"working_install_command": freshCmd})
+							setupRetryInfo = "AI generated install: " + truncStr(freshCmd, 80)
+						}
+					}
 				}
+			} else if !strings.Contains(repoCtx, "working_install_command:") {
+				emitRepoMemory(map[string]string{"working_install_command": installCmd})
 			}
-		} else if !strings.Contains(repoCtx, "working_install_command:") {
-			emitRepoMemory(map[string]string{"working_install_command": installCmd})
-		}
 		}
 	}
 
