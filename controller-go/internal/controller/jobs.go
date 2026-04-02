@@ -190,105 +190,10 @@ func (jm *JobManager) HarvestCompletedJobs() {
 		return
 	}
 
-	for _, job := range jobs.Items {
-		name := job.Name
-		finished := job.Status.Succeeded > 0 || job.Status.Failed > 0
-		if !finished {
-			continue
-		}
-		if jm.recorded[name] {
-			continue
-		}
-		jm.recorded[name] = true
-
-		annotations := job.Annotations
-		if annotations == nil {
-			annotations = map[string]string{}
-		}
-		labels := job.Labels
-		if labels == nil {
-			labels = map[string]string{}
-		}
-
-		repo := annotations["opinai/repo-full"]
-		if repo == "" {
-			repo = labels["opinai/repo"]
-		}
-		issueStr := labels["opinai/issue"]
-		title := annotations["opinai/title"]
-
-		succeeded := job.Status.Succeeded > 0
-		if succeeded {
-			slog.Info("job succeeded", "job", name)
-		} else {
-			slog.Warn("job failed", "job", name)
-		}
-
-		// Compute duration
-		duration := ""
-		if job.Status.StartTime != nil && job.Status.CompletionTime != nil {
-			delta := job.Status.CompletionTime.Sub(job.Status.StartTime.Time)
-			secs := int(delta.Seconds())
-			if secs >= 60 {
-				duration = fmt.Sprintf("%dm %ds", secs/60, secs%60)
-			} else {
-				duration = fmt.Sprintf("%ds", secs)
-			}
-		}
-
-		// Read pod logs
-		podLogs := jm.readPodLogs(ctx, name)
-
-		// Parse markers
-		category := parseMarker(podLogs, "--- OPINAI CATEGORY:", "BUG")
-		confidence := parseMarker(podLogs, "--- OPINAI CONFIDENCE:", "")
-		verdict := parseVerdictMarker(podLogs, category)
-		suggestedComment := extractBlock(podLogs, "--- OPINAI SUGGESTED COMMENT ---", "--- END SUGGESTED COMMENT ---")
-
-		// Parse and store repo memory
-		storeRepoMemory(repo, podLogs)
-
-		// Determine issue number
-		issue := 0
-		fmt.Sscanf(issueStr, "%d", &issue)
-
-		// Timestamp
-		ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-		if job.Status.CompletionTime != nil {
-			ts = job.Status.CompletionTime.Format("2006-01-02T15:04:05Z")
-		}
-
-		// Report: prefer suggested comment, fall back to last 3000 chars of logs
-		report := suggestedComment
-		if report == "" && len(podLogs) > 3000 {
-			report = podLogs[len(podLogs)-3000:]
-		} else if report == "" {
-			report = podLogs
-		}
-		if report == "" {
-			report = "(no logs)"
-		}
-
-		database.AddRun(database.Run{
-			Repo:       repo,
-			Issue:      issue,
-			Title:      title,
-			Verdict:    verdict,
-			Category:   category,
-			Confidence: confidence,
-			AIPowered:  true,
-			Duration:   duration,
-			Posted:     false,
-			Report:     report,
-			CreatedAt:  ts,
-		})
-
-		// Teardown sandbox if one was used
-		sbNS := annotations["opinai/sandbox-namespace"]
-		if sbNS != "" && jm.sandbox != nil {
-			if jm.sandbox.TeardownSandbox(sbNS) {
-				slog.Info("torn down sandbox after job", "namespace", sbNS, "job", name)
-			}
+	for i := range jobs.Items {
+		job := &jobs.Items[i]
+		if job.Status.Succeeded > 0 || job.Status.Failed > 0 {
+			jm.harvestSingleJob(job)
 		}
 	}
 }
@@ -313,14 +218,128 @@ func (jm *JobManager) CreateVerifyFixJob(repo string, issueNumber int, issueTitl
 	return jm.CreateReproductionJob(repo, issueNumber, issueTitle)
 }
 
+// StartWatcher watches K8s Jobs for real-time result harvesting.
+func (jm *JobManager) StartWatcher() {
+	slog.Info("job watcher started", "namespace", jm.namespace)
+	for {
+		jm.runWatch()
+		slog.Warn("job watch disconnected — reconnecting in 5s")
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func (jm *JobManager) runWatch() {
+	ctx := context.Background()
+	watcher, err := jm.client.BatchV1().Jobs(jm.namespace).Watch(ctx, metav1.ListOptions{
+		LabelSelector: "app=opinai-runner",
+	})
+	if err != nil {
+		slog.Error("failed to start job watch", "error", err)
+		return
+	}
+	defer watcher.Stop()
+
+	for event := range watcher.ResultChan() {
+		job, ok := event.Object.(*batchv1.Job)
+		if !ok {
+			continue
+		}
+		finished := job.Status.Succeeded > 0 || job.Status.Failed > 0
+		if !finished || jm.recorded[job.Name] {
+			continue
+		}
+		slog.Info("watcher: job finished", "job", job.Name)
+		jm.harvestSingleJob(job)
+	}
+}
+
+// harvestSingleJob extracts results from a single completed job.
+func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
+	name := job.Name
+	if jm.recorded[name] {
+		return
+	}
+	jm.recorded[name] = true
+
+	annotations := job.Annotations
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	labels := job.Labels
+	if labels == nil {
+		labels = map[string]string{}
+	}
+
+	repo := annotations["opinai/repo-full"]
+	if repo == "" {
+		repo = labels["opinai/repo"]
+	}
+	issueStr := labels["opinai/issue"]
+	title := annotations["opinai/title"]
+
+	if job.Status.Succeeded > 0 {
+		slog.Info("job succeeded", "job", name)
+	} else {
+		slog.Warn("job failed", "job", name)
+	}
+
+	duration := ""
+	if job.Status.StartTime != nil && job.Status.CompletionTime != nil {
+		delta := job.Status.CompletionTime.Sub(job.Status.StartTime.Time)
+		secs := int(delta.Seconds())
+		if secs >= 60 {
+			duration = fmt.Sprintf("%dm %ds", secs/60, secs%60)
+		} else {
+			duration = fmt.Sprintf("%ds", secs)
+		}
+	}
+
+	podLogs := jm.readPodLogs(context.Background(), name)
+	category := parseMarker(podLogs, "--- OPINAI CATEGORY:", "BUG")
+	confidence := parseMarker(podLogs, "--- OPINAI CONFIDENCE:", "")
+	verdict := parseVerdictMarker(podLogs, category)
+	suggestedComment := extractBlock(podLogs, "--- OPINAI SUGGESTED COMMENT ---", "--- END SUGGESTED COMMENT ---")
+	storeRepoMemory(repo, podLogs)
+
+	issue := 0
+	fmt.Sscanf(issueStr, "%d", &issue)
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	if job.Status.CompletionTime != nil {
+		ts = job.Status.CompletionTime.Format("2006-01-02T15:04:05Z")
+	}
+
+	report := suggestedComment
+	if report == "" && len(podLogs) > 3000 {
+		report = podLogs[len(podLogs)-3000:]
+	} else if report == "" {
+		report = podLogs
+	}
+	if report == "" {
+		report = "(no logs)"
+	}
+
+	database.AddRun(database.Run{
+		Repo: repo, Issue: issue, Title: title,
+		Verdict: verdict, Category: category, Confidence: confidence,
+		AIPowered: true, Duration: duration, Posted: false,
+		Report: report, CreatedAt: ts,
+	})
+
+	sbNS := annotations["opinai/sandbox-namespace"]
+	if sbNS != "" && jm.sandbox != nil {
+		if jm.sandbox.TeardownSandbox(sbNS) {
+			slog.Info("torn down sandbox after job", "namespace", sbNS, "job", name)
+		}
+	}
+}
+
 // trySandboxDeploy checks if the repo needs K8s sandbox deployment and creates one if so.
-// Returns (sandboxNS, endpointsJSON, planJSON). On failure, returns empty strings (fallback to code analysis).
+// Tries multiple deployment options if the first fails.
 func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle string) (string, string, string) {
 	if jm.sandbox == nil {
 		return "", "", ""
 	}
 
-	// Check repo profile for k8s=true
 	profile := loadRepoProfileForJob(repo)
 	isK8s := false
 	if profile != nil {
@@ -329,7 +348,6 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		}
 	}
 
-	// Get deployment plan from DB
 	plan, err := database.GetDeploymentPlan(repo)
 	if err != nil || plan == nil {
 		if isK8s {
@@ -340,11 +358,9 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 
 	planJSON := plan.PlanJSON
 	if !isK8s {
-		// Non-K8s repo: pass the plan for AI reference but don't create sandbox
 		return "", "", planJSON
 	}
 
-	// Parse plan options
 	var planData struct {
 		Options []struct {
 			ID          string           `json:"id"`
@@ -358,46 +374,87 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		return "", "", planJSON
 	}
 
-	// Pick recommended option (or first)
-	selected := 0
-	for i, opt := range planData.Options {
-		if opt.Recommended {
-			selected = i
-			break
+	// Order: previously working option first, then recommended, then rest
+	ordered := orderOptions(repo, planData.Options)
+
+	// Multi-attempt: try each option until one succeeds
+	for attempt, opt := range ordered {
+		slog.Info("trying deployment option", "repo", repo, "option", opt.Name, "attempt", attempt+1, "total", len(ordered))
+
+		sandboxNS, err := jm.sandbox.CreateSandbox(repo, issueNumber)
+		if err != nil {
+			slog.Error("sandbox creation failed", "repo", repo, "error", err)
+			return "", "", planJSON
+		}
+
+		result, err := jm.sandbox.DeployInSandbox(sandboxNS, opt.Steps)
+		if err == nil {
+			success, _ := result["success"].(bool)
+			if success {
+				endpoints, _ := result["endpoints"].(map[string]string)
+				endpointsJSON, _ := json.Marshal(endpoints)
+				database.SetRepoMemory(repo, "working_deploy_option", opt.ID)
+				slog.Info("sandbox deployed successfully", "namespace", sandboxNS, "option", opt.Name)
+				return sandboxNS, string(endpointsJSON), planJSON
+			}
+		}
+
+		// Save failure for self-healing
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		} else if errs, ok := result["errors"].([]string); ok && len(errs) > 0 {
+			errMsg = strings.Join(errs, "; ")
+		}
+		database.SetRepoMemory(repo, fmt.Sprintf("deploy_option_%s_error", opt.ID), errMsg)
+		slog.Warn("deployment option failed", "option", opt.Name, "error", errMsg)
+		jm.sandbox.TeardownSandbox(sandboxNS)
+	}
+
+	slog.Warn("all deployment options failed — falling back to code analysis", "repo", repo)
+	return "", "", planJSON
+}
+
+func orderOptions(repo string, options []struct {
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Recommended bool             `json:"recommended"`
+	Steps       []map[string]any `json:"steps"`
+}) []struct {
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Recommended bool             `json:"recommended"`
+	Steps       []map[string]any `json:"steps"`
+} {
+	// Check if we have a previously working option
+	mem, _ := database.GetRepoMemory(repo, strPtr("working_deploy_option"))
+	workingID := ""
+	if v, ok := mem["working_deploy_option"]; ok {
+		workingID = v
+	}
+
+	var first, rest []struct {
+		ID          string           `json:"id"`
+		Name        string           `json:"name"`
+		Recommended bool             `json:"recommended"`
+		Steps       []map[string]any `json:"steps"`
+	}
+
+	for _, opt := range options {
+		if opt.ID == workingID {
+			first = append([]struct {
+				ID          string           `json:"id"`
+				Name        string           `json:"name"`
+				Recommended bool             `json:"recommended"`
+				Steps       []map[string]any `json:"steps"`
+			}{opt}, first...)
+		} else if opt.Recommended {
+			first = append(first, opt)
+		} else {
+			rest = append(rest, opt)
 		}
 	}
-	opt := planData.Options[selected]
-	slog.Info("selected deployment option for sandbox", "repo", repo, "option", opt.Name)
-
-	// Create sandbox namespace
-	sandboxNS, err := jm.sandbox.CreateSandbox(repo, issueNumber)
-	if err != nil {
-		slog.Error("sandbox creation failed — falling back to code analysis", "repo", repo, "error", err)
-		return "", "", planJSON
-	}
-
-	// Deploy the selected option
-	result, err := jm.sandbox.DeployInSandbox(sandboxNS, opt.Steps)
-	if err != nil {
-		slog.Error("sandbox deployment failed — tearing down and falling back", "namespace", sandboxNS, "error", err)
-		jm.sandbox.TeardownSandbox(sandboxNS)
-		return "", "", planJSON
-	}
-
-	success, _ := result["success"].(bool)
-	if !success {
-		errs, _ := result["errors"].([]string)
-		slog.Warn("sandbox deployment had failures — tearing down", "namespace", sandboxNS, "errors", errs)
-		jm.sandbox.TeardownSandbox(sandboxNS)
-		return "", "", planJSON
-	}
-
-	// Get endpoints
-	endpoints, _ := result["endpoints"].(map[string]string)
-	endpointsJSON, _ := json.Marshal(endpoints)
-
-	slog.Info("sandbox deployed successfully", "namespace", sandboxNS, "endpoints", len(endpoints))
-	return sandboxNS, string(endpointsJSON), planJSON
+	return append(first, rest...)
 }
 
 func loadRepoProfileForJob(repo string) map[string]any {

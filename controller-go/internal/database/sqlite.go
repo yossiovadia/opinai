@@ -80,6 +80,7 @@ func migrate() error {
 			repo TEXT NOT NULL UNIQUE,
 			plan_json TEXT NOT NULL,
 			status TEXT DEFAULT 'analyzed',
+			commit_sha TEXT DEFAULT '',
 			created_at TEXT DEFAULT (datetime('now')),
 			updated_at TEXT DEFAULT (datetime('now'))
 		);
@@ -87,6 +88,11 @@ func migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_runs_repo ON runs(repo);
 		CREATE INDEX IF NOT EXISTS idx_runs_repo_issue ON runs(repo, issue);
 	`)
+	if err != nil {
+		return err
+	}
+	// Migration: add commit_sha column if missing (existing DBs)
+	db.Exec("ALTER TABLE deployment_plans ADD COLUMN commit_sha TEXT DEFAULT ''")
 	return err
 }
 
@@ -279,6 +285,7 @@ type DeploymentPlan struct {
 	Repo      string `json:"repo"`
 	PlanJSON  string `json:"plan_json"`
 	Status    string `json:"status"`
+	CommitSHA string `json:"commit_sha"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -300,8 +307,8 @@ func SaveDeploymentPlan(repo, planJSON string) (int64, error) {
 
 func GetDeploymentPlan(repo string) (*DeploymentPlan, error) {
 	var p DeploymentPlan
-	err := db.QueryRow("SELECT * FROM deployment_plans WHERE repo = ?", repo).Scan(
-		&p.ID, &p.Repo, &p.PlanJSON, &p.Status, &p.CreatedAt, &p.UpdatedAt,
+	err := db.QueryRow("SELECT id, repo, plan_json, status, commit_sha, created_at, updated_at FROM deployment_plans WHERE repo = ?", repo).Scan(
+		&p.ID, &p.Repo, &p.PlanJSON, &p.Status, &p.CommitSHA, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -310,6 +317,13 @@ func GetDeploymentPlan(repo string) (*DeploymentPlan, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func SetDeploymentPlanSHA(repo, sha string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("UPDATE deployment_plans SET commit_sha = ? WHERE repo = ?", sha, repo)
+	return err
 }
 
 func UpdateDeploymentPlanStatus(repo, status string) error {

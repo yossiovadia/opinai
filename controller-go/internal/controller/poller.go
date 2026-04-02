@@ -105,6 +105,9 @@ func (p *Poller) Start() {
 		// Harvest completed jobs
 		p.jobs.HarvestCompletedJobs()
 
+		// Check deployment plan freshness
+		checkPlanStaleness(repos)
+
 		// Update check result for dashboard
 		p.state.SetCheckResult(&dashboard.CheckResult{Total: totalNew})
 
@@ -152,4 +155,24 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func checkPlanStaleness(repos []string) {
+	for _, repo := range repos {
+		plan, err := database.GetDeploymentPlan(repo)
+		if err != nil || plan == nil || plan.CommitSHA == "" {
+			continue
+		}
+		if plan.Status == "stale" {
+			continue // already marked
+		}
+		headSHA, err := GetRepoHeadSHA(repo)
+		if err != nil {
+			continue
+		}
+		if headSHA != plan.CommitSHA {
+			database.UpdateDeploymentPlanStatus(repo, "stale")
+			slog.Info("deployment plan marked stale — repo has new commits", "repo", repo)
+		}
+	}
 }

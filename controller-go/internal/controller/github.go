@@ -166,6 +166,24 @@ func PostComment(repo string, number int, body string) error {
 	return nil
 }
 
+// GetRepoHeadSHA returns the latest commit SHA for a repo's default branch.
+func GetRepoHeadSHA(repo string) (string, error) {
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/commits?per_page=1", repo))
+	if err != nil {
+		return "", err
+	}
+	if code != 200 {
+		return "", fmt.Errorf("HTTP %d", code)
+	}
+	var commits []struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.Unmarshal(body, &commits); err != nil || len(commits) == 0 {
+		return "", fmt.Errorf("no commits found")
+	}
+	return commits[0].SHA, nil
+}
+
 // RemoveLabel removes a label from an issue.
 func RemoveLabel(repo string, number int, label string) {
 	ghDelete(fmt.Sprintf("/repos/%s/issues/%d/labels/%s", repo, number, label))

@@ -118,6 +118,11 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		"k8s", k8sClient != nil,
 	)
 
+	// Start job watcher for real-time result harvesting
+	if jobMgr != nil {
+		go jobMgr.StartWatcher()
+	}
+
 	// Start poller (if K8s available)
 	if jobMgr != nil {
 		poller := controller.NewPoller(state, jobMgr, interval, repos)

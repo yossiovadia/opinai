@@ -14,6 +14,7 @@ import (
 
 	sigYAML "sigs.k8s.io/yaml"
 
+	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -228,6 +229,17 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 			}
 			slog.Info("executing command step", "step", i+1, "desc", desc)
 			cmdStr, workDir := stripCdPrefix(content, cloneDir)
+			// Auto-run helm dependency build before helm install/upgrade
+			if isHelmCommand(cmdStr) {
+				helmDep := buildHelmDepCommand(workDir)
+				if helmDep != "" {
+					slog.Info("auto-running helm dependency build", "cmd", helmDep)
+					depCmd := exec.Command("sh", "-c", helmDep)
+					depCmd.Dir = workDir
+					depCmd.Env = commandEnv(ns)
+					depCmd.CombinedOutput() // best-effort
+				}
+			}
 			cmdStr = injectNamespace(cmdStr, ns)
 			cmd := exec.Command("sh", "-c", cmdStr)
 			cmd.Dir = workDir
@@ -456,6 +468,12 @@ func applySingleManifest(client kubernetes.Interface, ns, content string) error 
 		return nil
 	}
 
+	// RBAC pre-check for sensitive kinds
+	if !checkCanCreate(client, ns, kind) {
+		slog.Warn("skipping resource — insufficient RBAC permissions", "kind", kind, "namespace", ns)
+		return nil
+	}
+
 	// Force namespace and managed label
 	meta, _ := doc["metadata"].(map[string]any)
 	if meta == nil {
@@ -603,6 +621,64 @@ func injectNamespace(cmd, ns string) string {
 		}
 	}
 	return cmd
+}
+
+// --- Helm helpers ---
+
+func isHelmCommand(cmd string) bool {
+	return strings.Contains(cmd, "helm install") || strings.Contains(cmd, "helm upgrade")
+}
+
+func buildHelmDepCommand(workDir string) string {
+	// Look for Chart.yaml in the work directory or common subdirs
+	for _, sub := range []string{".", "chart", "charts", "helm", "deploy/helm"} {
+		chartFile := filepath.Join(workDir, sub, "Chart.yaml")
+		if _, err := os.Stat(chartFile); err == nil {
+			return "cd " + filepath.Join(workDir, sub) + " && helm dependency build"
+		}
+	}
+	return ""
+}
+
+// --- RBAC pre-check ---
+
+func checkCanCreate(client kubernetes.Interface, ns, kind string) bool {
+	// Only check for sensitive kinds that commonly fail
+	apiGroup := ""
+	resource := ""
+	switch kind {
+	case "Deployment", "StatefulSet":
+		apiGroup = "apps"
+		resource = strings.ToLower(kind) + "s"
+	case "Role", "RoleBinding":
+		apiGroup = "rbac.authorization.k8s.io"
+		resource = strings.ToLower(kind) + "s"
+	case "Ingress":
+		apiGroup = "networking.k8s.io"
+		resource = "ingresses"
+	case "Route":
+		apiGroup = "route.openshift.io"
+		resource = "routes"
+	default:
+		return true // don't check common resources (Service, ConfigMap, etc.)
+	}
+
+	ctx := context.Background()
+	review := &authv1.SelfSubjectAccessReview{
+		Spec: authv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authv1.ResourceAttributes{
+				Namespace: ns,
+				Verb:      "create",
+				Group:     apiGroup,
+				Resource:  resource,
+			},
+		},
+	}
+	result, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	if err != nil {
+		return true // if check fails, try anyway
+	}
+	return result.Status.Allowed
 }
 
 func truncLog(s string, n int) string {
