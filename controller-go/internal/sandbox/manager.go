@@ -227,9 +227,10 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 				break
 			}
 			slog.Info("executing command step", "step", i+1, "desc", desc)
-			cmdStr := injectNamespace(content, ns)
+			cmdStr, workDir := stripCdPrefix(content, cloneDir)
+			cmdStr = injectNamespace(cmdStr, ns)
 			cmd := exec.Command("sh", "-c", cmdStr)
-			cmd.Dir = cloneDir
+			cmd.Dir = workDir
 			cmd.Env = commandEnv(ns)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
@@ -555,6 +556,37 @@ func commandEnv(namespace string) []string {
 		}
 	}
 	return env
+}
+
+// stripCdPrefix removes a leading "cd <dir> &&" from a command and resolves the workDir.
+// If the cd target is a subdirectory of cloneDir, uses that as workDir.
+// Otherwise uses cloneDir as workDir and strips the cd entirely.
+func stripCdPrefix(cmd, cloneDir string) (string, string) {
+	trimmed := strings.TrimSpace(cmd)
+
+	// Match patterns: "cd something &&", "cd something;", "cd something\n"
+	for _, sep := range []string{" && ", " &&\n", "; ", ";\n"} {
+		if idx := strings.Index(trimmed, sep); idx > 0 {
+			prefix := trimmed[:idx]
+			rest := strings.TrimSpace(trimmed[idx+len(sep):])
+
+			if strings.HasPrefix(prefix, "cd ") {
+				target := strings.TrimSpace(prefix[3:])
+				// Remove quotes
+				target = strings.Trim(target, "'\"")
+
+				// Check if target dir exists under cloneDir
+				candidate := filepath.Join(cloneDir, target)
+				if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+					return rest, candidate
+				}
+				// Target doesn't exist as subdir — just strip the cd and use cloneDir
+				return rest, cloneDir
+			}
+		}
+	}
+
+	return cmd, cloneDir
 }
 
 // injectNamespace adds -n {namespace} to oc/kubectl commands if not already present.
