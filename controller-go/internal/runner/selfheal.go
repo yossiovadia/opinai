@@ -25,9 +25,15 @@ func askAIForFix(command, errorOutput string) string {
 			"Command: %s\n\n"+
 			"Error output (last 1500 chars):\n%s\n\n"+
 			"The container has: python3, pip3, git, curl, make, bash.\n"+
-			"It does NOT have root access.\n\n"+
-			"Provide the exact fixed shell command that would work. "+
-			"Consider: --user flag for pip, python3 -m pip, PYTHONUSERBASE, PATH adjustments.\n\n"+
+			"It does NOT have root access. It has NO GPU. It has 512Mi RAM.\n"+
+			"PYTHONUSERBASE=/tmp/pip-user, HOME=/tmp/home.\n\n"+
+			"Strategies to try:\n"+
+			"1. Add --user --break-system-packages flags to pip\n"+
+			"2. Use --no-deps to skip heavy dependencies (torch, tensorflow, cuda, vllm, triton, xformers), "+
+			"then install only the lightweight deps needed for the server\n"+
+			"3. If the error is OOM or timeout, the package may be too large — use --no-deps approach\n"+
+			"4. If a dependency needs compilation, check if a pre-built wheel exists\n\n"+
+			"Provide the exact fixed shell command that would work.\n"+
 			"Respond with ONLY the fixed shell command on a single line. No explanation.",
 		command, errTrunc,
 	)

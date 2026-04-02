@@ -43,10 +43,22 @@ func AnalyzeDeployment(repo, readme string, files map[string]string, clusterStat
 			"steps (array of {type, content, required, description}), requirements, risks, recommended (bool).\n"+
 			"Also include at the top level:\n"+
 			"- project_type, detected_deployment_method, dependencies\n"+
-			"- install_command: the exact shell command to install/build this project for testing "+
-			"(e.g. \"pip install --user llm-katan\" or \"go build ./cmd/server\")\n"+
-			"- install_notes: any special flags needed (e.g. \"use --no-deps to skip GPU deps in echo mode\")\n"+
-			"- resource_requirements: {\"cpu\": \"200m\", \"memory\": \"512Mi\"} — resources needed by the runner pod",
+			"- resource_requirements: {\"cpu\": \"200m\", \"memory\": \"512Mi\"} — resources needed by the runner pod\n"+
+			"- install_notes: any special considerations\n\n"+
+			"CRITICAL — install_command generation rules:\n"+
+			"Analyze the project's dependency files (pyproject.toml, setup.py, requirements.txt, go.mod, package.json) "+
+			"and determine the MINIMAL install needed for API testing.\n"+
+			"- Identify HEAVY dependencies (torch, tensorflow, vllm, cuda, triton, xformers, bitsandbytes, etc) "+
+			"that are only needed for GPU/production usage\n"+
+			"- If the project has an echo/mock/test mode that does not need GPU/ML libraries, use that\n"+
+			"- For Python: consider using --no-deps + installing only lightweight deps separately\n"+
+			"- The install must work in a rootless container with NO GPU, 512Mi RAM\n"+
+			"- ALWAYS include --user --break-system-packages for pip commands\n"+
+			"- Generate the MINIMAL install command that gets the server running for API testing\n\n"+
+			"Example: If pyproject.toml lists torch>=2.0.0 but the server has an echo backend:\n"+
+			"  WRONG: pip install --user myproject  (downloads 2GB of torch)\n"+
+			"  RIGHT: pip install --user --no-deps myproject && pip install --user fastapi uvicorn click  (50MB)\n\n"+
+			"Your install_command must succeed in a rootless container with 512Mi RAM. Think carefully.",
 		repo, profileJSON, readme, filesSummary, crds, operators, namespaces,
 	)
 
