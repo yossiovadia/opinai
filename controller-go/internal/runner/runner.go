@@ -275,19 +275,34 @@ func startServer() (*os.Process, string) {
 	// Set up writable container environment BEFORE any commands
 	setupContainerEnv()
 
-	// Install: priority order: saved working command > OPINAI_INSTALL_COMMAND > profile build command
+	// Install: priority order:
+	// 1. working_install_command (proven to work from previous run)
+	// 2. install_command (from AI README analysis)
+	// 3. OPINAI_INSTALL_COMMAND env var (from deployment plan)
+	// 4. profile build command
+	// 5. AI generates on-the-spot if nothing else exists
 	{
+		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
 		installCmd := buildCmd
-		// 1. Check deployment-plan install command (from AI analysis)
+
+		// 4→3: env var overrides profile
 		if planCmd := os.Getenv("OPINAI_INSTALL_COMMAND"); planCmd != "" {
 			installCmd = planCmd
 			slog.Info("using deployment plan install command", "cmd", installCmd)
 		}
-		// 2. Check saved working command from previous successful run (highest priority)
-		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+		// 3→2: AI-analyzed install from repo memory
+		if analyzed := extractMemoryValue(repoCtx, "install_command"); analyzed != "" {
+			installCmd = analyzed
+			slog.Info("using AI-analyzed install command", "cmd", installCmd)
+		}
+		// 2→1: previously proven working command (highest priority)
 		if saved := extractMemoryValue(repoCtx, "working_install_command"); saved != "" {
 			installCmd = saved
 			slog.Info("using saved working install command", "cmd", installCmd)
+		}
+		// 5: if still empty, ask AI to generate one on the spot
+		if installCmd == "" {
+			installCmd = generateInstallCommand(cloneDir)
 		}
 		if installCmd != "" {
 
@@ -470,6 +485,7 @@ func analyzeReadme(cloneDir string) {
 		return
 	}
 
+	// Read README
 	readmePath := cloneDir + "/README.md"
 	data, err := os.ReadFile(readmePath)
 	if err != nil {
@@ -484,17 +500,35 @@ func analyzeReadme(cloneDir string) {
 		readme = readme[:3000]
 	}
 
-	slog.Info("analyzing README for first-time knowledge")
+	// Read dependency files for install analysis
+	depsInfo := ""
+	for _, depFile := range []string{"pyproject.toml", "setup.py", "requirements.txt", "setup.cfg", "go.mod", "package.json"} {
+		depData, err := os.ReadFile(cloneDir + "/" + depFile)
+		if err == nil {
+			content := string(depData)
+			if len(content) > 1500 {
+				content = content[:1500]
+			}
+			depsInfo += fmt.Sprintf("\n--- %s ---\n%s\n", depFile, content)
+		}
+	}
+
+	slog.Info("analyzing README + deps for first-time knowledge")
 	prompt := fmt.Sprintf(
-		"Analyze this project README from %s.\n\n%s\n\n"+
-			"Provide a brief JSON summary (no markdown fences, just raw JSON):\n"+
-			"{\n  \"description\": \"what this project does\",\n"+
+		"Analyze this project from %s.\n\nREADME:\n%s\n\nDependency files:%s\n\n"+
+			"Provide a JSON summary (no markdown fences, just raw JSON):\n"+
+			"{\n"+
+			"  \"description\": \"what this project does in 1-2 sentences\",\n"+
 			"  \"tech_stack\": \"languages and frameworks\",\n"+
-			"  \"how_to_test\": \"how to test bugs\",\n"+
-			"  \"deployment_needs\": \"infrastructure needed\"\n}",
-		os.Getenv("REPO"), readme,
+			"  \"how_to_test\": \"how to test bugs in this project\",\n"+
+			"  \"deployment_needs\": \"infrastructure needed\",\n"+
+			"  \"install_command\": \"the MINIMAL shell command to install this for API testing in a rootless container with 512Mi RAM, no GPU. "+
+			"Use --user --break-system-packages for pip. Use --no-deps if heavy deps (torch, tensorflow, vllm) "+
+			"are listed but not needed for echo/test mode. Example: pip install --user --no-deps myapp && pip install --user fastapi uvicorn\"\n"+
+			"}",
+		os.Getenv("REPO"), readme, depsInfo,
 	)
-	content, err := ai.Call(prompt, 1024)
+	content, err := ai.Call(prompt, 1500)
 	if err != nil || content == "" {
 		return
 	}
@@ -512,7 +546,10 @@ func analyzeReadme(cloneDir string) {
 	var result map[string]string
 	if json.Unmarshal([]byte(content), &result) == nil {
 		emitRepoMemory(result)
-		slog.Info("emitted README knowledge")
+		slog.Info("emitted README knowledge", "keys", len(result))
+		if cmd, ok := result["install_command"]; ok && cmd != "" {
+			slog.Info("AI generated install command from analysis", "cmd", cmd)
+		}
 	} else {
 		emitRepoMemory(map[string]string{"description": truncStr(content, 500)})
 	}
@@ -643,6 +680,56 @@ func generateSuggestedQuestions(title, body, verdictText string) string {
 		return ""
 	}
 	return reply
+}
+
+// generateInstallCommand asks the AI to create an install command on-the-spot
+// by reading the project's dependency files.
+func generateInstallCommand(cloneDir string) string {
+	cfg := ai.LoadConfig()
+	if !cfg.Available() {
+		return ""
+	}
+
+	// Read key dependency files
+	var depsInfo string
+	for _, f := range []string{"pyproject.toml", "setup.py", "requirements.txt", "setup.cfg", "go.mod", "package.json", "Makefile"} {
+		data, err := os.ReadFile(cloneDir + "/" + f)
+		if err == nil {
+			content := string(data)
+			if len(content) > 1000 {
+				content = content[:1000]
+			}
+			depsInfo += fmt.Sprintf("--- %s ---\n%s\n", f, content)
+		}
+	}
+	if depsInfo == "" {
+		return ""
+	}
+
+	prompt := fmt.Sprintf(
+		"Generate the MINIMAL install command for this project to run for API testing.\n\n"+
+			"Project: %s\nFiles:\n%s\n\n"+
+			"Constraints: rootless container, 512Mi RAM, NO GPU, python3 + pip available.\n"+
+			"Use --user --break-system-packages for pip.\n"+
+			"Use --no-deps if heavy deps (torch, tensorflow, vllm, cuda) are listed but not needed for testing.\n\n"+
+			"Respond with ONLY the shell command on a single line. No explanation.",
+		os.Getenv("REPO"), depsInfo,
+	)
+
+	reply, err := ai.Call(prompt, 256)
+	if err != nil || reply == "" {
+		return ""
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(reply), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "```") && !strings.HasPrefix(line, "#") && len(line) > 3 {
+			slog.Info("AI generated install command on-the-spot", "cmd", line)
+			emitRepoMemory(map[string]string{"install_command": line})
+			return line
+		}
+	}
+	return ""
 }
 
 func isK8sProject() bool {
