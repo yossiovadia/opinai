@@ -269,18 +269,14 @@ func startServer() (*os.Process, string) {
 		return nil, ""
 	}
 
-	// Analyze README on first run
-	analyzeReadme(cloneDir)
+	// Analyze README on first run — may return install_command
+	readmeAnalysis := analyzeReadme(cloneDir)
 
 	// Set up writable container environment BEFORE any commands
 	setupContainerEnv()
 
-	// Install chain:
-	// 1. Resolve command: working > analyzed > env > profile
-	// 2. Try it
-	// 3. If fails: AI self-heal fix
-	// 4. If self-heal fails: generateInstallCommand (reads repo files, asks AI for minimal)
-	// 5. If that works: save as working_install_command
+	// Install chain (ascending priority — last match wins):
+	// profile build → env var → README analysis → repo memory analyzed → repo memory working
 	{
 		repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
 		installCmd := buildCmd
@@ -289,10 +285,19 @@ func startServer() (*os.Process, string) {
 			installCmd = planCmd
 			slog.Info("using deployment plan install command", "cmd", installCmd)
 		}
+		// From README analysis on THIS run (not yet in repo memory)
+		if readmeAnalysis != nil {
+			if cmd, ok := readmeAnalysis["install_command"]; ok && cmd != "" {
+				installCmd = cmd
+				slog.Info("using install command from README analysis", "cmd", installCmd)
+			}
+		}
+		// From previous run's analysis (in repo memory via controller)
 		if analyzed := extractMemoryValue(repoCtx, "install_command"); analyzed != "" {
 			installCmd = analyzed
-			slog.Info("using AI-analyzed install command", "cmd", installCmd)
+			slog.Info("using AI-analyzed install command from memory", "cmd", installCmd)
 		}
+		// Proven working command (highest priority)
 		if saved := extractMemoryValue(repoCtx, "working_install_command"); saved != "" {
 			installCmd = saved
 			slog.Info("using saved working install command", "cmd", installCmd)
