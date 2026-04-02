@@ -285,10 +285,12 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
     current_server_url = os.environ.get("SERVER_URL", "") or SERVER_URL
     if current_server_url:
         server_context = (
-            f"\n\nCRITICAL: The server is ALREADY running and healthy at {current_server_url}. "
-            "Do NOT install anything. Do NOT start any server. Do NOT use pip. Do NOT use apt-get. "
-            "Just use curl to test the running server. The following environment is pre-configured: "
-            f"SERVER_URL={current_server_url}. The server is already responding to health checks.\n"
+            f"\n\nBefore running any tests, check if the server is already running by calling:\n"
+            f"  curl -s {current_server_url}/health\n\n"
+            "If the health check succeeds (HTTP 200), the server is ready — proceed directly to testing with curl.\n\n"
+            "If the health check fails, you may need to start the server first.\n"
+            "Environment: PYTHONUSERBASE=/tmp/pip-user PATH=/tmp/pip-user/bin:$PATH\n\n"
+            "Always check health before installing. Never install if the server is already running.\n"
         )
     else:
         server_context = ""
@@ -305,12 +307,10 @@ def ai_generate_tests(title: str, body: str, profile: dict | None = None) -> str
         f"{repo_context}\n\n"
         "Your task:\n"
         "1. Analyze what the bug claims\n"
-        "2. Write a bash test script that ONLY contains curl commands and result checking\n"
-        f"3. The script should use curl to test the server at {current_server_url} and capture results\n"
+        "2. Write a bash test script that proves or disproves this bug\n"
+        "3. The script should use curl to test the server and capture results\n"
         "4. Print each test result as a JSON line: "
         '{"test": "name", "status": "pass|fail", "details": "..."}\n\n'
-        "IMPORTANT: Do NOT include any pip install, apt-get, git clone, or server startup commands. "
-        "The server is already running. Just test it.\n\n"
         "Output ONLY the bash script, no explanation."
     )
 
@@ -511,11 +511,17 @@ def run_tests(script_text: str) -> str:
     os.chmod(script_path, 0o755)
 
     try:
+        # Pass full env so test scripts have PYTHONUSERBASE, PATH, SERVER_URL etc.
+        test_env = os.environ.copy()
+        test_env["PYTHONUSERBASE"] = "/tmp/pip-user"
+        pip_bin = os.path.dirname(shutil.which("python3") or "/usr/local/bin/python3")
+        test_env["PATH"] = f"/tmp/pip-user/bin:/usr/local/bin:/root/.local/bin:{pip_bin}:{test_env.get('PATH', '')}"
         result = subprocess.run(
             ["/bin/bash", script_path],
             capture_output=True,
             text=True,
             timeout=300,
+            env=test_env,
         )
         output = result.stdout
         if result.returncode != 0:
@@ -695,6 +701,56 @@ def _run_with_retry(command: str, cwd: str, env: dict) -> tuple:
     return result, MAX_RETRIES
 
 
+def _apply_learned_fixes(command: str, env: dict) -> tuple[str, dict]:
+    """Read repo memory from OPINAI_REPO_CONTEXT and apply known fixes."""
+    ctx = os.environ.get("OPINAI_REPO_CONTEXT", "")
+
+    if "pip_flags: --user" in ctx and "--user" not in command:
+        command = command.replace("pip install", "pip install --user")
+
+    if "pip_command: python3 -m pip" in ctx and "python3 -m pip" not in command:
+        command = command.replace("pip install", "python3 -m pip install")
+        command = command.replace("pip3 install", "python3 -m pip install")
+
+    if "path_prefix: /tmp/pip-user/bin" in ctx:
+        env["PYTHONUSERBASE"] = "/tmp/pip-user"
+        if "/tmp/pip-user/bin" not in env.get("PATH", ""):
+            env["PATH"] = "/tmp/pip-user/bin:" + env.get("PATH", "")
+
+    if "extra_deps:" in ctx:
+        for line in ctx.splitlines():
+            if "extra_deps:" in line:
+                dep = line.split(":", 1)[1].strip()
+                if dep:
+                    command = f"python3 -m pip install --user {dep} && {command}"
+
+    return command, env
+
+
+def _emit_learned_fixes(retries: int, fixes: list[str]):
+    """Save successful fixes to repo memory via stdout markers."""
+    if retries == 0 or not fixes:
+        return
+
+    memory = {}
+    for desc in fixes:
+        lower = desc.lower()
+        if "--user" in lower:
+            memory["pip_flags"] = "--user"
+            memory["env_overrides"] = "PYTHONUSERBASE=/tmp/pip-user"
+        if "path" in lower or "pip bin" in lower:
+            memory["path_prefix"] = "/tmp/pip-user/bin"
+        if "python3 -m pip" in lower:
+            memory["pip_command"] = "python3 -m pip"
+        if "auto-installed" in lower:
+            parts = desc.split(": ", 1)
+            if len(parts) > 1:
+                memory["extra_deps"] = parts[1].strip()
+
+    if memory:
+        _emit_repo_memory(memory)
+
+
 def _start_server(profile: dict) -> subprocess.Popen | None:
     """Install and start the target server inside the pod using profile config."""
     global SERVER_URL
@@ -733,6 +789,10 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
     env["PYTHONUSERBASE"] = "/tmp/pip-user"
     env["PATH"] = f"/tmp/pip-user/bin:/usr/local/bin:/root/.local/bin:{pip_bin}:{env.get('PATH', '')}"
 
+    # Apply learned fixes from previous runs
+    if build_cmd:
+        build_cmd, env = _apply_learned_fixes(build_cmd, env)
+
     # Install / build with self-healing retries
     if build_cmd:
         resolved_build_cmd = build_cmd.replace("pip install", "python3 -m pip install --user")
@@ -743,6 +803,9 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
                         retries, result.returncode, result.stderr[:500])
         elif retries > 0:
             log.info("Build succeeded after %d retries", retries)
+            # Save learned fixes for future runs
+            # Collect which fixes were applied from the retry chain
+            _emit_learned_fixes(retries, [f"retry {retries}: resolved build issue"])
 
     if not run_cmd:
         return None

@@ -13,10 +13,12 @@ func GenerateTests(title, body, serverURL, profileContext, repoContext string) (
 
 	var serverCtx string
 	if serverURL != "" {
-		serverCtx = "\n\nCRITICAL: The server is ALREADY running and healthy at " + serverURL + ". " +
-			"Do NOT install anything. Do NOT start any server. Do NOT use pip. Do NOT use apt-get. " +
-			"Just use curl to test the running server. The following environment is pre-configured: " +
-			"SERVER_URL=" + serverURL + ". The server is already responding to health checks.\n"
+		serverCtx = "\n\nBefore running any tests, check if the server is already running by calling:\n" +
+			"  curl -s " + serverURL + "/health\n\n" +
+			"If the health check succeeds (HTTP 200), the server is ready — proceed directly to testing with curl.\n\n" +
+			"If the health check fails, you may need to start the server first.\n" +
+			"Environment: PYTHONUSERBASE=/tmp/pip-user PATH=/tmp/pip-user/bin:$PATH\n\n" +
+			"Always check health before installing. Never install if the server is already running.\n"
 	}
 
 	prompt := "You are OpinAI, an automated bug reproduction system. " +
@@ -26,12 +28,10 @@ func GenerateTests(title, body, serverURL, profileContext, repoContext string) (
 		serverCtx + profileContext + repoContext + "\n\n" +
 		"Your task:\n" +
 		"1. Analyze what the bug claims\n" +
-		"2. Write a bash test script that ONLY contains curl commands and result checking\n" +
-		"3. The script should use curl to test the server at " + serverURL + " and capture results\n" +
+		"2. Write a bash test script that proves or disproves this bug\n" +
+		"3. The script should use curl to test the server and capture results\n" +
 		"4. Print each test result as a JSON line: " +
 		`{"test": "name", "status": "pass|fail", "details": "..."}` + "\n\n" +
-		"IMPORTANT: Do NOT include any pip install, apt-get, git clone, or server startup commands. " +
-		"The server is already running. Just test it.\n\n" +
 		"Output ONLY the bash script, no explanation."
 
 	content, err := callWithConfig(cfg, prompt, 4096)

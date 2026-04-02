@@ -22,8 +22,8 @@ import (
 
 func main() {
 	mode := flag.String("mode", "controller", "Run mode: controller or runner")
-	httpAddr := flag.String("http", ":8081", "HTTP listen address")
-	httpsAddr := flag.String("https", ":8444", "HTTPS listen address")
+	httpAddr := flag.String("http", ":8080", "HTTP listen address")
+	httpsAddr := flag.String("https", ":8443", "HTTPS listen address")
 	dbPath := flag.String("db", "", "SQLite database path (default: $OPINAI_DB_PATH or /data/opinai.db)")
 	flag.Parse()
 

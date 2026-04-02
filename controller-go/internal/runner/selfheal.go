@@ -185,6 +185,76 @@ func askAIForFix(command, errorOutput string) string {
 	return ""
 }
 
+// emitLearnedFixes saves successful fixes to repo memory via stdout markers.
+func emitLearnedFixes(rr RetryResult) {
+	if rr.Retries == 0 || len(rr.FixesApplied) == 0 {
+		return
+	}
+	fixes := make(map[string]string)
+	for _, desc := range rr.FixesApplied {
+		lower := strings.ToLower(desc)
+		if strings.Contains(lower, "--user") {
+			fixes["pip_flags"] = "--user"
+			fixes["env_overrides"] = "PYTHONUSERBASE=/tmp/pip-user"
+		}
+		if strings.Contains(lower, "path") || strings.Contains(lower, "pip bin") {
+			fixes["path_prefix"] = "/tmp/pip-user/bin"
+		}
+		if strings.Contains(lower, "python3 -m pip") {
+			fixes["pip_command"] = "python3 -m pip"
+		}
+		if strings.Contains(lower, "auto-installed") {
+			// Extract module name from "auto-installed missing module: X"
+			if idx := strings.Index(desc, ": "); idx >= 0 {
+				fixes["extra_deps"] = strings.TrimSpace(desc[idx+2:])
+			}
+		}
+	}
+	if len(fixes) > 0 {
+		emitRepoMemory(fixes)
+	}
+}
+
+// applyLearnedFixes reads repo memory and pre-applies known fixes to a command.
+func applyLearnedFixes(command string, env []string) (string, []string) {
+	// Read fixes from env (injected by controller as OPINAI_REPO_CONTEXT)
+	// The repo memory is also available via individual env vars in some cases.
+	// For the runner, we parse the OPINAI_REPO_CONTEXT for known fix keys.
+	ctx := os.Getenv("OPINAI_REPO_CONTEXT")
+
+	if strings.Contains(ctx, "pip_flags: --user") && !strings.Contains(command, "--user") {
+		command = strings.ReplaceAll(command, "pip install", "pip install --user")
+	}
+	if strings.Contains(ctx, "pip_command: python3 -m pip") && !strings.Contains(command, "python3 -m pip") {
+		command = strings.ReplaceAll(command, "pip install", "python3 -m pip install")
+		command = strings.ReplaceAll(command, "pip3 install", "python3 -m pip install")
+	}
+	if strings.Contains(ctx, "path_prefix: /tmp/pip-user/bin") {
+		env = setEnvVar(env, "PYTHONUSERBASE", "/tmp/pip-user")
+		for i, kv := range env {
+			if strings.HasPrefix(kv, "PATH=") && !strings.Contains(kv, "/tmp/pip-user/bin") {
+				env[i] = "PATH=/tmp/pip-user/bin:" + kv[5:]
+				break
+			}
+		}
+	}
+	if strings.Contains(ctx, "extra_deps:") {
+		for _, line := range strings.Split(ctx, "\n") {
+			if strings.Contains(line, "extra_deps:") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					dep := strings.TrimSpace(parts[1])
+					if dep != "" {
+						command = fmt.Sprintf("python3 -m pip install --user %s && %s", dep, command)
+					}
+				}
+			}
+		}
+	}
+
+	return command, env
+}
+
 // formatRetryInfo produces a human-readable summary of retries for the report.
 func formatRetryInfo(rr RetryResult) string {
 	if rr.Retries == 0 {

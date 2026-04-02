@@ -219,6 +219,12 @@ func startServer() (*os.Process, string) {
 	// Analyze README on first run
 	analyzeReadme(cloneDir)
 
+	// Apply learned fixes from previous runs
+	env := buildEnv()
+	if buildCmd != "" {
+		buildCmd, env = applyLearnedFixes(buildCmd, env)
+	}
+
 	// Build with self-healing retries
 	var buildRetry RetryResult
 	if buildCmd != "" {
@@ -233,8 +239,9 @@ func startServer() (*os.Process, string) {
 			slog.Info("build succeeded after retries", "retries", buildRetry.Retries, "fixes", buildRetry.FixesApplied)
 		}
 	}
-	// Store retry info for report
+	// Store retry info for report + save learned fixes
 	setupRetryInfo = formatRetryInfo(buildRetry)
+	emitLearnedFixes(buildRetry)
 
 	if runCmd == "" {
 		return nil, ""

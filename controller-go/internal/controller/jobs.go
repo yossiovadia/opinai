@@ -127,7 +127,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 							Name:            "runner",
 							Image:           jm.image,
 							ImagePullPolicy: corev1.PullAlways,
-							Command:         []string{"python", "opinai_runner.py"},
+							Command:         []string{"/app/opinai-go", "--mode=runner"},
 							Env:             env,
 							EnvFrom: []corev1.EnvFromSource{
 								{SecretRef: &corev1.SecretEnvSource{
