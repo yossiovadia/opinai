@@ -47,21 +47,12 @@ func (p *Poller) Start() {
 		}
 
 		for _, repo := range repos {
-			profile := loadRepoProfile(repo)
+			_ = loadRepoProfile(repo) // available for future use
 			stats, _ := database.GetStats(repo)
 
-			// Skip k8s-required repos (manual only)
-			if profile != nil && getBool(profile, "k8s") {
-				p.state.UpdateRepo(repo, dashboard.RepoStatus{
-					Processed:  stats.Processed,
-					ManualOnly: true,
-					LastCheck:  now,
-				})
-				continue
-			}
-
-			// Skip newly added repos (no processed issues yet = manual only)
-			if stats.Processed == 0 {
+			// Only skip repos that have NEVER been processed AND have no runs
+			// (truly new repos need a manual first run to avoid flooding)
+			if stats.Processed == 0 && stats.TotalRuns == 0 {
 				p.state.UpdateRepo(repo, dashboard.RepoStatus{
 					Processed:  0,
 					ManualOnly: true,

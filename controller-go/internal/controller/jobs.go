@@ -64,6 +64,23 @@ func (jm *JobManager) broadcast(eventType string, data any) {
 	jm.ws.Broadcast(BroadcastEvent{Type: eventType, Data: data})
 }
 
+// hasRunningJob checks if any opinai-runner Job is currently running.
+func (jm *JobManager) hasRunningJob() bool {
+	ctx := context.Background()
+	jobs, err := jm.client.BatchV1().Jobs(jm.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=opinai-runner",
+	})
+	if err != nil {
+		return false
+	}
+	for _, job := range jobs.Items {
+		if job.Status.Succeeded == 0 && job.Status.Failed == 0 && job.Status.Active > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // JobName generates the K8s job name for a repo+issue.
 func JobName(repo string, issue int) string {
 	safe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
@@ -74,6 +91,12 @@ func JobName(repo string, issue int) string {
 func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueTitle string) error {
 	name := JobName(repo, issueNumber)
 	ctx := context.Background()
+
+	// Only one reproduction Job at a time — prevents resource contention and API rate limiting
+	if jm.hasRunningJob() {
+		slog.Info("another job is running — skipping, will retry next cycle", "repo", repo, "issue", issueNumber)
+		return nil
+	}
 
 	// Check if job already exists
 	_, err := jm.client.BatchV1().Jobs(jm.namespace).Get(ctx, name, metav1.GetOptions{})
@@ -199,7 +222,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	}
 
 	database.MarkProcessed(repo, issueNumber, name)
-	jm.broadcast("job_update", map[string]any{"repo": repo, "issue": issueNumber, "status": "created"})
+	jm.broadcast("job_created", map[string]any{"repo": repo, "issue": issueNumber})
 	slog.Info("created job", "job", name, "repo", repo, "issue", issueNumber, "title", issueTitle)
 	return nil
 }
@@ -350,7 +373,7 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		AIPowered: true, Duration: duration, Posted: false,
 		Report: report, SuggestedQuestions: suggestedQuestions, CreatedAt: ts,
 	})
-	jm.broadcast("run_update", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
+	jm.broadcast("job_completed", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
 
 	sbNS := annotations["opinai/sandbox-namespace"]
 	if sbNS != "" && jm.sandbox != nil {

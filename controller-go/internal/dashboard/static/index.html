@@ -367,7 +367,7 @@ function renderIssues() {
   }
 
   var html = '<div class="table-wrap"><table>' +
-    '<thead><tr><th>#</th><th>Repo</th><th>Title</th><th>Category</th><th>Status</th><th>Verdict</th><th class="col-confidence">Confidence</th><th></th></tr></thead>' +
+    '<thead><tr><th>#</th><th>Repo</th><th>Title</th><th>Category</th><th>Status</th><th>Verdict</th><th class="col-confidence">Confidence</th><th>Last Run</th><th></th></tr></thead>' +
     '<tbody>';
 
   items.forEach(function(r, i) {
@@ -390,7 +390,7 @@ function renderIssues() {
       actions += '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
     }
     if (r.status === 'Done' || r.status === 'Failed') {
-      actions += '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + r.repo + '\', ' + r.issue + ')" title="Re-run">&#x1F504;</button>';
+      actions += '<button class="btn" id="rerun-btn-' + escapeHtml(r.repo).replace(/[^a-zA-Z0-9]/g,'-') + '-' + r.issue + '" onclick="event.stopPropagation(); rerun(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', this)" title="Re-run">&#x1F504;</button>';
     }
     // Verify Fix button for closed/fixed issues
     if (r.status === 'Done' && (r.verdict === 'BUG_FIXED' || r.verdict === 'BUG_REGRESSION' || r.verdict === 'NOT_REPRODUCIBLE')) {
@@ -405,10 +405,11 @@ function renderIssues() {
       '<td>' + statusBadge(r.status) + '</td>' +
       '<td>' + (r.verdict ? verdictBadge(r.verdict) : '--') + '</td>' +
       '<td class="col-confidence">' + (r.confidence ? confidenceBadge(r.confidence) : '--') + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + timeAgo(r.timestamp) + '</td>' +
       '<td>' + actions + '</td>' +
     '</tr>' +
     '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
-      '<td colspan="8"><div class="expand-content">' + renderMarkdown(expandContent) + '</div></td>' +
+      '<td colspan="9"><div class="expand-content">' + renderMarkdown(expandContent) + '</div></td>' +
     '</tr>';
   });
 
@@ -504,14 +505,17 @@ async function confirmPost() {
   }
 }
 
-async function rerun(repo, issue) {
+async function rerun(repo, issue, btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin">&#x1F504;</span>'; }
   try {
     showToast('Re-running ' + repo + '#' + issue + '...', 'info');
     await fetch(API + '/api/rerun/' + repo + '/' + issue, { method: 'POST' });
     animateRefresh();
-    setTimeout(refreshAll, 2000);
+    // WebSocket will push updates, but also do a delayed refresh as fallback
+    setTimeout(refreshAll, 3000);
   } catch(e) {
     showToast('Failed to trigger re-run', 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F504;'; }
   }
 }
 
@@ -917,7 +921,18 @@ function connectWebSocket() {
           loadRepos();
           break;
         case 'job_update':
+        case 'job_created':
           loadIssues();
+          if (msg.data && msg.data.repo && msg.data.issue) {
+            showToast('Job created: ' + msg.data.repo + '#' + msg.data.issue, 'info');
+          }
+          break;
+        case 'job_completed':
+          loadIssues();
+          loadRepos();
+          if (msg.data && msg.data.repo) {
+            showToast(msg.data.repo + '#' + msg.data.issue + ': ' + (msg.data.verdict || 'done'), 'success');
+          }
           break;
         case 'repo_update':
           loadRepos();
