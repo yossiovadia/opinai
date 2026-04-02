@@ -244,6 +244,8 @@ func (s *Server) buildRouter() chi.Router {
 		r.Post("/reproduce", s.handleReproduce)
 		r.Post("/verify-fix", s.handleVerifyFix)
 		r.Post("/chat", s.handleChatFull)
+		r.Get("/chat-history", s.handleChatHistory)
+		r.Post("/chat-history/clear", s.handleClearChatHistory)
 		r.Post("/runs/{id}/post-comment", s.handlePostComment)
 		r.Post("/rerun/*", s.handleRerun)
 

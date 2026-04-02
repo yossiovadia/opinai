@@ -166,62 +166,74 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	sseHeaders(w)
 
+	repo, issue := extractChatIssue(req.Context)
+
+	// Save user message
+	if repo != "" && issue > 0 {
+		database.AddChatMessage(repo, issue, "user", req.Message)
+	}
+
 	systemCtx := buildChatContext(req.Context)
 	prompt := systemCtx + "\n\nUser question: " + req.Message
 
-	// Try streaming API call
 	cfg := ai.LoadConfig()
 	if !cfg.Available() {
 		writeSSE(w, "error", map[string]string{"message": "No AI provider configured"})
 		return
 	}
 
-	// Build request for streaming
+	var fullReply strings.Builder
+
 	streamResp, err := doStreamingAIRequest(cfg, prompt)
 	if err != nil {
-		// Fallback to non-streaming
 		reply, err2 := ai.Call(prompt, 2048)
 		if err2 != nil {
 			writeSSE(w, "error", map[string]string{"message": "Chat failed: " + err2.Error()})
 			return
 		}
-		writeSSE(w, "chunk", map[string]string{"text": ai.Sanitize(reply)})
+		reply = ai.Sanitize(reply)
+		fullReply.WriteString(reply)
+		writeSSE(w, "chunk", map[string]string{"text": reply})
 		writeSSE(w, "done", map[string]string{"message": ""})
-		return
+	} else {
+		defer streamResp.Body.Close()
+		buf := make([]byte, 4096)
+		var leftover string
+		for {
+			n, err := streamResp.Body.Read(buf)
+			if n > 0 {
+				chunk := leftover + string(buf[:n])
+				leftover = ""
+				lines := strings.Split(chunk, "\n")
+				if !strings.HasSuffix(chunk, "\n") {
+					leftover = lines[len(lines)-1]
+					lines = lines[:len(lines)-1]
+				}
+				for _, line := range lines {
+					if !strings.HasPrefix(line, "data: ") {
+						continue
+					}
+					data := line[6:]
+					if strings.TrimSpace(data) == "[DONE]" {
+						break
+					}
+					text := extractStreamText(cfg, data)
+					if text != "" {
+						fullReply.WriteString(text)
+						writeSSE(w, "chunk", map[string]string{"text": text})
+					}
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		writeSSE(w, "done", map[string]string{"message": ""})
 	}
-	defer streamResp.Body.Close()
 
-	// Parse SSE stream from AI provider
-	buf := make([]byte, 4096)
-	var leftover string
-	for {
-		n, err := streamResp.Body.Read(buf)
-		if n > 0 {
-			chunk := leftover + string(buf[:n])
-			leftover = ""
-			lines := strings.Split(chunk, "\n")
-			// Last element might be incomplete
-			if !strings.HasSuffix(chunk, "\n") {
-				leftover = lines[len(lines)-1]
-				lines = lines[:len(lines)-1]
-			}
-			for _, line := range lines {
-				if !strings.HasPrefix(line, "data: ") {
-					continue
-				}
-				data := line[6:]
-				if strings.TrimSpace(data) == "[DONE]" {
-					break
-				}
-				text := extractStreamText(cfg, data)
-				if text != "" {
-					writeSSE(w, "chunk", map[string]string{"text": text})
-				}
-			}
-		}
-		if err != nil {
-			break
-		}
+	// Save AI response
+	if repo != "" && issue > 0 && fullReply.Len() > 0 {
+		database.AddChatMessage(repo, issue, "ai", ai.Sanitize(fullReply.String()))
 	}
 
 	writeSSE(w, "done", map[string]string{"message": ""})

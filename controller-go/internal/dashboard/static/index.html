@@ -95,7 +95,10 @@
       <div class="chat-panel-title">&#x1F3B3; Ask OpinAI</div>
       <div class="chat-context-label" id="chatContextLabel">General context</div>
     </div>
-    <button class="chat-close" onclick="toggleChat()">&times;</button>
+    <div>
+      <button class="btn" onclick="clearChatHistoryDB()" title="Clear history" style="font-size:11px;margin-right:4px">&#x1F5D1; Clear</button>
+      <button class="chat-close" onclick="toggleChat()">&times;</button>
+    </div>
   </div>
   <div class="chat-messages" id="chatMessages"></div>
   <div class="chat-suggestions" id="chatSuggestions"></div>
@@ -601,18 +604,21 @@ function toggleChat() {
   }
 }
 
-function setChatContext(repo, issue, title) {
-  // If context changed, clear history
-  if (chatContext.repo !== repo || chatContext.issue_number !== issue) {
-    chatHistory = [];
-    renderChatMessages();
-  }
+async function setChatContext(repo, issue, title) {
   chatContext = { repo: repo, issue_number: issue };
   var label = repo + '#' + issue;
   if (title) label += ' — ' + title;
   document.getElementById('chatContextLabel').textContent = 'Discussing: ' + label;
+  // Load saved history from DB
+  chatHistory = [];
+  try {
+    var msgs = await fetchJSON('/api/chat-history?repo=' + encodeURIComponent(repo) + '&issue=' + issue);
+    if (msgs && msgs.length) {
+      chatHistory = msgs.map(function(m) { return { role: m.role, content: m.content }; });
+    }
+  } catch(e) { /* ignore */ }
+  renderChatMessages();
   renderSuggestions();
-  // Open panel
   if (!chatOpen) toggleChat();
 }
 
@@ -622,6 +628,26 @@ function clearChatContext() {
   document.getElementById('chatContextLabel').textContent = 'General context';
   renderChatMessages();
   renderSuggestions();
+}
+
+async function clearChatHistoryDB() {
+  if (!chatContext.repo || !chatContext.issue_number) {
+    chatHistory = [];
+    renderChatMessages();
+    renderSuggestions();
+    return;
+  }
+  try {
+    await fetch(API + '/api/chat-history/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: chatContext.repo, issue: chatContext.issue_number })
+    });
+  } catch(e) { /* ignore */ }
+  chatHistory = [];
+  renderChatMessages();
+  renderSuggestions();
+  showToast('Chat history cleared', 'info');
 }
 
 function renderSuggestions() {

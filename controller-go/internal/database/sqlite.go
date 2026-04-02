@@ -85,15 +85,25 @@ func migrate() error {
 			updated_at TEXT DEFAULT (datetime('now'))
 		);
 
+		CREATE TABLE IF NOT EXISTS chat_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT NOT NULL,
+			issue INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			created_at TEXT DEFAULT (datetime('now'))
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_runs_repo ON runs(repo);
 		CREATE INDEX IF NOT EXISTS idx_runs_repo_issue ON runs(repo, issue);
+		CREATE INDEX IF NOT EXISTS idx_chat_repo_issue ON chat_history(repo, issue);
 	`)
 	if err != nil {
 		return err
 	}
-	// Migration: add commit_sha column if missing (existing DBs)
+	// Migrations for existing DBs
 	db.Exec("ALTER TABLE deployment_plans ADD COLUMN commit_sha TEXT DEFAULT ''")
-	return err
+	return nil
 }
 
 // --- Runs ---
@@ -348,6 +358,54 @@ func DeleteRepoData(repo string) error {
 }
 
 // Now returns a formatted timestamp string for consistency with Python.
+// --- Chat History ---
+
+type ChatMessage struct {
+	ID        int64  `json:"id"`
+	Repo      string `json:"repo"`
+	Issue     int    `json:"issue"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+func AddChatMessage(repo string, issue int, role, content string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec(
+		"INSERT INTO chat_history (repo, issue, role, content) VALUES (?, ?, ?, ?)",
+		repo, issue, role, content,
+	)
+	return err
+}
+
+func GetChatHistory(repo string, issue int) ([]ChatMessage, error) {
+	rows, err := db.Query(
+		"SELECT id, repo, issue, role, content, created_at FROM chat_history WHERE repo = ? AND issue = ? ORDER BY created_at ASC",
+		repo, issue,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var msgs []ChatMessage
+	for rows.Next() {
+		var m ChatMessage
+		if err := rows.Scan(&m.ID, &m.Repo, &m.Issue, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+func ClearChatHistory(repo string, issue int) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM chat_history WHERE repo = ? AND issue = ?", repo, issue)
+	return err
+}
+
 func Now() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
 }

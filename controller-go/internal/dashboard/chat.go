@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
@@ -25,7 +26,6 @@ func buildChatContext(ctx map[string]any) string {
 	if repo != "" && issueNum > 0 {
 		system += fmt.Sprintf("Current issue: %s#%d\n", repo, issueNum)
 
-		// Include previous runs
 		runs, _ := database.GetRuns(repo, 3)
 		for _, run := range runs {
 			if run.Issue == issueNum {
@@ -38,7 +38,6 @@ func buildChatContext(ctx map[string]any) string {
 			}
 		}
 
-		// Include repo memory
 		mem, _ := database.GetRepoMemory(repo, nil)
 		if len(mem) > 0 {
 			system += "Project knowledge:\n"
@@ -48,14 +47,12 @@ func buildChatContext(ctx map[string]any) string {
 			system += "\n"
 		}
 
-		// Include repo profile
 		profile := loadProfile(repo)
 		if len(profile) > 0 {
 			b, _ := json.Marshal(profile)
 			system += "Project profile: " + string(b) + "\n\n"
 		}
 	} else {
-		// General context
 		stats, _ := database.GetTotalStats()
 		repos := ParseRepos(envGet("REPOS"))
 		system += fmt.Sprintf("Monitored repos: %s\n", strings.Join(repos, ", "))
@@ -66,7 +63,16 @@ func buildChatContext(ctx map[string]any) string {
 	return system
 }
 
-// handleChatFull handles the non-streaming /api/chat endpoint.
+func extractChatIssue(ctx map[string]any) (string, int) {
+	repo, _ := ctx["repo"].(string)
+	issue := 0
+	if n, ok := ctx["issue_number"].(float64); ok {
+		issue = int(n)
+	}
+	return repo, issue
+}
+
+// handleChatFull handles the non-streaming /api/chat endpoint with persistence.
 func (s *Server) handleChatFull(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Message string         `json:"message"`
@@ -77,13 +83,61 @@ func (s *Server) handleChatFull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	repo, issue := extractChatIssue(req.Context)
+
+	// Save user message
+	if repo != "" && issue > 0 {
+		database.AddChatMessage(repo, issue, "user", req.Message)
+	}
+
 	system := buildChatContext(req.Context)
 	reply, err := ai.Call(system+"\n\nUser question: "+req.Message, 2048)
 	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{"reply": "AI error: " + err.Error()})
+		reply = "AI error: " + err.Error()
+	}
+	reply = ai.Sanitize(reply)
+
+	// Save AI response
+	if repo != "" && issue > 0 {
+		database.AddChatMessage(repo, issue, "ai", reply)
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"reply": reply})
+}
+
+// handleChatHistory returns saved chat messages for a repo+issue.
+func (s *Server) handleChatHistory(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	issueStr := r.URL.Query().Get("issue")
+	if repo == "" || issueStr == "" {
+		jsonError(w, "repo and issue required", 400)
 		return
 	}
-	json.NewEncoder(w).Encode(map[string]string{"reply": ai.Sanitize(reply)})
+	issue, _ := strconv.Atoi(issueStr)
+
+	msgs, err := database.GetChatHistory(repo, issue)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if msgs == nil {
+		msgs = []database.ChatMessage{}
+	}
+	json.NewEncoder(w).Encode(msgs)
+}
+
+// handleClearChatHistory deletes chat history for a repo+issue.
+func (s *Server) handleClearChatHistory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo  string `json:"repo"`
+		Issue int    `json:"issue"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.Repo == "" || req.Issue == 0 {
+		jsonError(w, "repo and issue required", 400)
+		return
+	}
+	database.ClearChatHistory(req.Repo, req.Issue)
+	json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
 }
 
 func envGet(key string) string {
