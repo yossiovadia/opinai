@@ -47,22 +47,13 @@ func (p *Poller) Start() {
 		}
 
 		for _, repo := range repos {
-			_ = loadRepoProfile(repo) // available for future use
 			stats, _ := database.GetStats(repo)
 
-			// Only skip repos that have NEVER been processed AND have no runs
-			// (truly new repos need a manual first run to avoid flooding)
-			if stats.Processed == 0 && stats.TotalRuns == 0 {
-				p.state.UpdateRepo(repo, dashboard.RepoStatus{
-					Processed:  0,
-					ManualOnly: true,
-					LastCheck:  now,
-				})
-				continue
-			}
+			// Ensure repo has a "monitored_since" timestamp
+			since := ensureMonitoredSince(repo, stats)
 
-			slog.Info("checking repo for issues", "repo", repo)
-			issues, err := FetchOpenIssues(repo, doneLabel)
+			slog.Info("checking repo for issues", "repo", repo, "since", since)
+			issues, err := FetchOpenIssues(repo, doneLabel, since)
 			if err != nil {
 				slog.Error("failed to fetch issues", "repo", repo, "error", err)
 				continue
@@ -146,6 +137,58 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// ensureMonitoredSince returns the "monitored_since" timestamp for a repo.
+// If none exists, sets it to now (new repo) or earliest known activity (existing repo).
+func ensureMonitoredSince(repo string, stats database.RepoStats) string {
+	mem, _ := database.GetRepoMemory(repo, strPtr("monitored_since"))
+	if v, ok := mem["monitored_since"]; ok && v != "" {
+		return v
+	}
+
+	// No monitored_since yet — determine the right timestamp
+	var since string
+	if stats.Processed > 0 || stats.TotalRuns > 0 {
+		// Existing repo with history — use earliest run timestamp as baseline
+		runs, _ := database.GetRuns(repo, 1)
+		if len(runs) > 0 {
+			since = runs[0].CreatedAt
+		}
+		if since == "" {
+			since = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+		}
+		// Mark all currently-open issues as processed to prevent backlog flood
+		markBacklogProcessed(repo)
+	} else {
+		// Brand new repo — start from now
+		since = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	}
+
+	database.SetRepoMemory(repo, "monitored_since", since)
+	slog.Info("set monitored_since for repo", "repo", repo, "since", since)
+	return since
+}
+
+// markBacklogProcessed marks all currently-open issues as processed (DB only, no analysis).
+// This prevents the auto-poller from creating Jobs for the entire backlog.
+func markBacklogProcessed(repo string) {
+	doneLabel := envOr("DONE_LABEL", "opinai-done")
+	issues, err := FetchOpenIssues(repo, doneLabel, "")
+	if err != nil {
+		return
+	}
+	count := 0
+	for _, issue := range issues {
+		already, _ := database.IsProcessed(repo, issue.Number)
+		if !already {
+			database.MarkProcessed(repo, issue.Number, "backlog-skip")
+			count++
+		}
+	}
+	if count > 0 {
+		slog.Info("marked backlog issues as processed", "repo", repo, "count", count)
+	}
 }
 
 func checkPlanStaleness(repos []string) {

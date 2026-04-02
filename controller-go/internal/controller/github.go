@@ -73,19 +73,25 @@ func ghDelete(path string) (int, error) {
 
 // Issue represents a GitHub issue.
 type Issue struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	State  string `json:"state"` // "open" or "closed"
-	Labels []struct {
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	State     string `json:"state"`
+	CreatedAt string `json:"created_at"`
+	Labels    []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 	PullRequest *struct{} `json:"pull_request,omitempty"`
 }
 
 // FetchOpenIssues returns open issues (not PRs) without the done label.
-func FetchOpenIssues(repo, doneLabel string) ([]Issue, error) {
-	body, code, err := ghGet(fmt.Sprintf("/repos/%s/issues?state=open&per_page=100", repo))
+// If since is non-empty, only returns issues created after that ISO timestamp.
+func FetchOpenIssues(repo, doneLabel, since string) ([]Issue, error) {
+	url := fmt.Sprintf("/repos/%s/issues?state=open&per_page=100&sort=created&direction=desc", repo)
+	if since != "" {
+		url += "&since=" + since
+	}
+	body, code, err := ghGet(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch issues for %s: %w", repo, err)
 	}
