@@ -22,12 +22,16 @@ func (w *statusWriter) WriteHeader(code int) {
 
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip wrapping for WebSocket (needs raw ResponseWriter for hijack)
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
 		dur := time.Since(start)
-		// Skip noisy paths
-		if r.URL.Path == "/healthz" || r.URL.Path == "/health" || r.URL.Path == "/ws" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/health" {
 			return
 		}
 		slog.Info("HTTP",
@@ -44,6 +48,11 @@ func requestLogger(next http.Handler) http.Handler {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip CORS for WebSocket upgrade
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			origin = "*"
@@ -140,6 +149,11 @@ func isAIPath(path string) bool {
 
 func rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip rate limiting for WebSocket
+		if r.URL.Path == "/ws" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		ip := r.RemoteAddr
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
 			ip = strings.Split(fwd, ",")[0]

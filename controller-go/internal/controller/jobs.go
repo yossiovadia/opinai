@@ -64,21 +64,28 @@ func (jm *JobManager) broadcast(eventType string, data any) {
 	jm.ws.Broadcast(BroadcastEvent{Type: eventType, Data: data})
 }
 
-// hasRunningJob checks if any opinai-runner Job is currently running.
-func (jm *JobManager) hasRunningJob() bool {
+// MaxConcurrentJobs is the total number of reproduction Jobs that can run simultaneously.
+var MaxConcurrentJobs = 3
+
+// countRunningJobs returns total active jobs and whether the given repo has one running.
+func (jm *JobManager) countRunningJobs(repo string) (total int, repoRunning bool) {
+	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
 	ctx := context.Background()
 	jobs, err := jm.client.BatchV1().Jobs(jm.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=opinai-runner",
 	})
 	if err != nil {
-		return false
+		return 0, false
 	}
 	for _, job := range jobs.Items {
-		if job.Status.Succeeded == 0 && job.Status.Failed == 0 && job.Status.Active > 0 {
-			return true
+		if job.Status.Active > 0 {
+			total++
+			if job.Labels != nil && job.Labels["opinai/repo"] == repoSafe {
+				repoRunning = true
+			}
 		}
 	}
-	return false
+	return
 }
 
 // JobName generates the K8s job name for a repo+issue.
@@ -92,9 +99,14 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	name := JobName(repo, issueNumber)
 	ctx := context.Background()
 
-	// Only one reproduction Job at a time — prevents resource contention and API rate limiting
-	if jm.hasRunningJob() {
-		slog.Info("another job is running — skipping, will retry next cycle", "repo", repo, "issue", issueNumber)
+	// Concurrency control: 1 job per repo, max 3 total
+	totalActive, repoActive := jm.countRunningJobs(repo)
+	if repoActive {
+		slog.Info("repo already has a running job — skipping, will retry next cycle", "repo", repo, "issue", issueNumber)
+		return nil
+	}
+	if totalActive >= MaxConcurrentJobs {
+		slog.Info("max concurrent jobs reached — skipping, will retry next cycle", "repo", repo, "issue", issueNumber, "active", totalActive, "max", MaxConcurrentJobs)
 		return nil
 	}
 
