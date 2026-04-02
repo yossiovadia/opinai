@@ -210,18 +210,28 @@ func (s *Server) handlePostComment(w http.ResponseWriter, r *http.Request) {
 // --- /api/rerun/{repo}/{issue} ---
 
 func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
-	// Parse "owner/repo/123" from wildcard
-	wildcard := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	// Parse "owner/repo/123" from wildcard or URL path
+	wildcard := chi.URLParam(r, "*")
+	if wildcard == "" {
+		// Fallback: parse from full path after /api/rerun/
+		wildcard = strings.TrimPrefix(r.URL.Path, "/api/rerun/")
+	}
+	wildcard = strings.TrimPrefix(wildcard, "/")
+
 	parts := strings.Split(wildcard, "/")
-	if len(parts) < 3 {
-		jsonError(w, "invalid path: expected repo/issue", 400)
+	if len(parts) < 2 {
+		jsonError(w, "invalid path: expected owner/repo/issue or repo/issue, got: "+wildcard, 400)
 		return
 	}
+	issueStr := parts[len(parts)-1]
 	repo := strings.Join(parts[:len(parts)-1], "/")
-	issue, _ := strconv.Atoi(parts[len(parts)-1])
+	issue, err := strconv.Atoi(issueStr)
+	if err != nil || issue == 0 {
+		jsonError(w, "invalid issue number: "+issueStr, 400)
+		return
+	}
 
-	// No GitHub label to remove — tracking is DB-only
-	// TODO: delete K8s Job
+	// TODO: delete K8s Job for re-run
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "rerun_triggered",

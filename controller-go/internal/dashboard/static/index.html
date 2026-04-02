@@ -113,6 +113,7 @@ const API = '';
 const REFRESH_INTERVAL = 30000;
 let activeRepoFilter = null;
 let allRuns = [];
+var pendingReRuns = {}; // key: "repo#issue" → {timestamp: Date.now()}
 
 async function fetchJSON(url) {
   const resp = await fetch(API + url);
@@ -311,6 +312,25 @@ function mergeIssues() {
     }
   });
 
+  // Apply pending re-run overrides
+  for (var pk in pendingReRuns) {
+    if (map[pk]) {
+      // Check if a NEW run arrived (timestamp after the re-run was triggered)
+      var pr = pendingReRuns[pk];
+      var entry = map[pk];
+      var runTs = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
+      if (runTs > pr.timestamp) {
+        // New result arrived — clear pending
+        delete pendingReRuns[pk];
+      } else {
+        // Still waiting — override display
+        entry.status = 'Re-running';
+        entry.verdict = '';
+        entry.confidence = '';
+      }
+    }
+  }
+
   // Convert to array, sorted by timestamp (newest first)
   var items = Object.values(map);
   items.sort(function(a, b) {
@@ -323,6 +343,7 @@ function mergeIssues() {
 
 function statusBadge(status) {
   switch (status) {
+    case 'Re-running': return '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Re-running...</span>';
     case 'Running': return '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running</span>';
     case 'Done': return '<span class="verdict verdict-ok">&#x2705; Done</span>';
     case 'Failed': return '<span class="verdict verdict-bug">&#x274C; Failed</span>';
@@ -389,8 +410,11 @@ function renderIssues() {
     if (r.repo && r.issue && r.status !== 'Running') {
       actions += '<button class="btn" onclick="event.stopPropagation(); setChatContext(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', \'' + escapeHtml(r.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
     }
-    if (r.status === 'Done' || r.status === 'Failed') {
-      actions += '<button class="btn" id="rerun-btn-' + escapeHtml(r.repo).replace(/[^a-zA-Z0-9]/g,'-') + '-' + r.issue + '" onclick="event.stopPropagation(); rerun(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', this)" title="Re-run">&#x1F504;</button>';
+    var isPending = pendingReRuns[(r.repo || '') + '#' + (r.issue || '')];
+    if ((r.status === 'Done' || r.status === 'Failed') && !isPending) {
+      actions += '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', this)" title="Re-run">&#x1F504;</button>';
+    } else if (isPending) {
+      actions += '<button class="btn" disabled><span class="spin">&#x1F504;</span></button>';
     }
     // Verify Fix button for closed/fixed issues
     if (r.status === 'Done' && (r.verdict === 'BUG_FIXED' || r.verdict === 'BUG_REGRESSION' || r.verdict === 'NOT_REPRODUCIBLE')) {
@@ -507,14 +531,24 @@ async function confirmPost() {
 
 async function rerun(repo, issue, btn) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin">&#x1F504;</span>'; }
+  var key = repo + '#' + issue;
   try {
     showToast('Re-running ' + repo + '#' + issue + '...', 'info');
-    await fetch(API + '/api/rerun/' + repo + '/' + issue, { method: 'POST' });
-    animateRefresh();
-    // WebSocket will push updates, but also do a delayed refresh as fallback
-    setTimeout(refreshAll, 3000);
+    var resp = await fetch(API + '/api/rerun/' + repo + '/' + issue, { method: 'POST' });
+    var data = await resp.json();
+    if (!resp.ok) {
+      console.error('Rerun failed:', resp.status, data);
+      showToast('Re-run failed: ' + (data.message || resp.status), 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F504;'; }
+      return;
+    }
+    // Mark as pending — spinner persists until new result arrives
+    pendingReRuns[key] = { timestamp: Date.now() };
+    renderIssues();
   } catch(e) {
+    console.error('Rerun error:', e);
     showToast('Failed to trigger re-run', 'error');
+    delete pendingReRuns[key];
     if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F504;'; }
   }
 }
@@ -917,7 +951,11 @@ function connectWebSocket() {
       var msg = JSON.parse(e.data);
       switch (msg.type) {
         case 'run_update':
-          loadIssues(); // re-fetch runs + jobs
+          // Clear pending re-run if this is the result
+          if (msg.data && msg.data.repo && msg.data.issue) {
+            delete pendingReRuns[msg.data.repo + '#' + msg.data.issue];
+          }
+          loadIssues();
           loadRepos();
           break;
         case 'job_update':
@@ -928,11 +966,13 @@ function connectWebSocket() {
           }
           break;
         case 'job_completed':
-          loadIssues();
-          loadRepos();
-          if (msg.data && msg.data.repo) {
+          // Clear pending re-run for this issue
+          if (msg.data && msg.data.repo && msg.data.issue) {
+            delete pendingReRuns[msg.data.repo + '#' + msg.data.issue];
             showToast(msg.data.repo + '#' + msg.data.issue + ': ' + (msg.data.verdict || 'done'), 'success');
           }
+          loadIssues();
+          loadRepos();
           break;
         case 'repo_update':
           loadRepos();
