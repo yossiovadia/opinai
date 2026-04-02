@@ -14,6 +14,9 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
 )
 
+// setupRetryInfo tracks self-healing retries during setup for inclusion in reports.
+var setupRetryInfo string
+
 // Run executes the full reproduction flow. Called when --mode=runner.
 func Run() {
 	repo := os.Getenv("REPO")
@@ -146,6 +149,10 @@ func Run() {
 	if serverURL != "" {
 		serverInfo = fmt.Sprintf("**Server:** `%s`\n", serverURL)
 	}
+	retryInfo := ""
+	if setupRetryInfo != "" {
+		retryInfo = fmt.Sprintf("**Setup:** %s\n", setupRetryInfo)
+	}
 	verdictText := vr.Text
 	if verdictText == "" {
 		verdictText = "AI verdict unavailable."
@@ -157,6 +164,7 @@ func Run() {
 			"**Category:** %s\n"+
 			"**Verdict:** %s\n"+
 			"**Confidence:** %s\n"+
+			"%s"+
 			"%s"+
 			"**Analysis:** AI-powered (model: %s)\n\n"+
 			"### Results\n\n"+
@@ -170,7 +178,7 @@ func Run() {
 			"</details>\n\n"+
 			"---\n"+
 			"*\"That's just, like, your opinion, man.\" -- [OpinAI](https://github.com/yossiovadia/opinai)*",
-		issueNumber, category, vr.Verdict, vr.Confidence, serverInfo,
+		issueNumber, category, vr.Verdict, vr.Confidence, serverInfo, retryInfo,
 		os.Getenv("AI_MODEL"), resultsTable, verdictText, truncStr(testOutput, 5000),
 	)
 
@@ -211,30 +219,50 @@ func startServer() (*os.Process, string) {
 	// Analyze README on first run
 	analyzeReadme(cloneDir)
 
-	// Build
+	// Build with self-healing retries
+	var buildRetry RetryResult
 	if buildCmd != "" {
 		resolved := strings.ReplaceAll(buildCmd, "pip install", "python3 -m pip install --user")
 		slog.Info("installing", "cmd", resolved)
-		cmd := exec.Command("sh", "-c", resolved)
-		cmd.Dir = cloneDir
-		cmd.Env = buildEnv()
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
-		cmd.Run() // continue even on error
+		var err error
+		_, buildRetry, err = runWithRetry(resolved, cloneDir, buildEnv())
+		if err != nil {
+			slog.Warn("build failed after retries", "error", err, "retries", buildRetry.Retries)
+			// Continue anyway — the AI tests may still be useful
+		} else if buildRetry.Retries > 0 {
+			slog.Info("build succeeded after retries", "retries", buildRetry.Retries, "fixes", buildRetry.FixesApplied)
+		}
 	}
+	// Store retry info for report
+	setupRetryInfo = formatRetryInfo(buildRetry)
 
 	if runCmd == "" {
 		return nil, ""
 	}
 
-	// Start server
+	// Start server with retry on initial failures
 	slog.Info("starting server", "cmd", runCmd)
 	cmd = exec.Command("sh", "-c", runCmd)
 	cmd.Dir = cloneDir
 	cmd.Env = buildEnv()
 	if err := cmd.Start(); err != nil {
-		slog.Warn("server start failed", "error", err)
-		return nil, ""
+		// Try common fixes for server start
+		slog.Warn("server start failed, attempting fix", "error", err)
+		fixedCmd := runCmd
+		if strings.Contains(err.Error(), "not found") {
+			fixedCmd = "export PATH=/tmp/pip-user/bin:$PATH && " + runCmd
+		}
+		cmd = exec.Command("sh", "-c", fixedCmd)
+		cmd.Dir = cloneDir
+		cmd.Env = buildEnv()
+		if err2 := cmd.Start(); err2 != nil {
+			slog.Warn("server start failed after fix", "error", err2)
+			return nil, ""
+		}
+		if setupRetryInfo != "" {
+			setupRetryInfo += "; "
+		}
+		setupRetryInfo += "fixed server start command (PATH)"
 	}
 
 	// Derive server URL

@@ -578,6 +578,113 @@ def add_label():
 # ---------------------------------------------------------------------------
 
 
+MAX_RETRIES = 3
+
+
+def _try_common_fix(error_output: str, command: str) -> tuple[str | None, str]:
+    """Try well-known fixes without AI. Returns (fixed_command, description) or (None, '')."""
+    lower = error_output.lower()
+
+    # Permission denied on pip → add --user
+    if "permission denied" in lower and "pip install" in command and "--user" not in command:
+        return command.replace("pip install", "pip install --user"), "added --user flag (permission denied)"
+
+    # pip not found → use python3 -m pip
+    if ("pip: command not found" in lower or "pip3: command not found" in lower) and "python3 -m pip" not in command:
+        fixed = command.replace("pip install", "python3 -m pip install").replace("pip3 install", "python3 -m pip install")
+        return fixed, "replaced pip with python3 -m pip (command not found)"
+
+    # Command not found after install → PATH issue
+    if "command not found" in lower and "pip" not in lower:
+        return f"export PATH=/tmp/pip-user/bin:$PATH && {command}", "prepended pip bin to PATH"
+
+    # No module named X → auto-install
+    if "no module named" in lower:
+        for line in error_output.splitlines():
+            if "no module named" in line.lower():
+                parts = line.split("'")
+                if len(parts) >= 2:
+                    module = parts[1]
+                    if " " not in module and len(module) < 50:
+                        return f"python3 -m pip install --user {module} && {command}", f"auto-installed missing module: {module}"
+
+    return None, ""
+
+
+def _ask_ai_for_fix(command: str, error_output: str) -> str | None:
+    """Ask the AI to diagnose and fix a failed command."""
+    if not _ai_available():
+        return None
+
+    err_trunc = error_output[-1500:] if len(error_output) > 1500 else error_output
+    prompt = (
+        f"The reproduction setup failed.\n\n"
+        f"Command: {command}\n\n"
+        f"Error output (last 1500 chars):\n{err_trunc}\n\n"
+        "Diagnose the problem and provide a fixed command that will work in a minimal container "
+        "(Debian-based, no root, limited PATH, pip may need --user flag, PYTHONUSERBASE=/tmp/pip-user).\n\n"
+        "Respond with ONLY the fixed shell command on a single line. No explanation."
+    )
+
+    try:
+        reply = _call_ai(prompt)
+    except Exception:
+        return None
+
+    if not reply:
+        return None
+
+    for line in reply.strip().splitlines():
+        line = line.strip()
+        if line and not line.startswith("```") and not line.startswith("#") and len(line) > 5:
+            return line
+    return None
+
+
+def _run_with_retry(command: str, cwd: str, env: dict) -> tuple:
+    """Run a command with self-healing retries. Returns (result, retry_count)."""
+    current_cmd = command
+
+    for attempt in range(MAX_RETRIES + 1):
+        result = subprocess.run(
+            current_cmd,
+            shell=True,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if result.returncode == 0:
+            return result, attempt
+
+        if attempt == MAX_RETRIES:
+            return result, attempt
+
+        error_output = result.stdout + result.stderr
+        log.warning("Command failed (attempt %d/%d), trying self-heal...", attempt + 1, MAX_RETRIES)
+
+        # Try common fixes first
+        fixed, desc = _try_common_fix(error_output, current_cmd)
+        if fixed:
+            log.info("Applying common fix: %s", desc)
+            current_cmd = fixed
+            continue
+
+        # Ask AI
+        ai_fix = _ask_ai_for_fix(current_cmd, error_output)
+        if ai_fix and ai_fix != current_cmd:
+            log.info("Applying AI fix: %s", ai_fix[:100])
+            current_cmd = ai_fix
+            continue
+
+        # No fix found
+        return result, attempt
+
+    return result, MAX_RETRIES
+
+
 def _start_server(profile: dict) -> subprocess.Popen | None:
     """Install and start the target server inside the pod using profile config."""
     global SERVER_URL
@@ -616,36 +723,55 @@ def _start_server(profile: dict) -> subprocess.Popen | None:
     env["PYTHONUSERBASE"] = "/tmp/pip-user"
     env["PATH"] = f"/tmp/pip-user/bin:/usr/local/bin:/root/.local/bin:{pip_bin}:{env.get('PATH', '')}"
 
-    # Install / build (use python3 -m pip for pip commands, --user for writable install)
+    # Install / build with self-healing retries
     if build_cmd:
         resolved_build_cmd = build_cmd.replace("pip install", "python3 -m pip install --user")
         log.info("Installing: %s", resolved_build_cmd)
-        result = subprocess.run(
-            resolved_build_cmd,
-            shell=True,
-            cwd=clone_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        result, retries = _run_with_retry(resolved_build_cmd, clone_dir, env)
         if result.returncode != 0:
-            log.warning("Build failed (exit %d): %s", result.returncode, result.stderr[:500])
-            # Continue anyway — the AI tests may still be useful
+            log.warning("Build failed after %d retries (exit %d): %s",
+                        retries, result.returncode, result.stderr[:500])
+        elif retries > 0:
+            log.info("Build succeeded after %d retries", retries)
 
     if not run_cmd:
         return None
 
-    # Start the server
+    # Start the server with retry on startup failures
     log.info("Starting server: %s", run_cmd)
-    server_proc = subprocess.Popen(
-        run_cmd,
-        shell=True,
-        cwd=clone_dir,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    current_run_cmd = run_cmd
+    server_proc = None
+    for srv_attempt in range(MAX_RETRIES + 1):
+        try:
+            server_proc = subprocess.Popen(
+                current_run_cmd,
+                shell=True,
+                cwd=clone_dir,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            # Give it a moment to crash
+            time.sleep(1)
+            if server_proc.poll() is not None:
+                stderr_out = server_proc.stderr.read().decode("utf-8", errors="replace")[:500]
+                raise RuntimeError(f"Server exited immediately: {stderr_out}")
+            break  # server is running
+        except Exception as exc:
+            if srv_attempt == MAX_RETRIES:
+                log.warning("Server start failed after %d retries: %s", MAX_RETRIES, exc)
+                return None
+            error_str = str(exc)
+            fixed, desc = _try_common_fix(error_str, current_run_cmd)
+            if fixed:
+                log.info("Server fix: %s", desc)
+                current_run_cmd = fixed
+            elif "not found" in error_str.lower():
+                current_run_cmd = f"export PATH=/tmp/pip-user/bin:$PATH && {run_cmd}"
+                log.info("Server fix: prepended pip bin to PATH")
+            else:
+                log.warning("Server start failed, no fix found: %s", exc)
+                return None
 
     # Derive SERVER_URL from health check URL
     health_url = profile.get("health", "")
