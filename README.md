@@ -148,28 +148,55 @@ fi
 
 ## Architecture
 
+OpinAI has two deployment modes:
+
+**GitHub Action** (lightweight) — runs in CI, tests a single issue against your server:
 ```
-┌─────────────────┐     ┌──────────────┐     ┌───────────────────┐
-│  GitHub Issue    │────▶│   OpinAI     │────▶│  Your Server      │
-│  labeled with    │     │              │     │                   │
-│  needs-          │     │  1. Read     │     │  Started by       │
-│  reproduction    │     │  2. Analyze  │     │  install_command   │
-│                  │     │  3. Test     │     │  + server_command  │
-│                  │     │  4. Report   │     │                   │
-└─────────────────┘     └──────────────┘     └───────────────────┘
+GitHub Issue → OpinAI Action → Install → Start Server → Test → Report
+```
+
+**Kubernetes Controller** (full) — runs on OpenShift, watches repos continuously:
+```
+GitHub Repos → Go Controller → K8s Jobs → AI Analysis → Sandbox Deploy → Test → Dashboard
+```
+
+The controller is a single Go binary (~20MB, ~41MB container) that:
+- Polls GitHub for new issues across multiple repos
+- Creates K8s Jobs for AI-powered bug reproduction
+- Serves a web dashboard with real-time SSE streaming
+- Stores results in SQLite (PVC-backed)
+- Manages sandbox namespaces for isolated deployments
+- Learns from previous runs (repo memory)
+
+```
+controller-go/
+├── cmd/opinai/main.go           # Entrypoint (controller + runner modes)
+├── internal/
+│   ├── ai/                      # Multi-provider AI (Vertex/Anthropic/OpenAI)
+│   ├── controller/              # GitHub polling, K8s Job management
+│   ├── dashboard/               # HTTP server, REST API, SSE, embedded static files
+│   ├── database/                # SQLite persistence (runs, memory, plans)
+│   ├── runner/                  # Reproduction flow with self-healing retries
+│   └── sandbox/                 # Sandbox namespace lifecycle (quota, network policy)
 ```
 
 ## Status
 
 - [x] GitHub Action with protocol compliance tests
 - [x] Structured issue commenting
-- [x] Keyword-based test scoping
 - [x] Multi-provider LLM API testing (OpenAI, Anthropic, Bedrock, Vertex, Azure)
 - [x] Custom test script support
-- [ ] AI-powered issue analysis (coming soon)
-- [ ] Self-hosted GPU runner support
-- [ ] OpenShift Operator
-- [ ] Regression tracking
+- [x] AI-powered issue analysis and categorization
+- [x] Kubernetes controller (Go, single binary)
+- [x] Web dashboard with real-time updates
+- [x] AI chat with issue context
+- [x] SQLite persistence (survives pod restarts)
+- [x] Sandbox namespace management
+- [x] Deployment analysis (AI-generated options)
+- [x] Self-healing reproduction (auto-retry with fixes)
+- [x] Repo memory (learns from failures)
+- [x] Confidence scoring (HIGH/MEDIUM/LOW)
+- [x] Post preview before GitHub comment
 
 ## License
 

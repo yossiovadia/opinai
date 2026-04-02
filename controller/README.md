@@ -1,29 +1,51 @@
 # OpinAI Controller
 
-Kubernetes-native controller that watches GitHub repos for new issues and orchestrates bug reproduction Jobs.
+Kubernetes-native controller that watches GitHub repos for new issues and orchestrates AI-powered bug reproduction Jobs. Built in Go, runs on OpenShift.
 
 ## How it works
 
-1. **Controller** (`opinai_controller.py`) runs as a Deployment, polling GitHub for open issues
+1. **Controller** (`opinai-go`) runs as a Deployment, polling GitHub for open issues
 2. For each new issue, it creates a Kubernetes **Job**
-3. **Runner** (`opinai_runner.py`) runs inside the Job pod — fetches the issue, calls AI to generate tests, executes them, and posts a structured report back to the issue
+3. The **Runner** (same binary, `--mode=runner`) runs inside the Job pod — fetches the issue, calls AI to categorize and generate tests, reproduces the bug, and posts a structured report
 4. Issues are labeled `opinai-done` after processing
+5. Results are stored in SQLite and displayed on the web dashboard
 
-No CRDs, no operator framework — just a Deployment that polls and creates Jobs.
+Single binary (~20MB), ~41MB container image (with runtime deps).
 
 ## Quick start
 
 ```bash
-# Interactive setup — generates secret.yaml and configmap.yaml
+# Interactive setup — configures secrets, repos, and deploys
 ./setup.sh
 
-# Build the image
-docker build -t opinai-controller:latest .
-
-# Deploy
-kubectl apply -f manifests/namespace.yaml
-kubectl apply -f manifests/
+# Or build manually
+docker build -t opinai-controller -f Dockerfile ..
 ```
+
+## Architecture
+
+```
+controller-go/
+├── cmd/opinai/main.go           # Entrypoint (controller + runner modes)
+├── internal/
+│   ├── ai/                      # Multi-provider AI client (Vertex/Anthropic/OpenAI)
+│   ├── controller/              # GitHub polling, K8s Job management
+│   ├── dashboard/               # HTTP/HTTPS server, REST API, SSE streaming
+│   ├── database/                # SQLite persistence
+│   ├── runner/                  # Bug reproduction flow (runs in Job pods)
+│   └── sandbox/                 # Sandbox namespace lifecycle
+├── Dockerfile
+└── go.mod
+```
+
+## Dashboard
+
+The controller serves a web dashboard on ports 8080 (HTTP) and 8443 (HTTPS):
+
+- **Main dashboard** — unified issue view with verdicts, confidence, categories
+- **Admin panel** — repo management, deployment analysis, AI knowledge, logs
+- **AI Chat** — ask OpinAI about any issue with streaming responses
+- **Post preview** — review AI-generated comments before posting to GitHub
 
 ## Configuration
 
@@ -31,8 +53,8 @@ kubectl apply -f manifests/
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `REPOS` | Comma-separated list of repos to watch | (required) |
-| `POLL_INTERVAL_MINUTES` | How often to check for new issues | `60` |
+| `REPOS` | Comma-separated repos to watch | (required) |
+| `POLL_INTERVAL_MINUTES` | Polling frequency | `60` |
 | `DONE_LABEL` | Label applied to processed issues | `opinai-done` |
 
 ### Credentials (via Secret)
@@ -40,34 +62,33 @@ kubectl apply -f manifests/
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_TOKEN` | GitHub token with repo + issues permissions |
-| `AI_API_KEY` | API key for AI analysis (Anthropic, OpenAI, or compatible) |
-| `AI_BASE_URL` | API base URL |
-| `AI_MODEL` | Model to use for analysis |
+| `AI_API_KEY` | API key for AI analysis (Anthropic/OpenAI) |
+| `AI_PROVIDER` | `vertex`, `anthropic`, or `openai` |
+| `AI_MODEL` | Model name |
+| `AI_PROJECT` | Google Cloud project (Vertex AI) |
+| `AI_REGION` | Google Cloud region (Vertex AI) |
 
-## Files
+## Features
 
-```
-controller/
-├── Dockerfile                  # Build image
-├── requirements.txt            # Python dependencies
-├── opinai_controller.py        # Main controller loop
-├── opinai_runner.py            # Runs inside Job pods
-├── setup.sh                    # Interactive setup
-├── manifests/
-│   ├── namespace.yaml
-│   ├── configmap.yaml
-│   ├── secret.yaml.example     # Template — NOT real credentials
-│   ├── serviceaccount.yaml
-│   ├── role.yaml
-│   ├── rolebinding.yaml
-│   ├── deployment.yaml
-│   └── job-template.yaml       # Reference template
-└── README.md
-```
+- [x] GitHub issue polling + K8s Job creation
+- [x] AI-powered issue categorization (BUG/FEATURE/QUESTION/DOCS)
+- [x] Automated test generation + execution
+- [x] AI verdict with confidence scoring
+- [x] Web dashboard with real-time updates
+- [x] SSE streaming (analysis, reproduction, chat, check-now)
+- [x] SQLite persistence (survives pod restarts via PVC)
+- [x] Sandbox namespace management (isolated deployments)
+- [x] Deployment analysis (AI generates deployment options)
+- [x] Self-healing reproduction (auto-retry with fixes)
+- [x] Repo memory (learns from previous runs)
+- [x] Admin panel (repo management, settings, logs)
+- [x] AI chat with issue context
+- [x] Post preview before GitHub comment
+- [x] Multi-provider AI (Anthropic, OpenAI, Vertex AI)
 
 ## Security
 
-- `manifests/secret.yaml` is gitignored — never commit credentials
-- API keys are never logged or echoed
-- AI output is sanitized before posting to GitHub (credential strings are replaced with REDACTED)
-- `setup.sh` reads secrets with `-s` flag (no terminal echo)
+- Credentials stored in K8s Secrets (never logged)
+- Sandbox namespaces isolated with NetworkPolicy + ResourceQuota
+- API keys sanitized from all outputs
+- Self-signed TLS for HTTPS

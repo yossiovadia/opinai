@@ -1,5 +1,5 @@
-# This template is read by opinai_controller.py and filled in per-issue.
-# Do NOT apply this directly — the controller creates Jobs programmatically.
+# Reference template — the Go controller creates Jobs programmatically.
+# Do NOT apply this directly.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -19,7 +19,7 @@ spec:
       containers:
         - name: runner
           image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
-          command: ["python", "opinai_runner.py"]
+          command: ["/app/opinai-go", "--mode=runner"]
           env:
             - name: REPO
               value: "{repo}"
