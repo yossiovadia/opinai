@@ -225,6 +225,17 @@ tr:hover td {
   color: var(--red);
 }
 
+.verdict-regression {
+  background: rgba(248, 81, 73, 0.25);
+  color: var(--red);
+  animation: pulse-regression 1.5s infinite;
+}
+
+@keyframes pulse-regression {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 .verdict-ok {
   background: rgba(63, 185, 80, 0.15);
   color: var(--green);

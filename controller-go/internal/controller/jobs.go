@@ -74,6 +74,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		{Name: "REPO", Value: repo},
 		{Name: "ISSUE_NUMBER", Value: fmt.Sprintf("%d", issueNumber)},
 		{Name: "OPINAI_AUTO_POST", Value: "false"},
+		{Name: "OPINAI_VERIFY_FIX", Value: os.Getenv("_OPINAI_VERIFY_FIX_PENDING")},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
 		{Name: "OPINAI_HAS_KNOWLEDGE", Value: hasKnowledge},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
@@ -274,6 +275,26 @@ func (jm *JobManager) HarvestCompletedJobs() {
 	}
 }
 
+// CreateVerifyFixJob creates a Job with OPINAI_VERIFY_FIX=true.
+func (jm *JobManager) CreateVerifyFixJob(repo string, issueNumber int, issueTitle string) error {
+	// Delete any existing job for this issue first (force re-run)
+	name := JobName(repo, issueNumber)
+	bg := metav1.DeletePropagationBackground
+	jm.client.BatchV1().Jobs(jm.namespace).Delete(
+		context.Background(), name, metav1.DeleteOptions{PropagationPolicy: &bg},
+	)
+	// Wait briefly for deletion
+	time.Sleep(2 * time.Second)
+
+	// Override the OPINAI_AUTO_POST env to include verify flag
+	// We reuse CreateReproductionJob but need to inject the extra env var
+	// The simplest approach: set a temp env var that CreateReproductionJob picks up
+	os.Setenv("_OPINAI_VERIFY_FIX_PENDING", "true")
+	defer os.Unsetenv("_OPINAI_VERIFY_FIX_PENDING")
+
+	return jm.CreateReproductionJob(repo, issueNumber, issueTitle)
+}
+
 // DeleteJob deletes a Job by name.
 func (jm *JobManager) DeleteJob(name string) error {
 	bg := metav1.DeletePropagationBackground
@@ -364,7 +385,7 @@ func parseMarker(logs, prefix, fallback string) string {
 }
 
 func parseVerdictMarker(logs, category string) string {
-	verdicts := []string{"BUG_CONFIRMED", "NOT_A_BUG", "NOT_REPRODUCIBLE", "FEATURE_REQUEST", "ERROR"}
+	verdicts := []string{"BUG_CONFIRMED", "NOT_A_BUG", "NOT_REPRODUCIBLE", "FEATURE_REQUEST", "ERROR", "BUG_FIXED", "BUG_REGRESSION"}
 	for _, line := range strings.Split(logs, "\n") {
 		if strings.Contains(line, "--- OPINAI VERDICT:") {
 			upper := strings.ToUpper(line)
@@ -380,6 +401,12 @@ func parseVerdictMarker(logs, category string) string {
 		return "FEATURE_REQUEST"
 	}
 	lower := strings.ToLower(logs)
+	if strings.Contains(lower, "bug_regression") || strings.Contains(lower, "bug regression") {
+		return "BUG_REGRESSION"
+	}
+	if strings.Contains(lower, "bug_fixed") || strings.Contains(lower, "bug fixed") {
+		return "BUG_FIXED"
+	}
 	if strings.Contains(lower, "bug confirmed") || strings.Contains(lower, "bug_confirmed") {
 		return "BUG_CONFIRMED"
 	}

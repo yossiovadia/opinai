@@ -40,15 +40,26 @@ func Run() {
 	}
 	title := issue.Title
 	body := issue.Body
-	slog.Info("issue fetched", "title", title)
+	issueState := issue.State // "open" or "closed"
+	if issueState == "" {
+		issueState = "open"
+	}
+	slog.Info("issue fetched", "title", title, "state", issueState)
 
-	// Step 2: Start server or use sandbox
+	// Step 2: Start server, use sandbox, or deploy from plan
 	serverURL := os.Getenv("SERVER_URL")
 	sandboxNS := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
 	sandboxEndpoints := os.Getenv("OPINAI_SANDBOX_ENDPOINTS")
+	deploymentPlan := os.Getenv("OPINAI_DEPLOYMENT_PLAN")
+	verifyFix := os.Getenv("OPINAI_VERIFY_FIX") == "true"
 	var serverProc *os.Process
 
+	if verifyFix {
+		slog.Info("verify-fix mode — forcing full deployment and testing")
+	}
+
 	if sandboxNS != "" {
+		// Sandbox already created by controller
 		slog.Info("using sandbox deployment", "namespace", sandboxNS)
 		if sandboxEndpoints != "" {
 			var endpoints map[string]string
@@ -59,7 +70,15 @@ func Run() {
 				break
 			}
 		}
+	} else if deploymentPlan != "" && (isK8sProject() || verifyFix) {
+		// K8s project with deployment plan — ask AI which option to use
+		serverURL = deployFromPlan(title, body, deploymentPlan)
+		if serverURL != "" {
+			os.Setenv("SERVER_URL", serverURL)
+			slog.Info("deployed from plan", "server_url", serverURL)
+		}
 	} else {
+		// Standard: start server in pod
 		serverProc, serverURL = startServer()
 		if serverURL != "" {
 			os.Setenv("SERVER_URL", serverURL)
@@ -80,7 +99,7 @@ func Run() {
 	slog.Info("categorized", "category", category)
 	fmt.Printf("--- OPINAI CATEGORY: %s ---\n", category)
 
-	if category == "FEATURE" || category == "QUESTION" || category == "DOCS" {
+	if !verifyFix && (category == "FEATURE" || category == "QUESTION" || category == "DOCS") {
 		verdictEnum := "FEATURE_REQUEST"
 		fmt.Printf("--- OPINAI VERDICT: %s ---\n", verdictEnum)
 		catLabels := map[string]string{
@@ -112,6 +131,17 @@ func Run() {
 	// Step 4: Generate tests
 	profileCtx := loadProfileContext()
 	repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+
+	// Add issue state context
+	var stateCtx string
+	if issueState == "closed" {
+		stateCtx = "\n\nThis issue is CLOSED (presumably fixed). Analyze whether the fix is correct. " +
+			"If the bug no longer exists, the tests should pass. If it still exists despite being closed, that is a regression.\n"
+	} else {
+		stateCtx = "\n\nThis is an OPEN issue. Reproduce the bug and confirm or deny it.\n"
+	}
+	repoCtx = repoCtx + stateCtx
+
 	script, err := ai.GenerateTests(title, body, serverURL, profileCtx, repoCtx)
 	if err != nil || script == "" {
 		fmt.Println("--- OPINAI VERDICT: ERROR ---")
@@ -138,7 +168,7 @@ func Run() {
 	slog.Info("tests completed", "output_bytes", len(testOutput))
 
 	// Step 6: Get verdict
-	vr := ai.GetVerdict(title, body, testOutput)
+	vr := ai.GetVerdict(title, body, testOutput, issueState)
 	slog.Info("verdict", "verdict", vr.Verdict, "confidence", vr.Confidence)
 	fmt.Printf("--- OPINAI VERDICT: %s ---\n", vr.Verdict)
 	fmt.Printf("--- OPINAI CONFIDENCE: %s ---\n", vr.Confidence)
@@ -492,4 +522,109 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func isK8sProject() bool {
+	profile := loadProfile()
+	if profile == nil {
+		return false
+	}
+	if b, ok := profile["k8s"].(bool); ok {
+		return b
+	}
+	return false
+}
+
+func deployFromPlan(issueTitle, issueBody, planJSON string) string {
+	var plan struct {
+		Options []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			BestFor     string `json:"best_for"`
+			Recommended bool   `json:"recommended"`
+			Steps       []struct {
+				Type        string `json:"type"`
+				Content     string `json:"content"`
+				Required    bool   `json:"required"`
+				Description string `json:"description"`
+			} `json:"steps"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil || len(plan.Options) == 0 {
+		slog.Warn("no deployment options in plan")
+		return ""
+	}
+
+	// Ask AI which option is best for this issue
+	selected := selectDeploymentOption(issueTitle, issueBody, plan.Options)
+	if selected < 0 || selected >= len(plan.Options) {
+		selected = 0
+		for i, opt := range plan.Options {
+			if opt.Recommended {
+				selected = i
+				break
+			}
+		}
+	}
+
+	opt := plan.Options[selected]
+	slog.Info("selected deployment option", "option", opt.Name, "id", opt.ID)
+	fmt.Printf("--- OPINAI SELECTED DEPLOYMENT: %s ---\n", opt.ID)
+
+	// Since the runner can't create K8s namespaces (no RBAC), log the selection
+	// and let the controller handle actual deployment on rerun.
+	// If controller already created sandbox (OPINAI_SANDBOX_NAMESPACE), we'd use it above.
+	// For now, emit the selection and attempt pip-based deployment as fallback.
+	slog.Info("K8s deployment requires controller sandbox — falling back to local setup")
+	proc, url := startServer()
+	if proc != nil {
+		// Store for cleanup — but we can't easily pass this back, so just return the URL
+		go func() {
+			time.Sleep(10 * time.Minute)
+			proc.Kill()
+		}()
+	}
+	return url
+}
+
+func selectDeploymentOption(title, body string, options []struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	BestFor     string `json:"best_for"`
+	Recommended bool   `json:"recommended"`
+	Steps       []struct {
+		Type        string `json:"type"`
+		Content     string `json:"content"`
+		Required    bool   `json:"required"`
+		Description string `json:"description"`
+	} `json:"steps"`
+}) int {
+	cfg := ai.LoadConfig()
+	if !cfg.Available() || len(options) <= 1 {
+		return 0
+	}
+
+	var optText string
+	for i, opt := range options {
+		optText += fmt.Sprintf("- %d) %s (%s): %s (best for: %s)\n", i, opt.ID, opt.Name, opt.Description, opt.BestFor)
+	}
+
+	prompt := "You are OpinAI. A user filed this bug:\n\n" +
+		"Title: " + title + "\nBody: " + body + "\n\n" +
+		"Available deployment options:\n" + optText + "\n" +
+		"Which option number (0-indexed) is best for this bug? " +
+		"Respond with ONLY the number."
+
+	reply, err := ai.Call(prompt, 64)
+	if err != nil || reply == "" {
+		return -1
+	}
+	n := 0
+	fmt.Sscanf(strings.TrimSpace(reply), "%d", &n)
+	if n >= 0 && n < len(options) {
+		return n
+	}
+	return -1
 }

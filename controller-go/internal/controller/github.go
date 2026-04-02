@@ -76,6 +76,7 @@ type Issue struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	Body   string `json:"body"`
+	State  string `json:"state"` // "open" or "closed"
 	Labels []struct {
 		Name string `json:"name"`
 	} `json:"labels"`

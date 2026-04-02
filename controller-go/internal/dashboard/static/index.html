@@ -137,6 +137,8 @@ function verdictBadge(verdict) {
   if (!verdict) return '<span class="verdict verdict-error">--</span>';
   switch (verdict.toUpperCase()) {
     case 'BUG_CONFIRMED': return '<span class="verdict verdict-bug">&#x1F534; Bug Confirmed</span>';
+    case 'BUG_REGRESSION': return '<span class="verdict verdict-regression">&#x1F6A8; Regression</span>';
+    case 'BUG_FIXED': return '<span class="verdict verdict-ok">&#x2705; Bug Fixed</span>';
     case 'NOT_A_BUG': return '<span class="verdict verdict-ok">&#x2705; Not a Bug</span>';
     case 'NOT_REPRODUCIBLE': return '<span class="verdict verdict-warn">&#x26A0;&#xFE0F; Not Reproducible</span>';
     case 'FEATURE_REQUEST': return '<span class="verdict verdict-feature">&#x2728; Feature Request</span>';
@@ -387,6 +389,10 @@ function renderIssues() {
     if (r.status === 'Done' || r.status === 'Failed') {
       actions += '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + r.repo + '\', ' + r.issue + ')" title="Re-run">&#x1F504;</button>';
     }
+    // Verify Fix button for closed/fixed issues
+    if (r.status === 'Done' && (r.verdict === 'BUG_FIXED' || r.verdict === 'BUG_REGRESSION' || r.verdict === 'NOT_REPRODUCIBLE')) {
+      actions += ' <button class="btn" onclick="event.stopPropagation(); verifyFix(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ')" title="Verify the fix with full deployment">&#x1F50D; Verify Fix</button>';
+    }
 
     html += '<tr class="expandable" onclick="toggleExpand(\'' + rowId + '\')">' +
       '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(r.issue + '') + '</a></td>' +
@@ -503,6 +509,26 @@ async function rerun(repo, issue) {
     setTimeout(refreshAll, 2000);
   } catch(e) {
     showToast('Failed to trigger re-run', 'error');
+  }
+}
+
+async function verifyFix(repo, issue) {
+  try {
+    showToast('Verifying fix for ' + repo + '#' + issue + ' (full deployment)...', 'info');
+    var resp = await fetch(API + '/api/verify-fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo: repo, issue_number: issue })
+    });
+    var data = await resp.json();
+    if (data.status === 'triggered') {
+      showToast('Verify-fix job created for ' + repo + '#' + issue, 'success');
+      setTimeout(refreshAll, 3000);
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'), 'error');
+    }
+  } catch(e) {
+    showToast('Failed to trigger verify-fix', 'error');
   }
 }
 

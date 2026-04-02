@@ -97,6 +97,13 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			}
 			return jobMgr.CreateReproductionJob(repo, details.Number, details.Title)
 		})
+		srv.SetVerifyFixCallback(func(repo string, issue int) error {
+			details, err := controller.FetchIssueDetails(repo, issue)
+			if err != nil {
+				return fmt.Errorf("fetch issue %s#%d: %w", repo, issue, err)
+			}
+			return jobMgr.CreateVerifyFixJob(repo, details.Number, details.Title)
+		})
 	}
 
 	// Poll interval

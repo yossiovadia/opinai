@@ -146,6 +146,9 @@ func (lb *LogBuffer) Last(n int) []string {
 // ReproduceFunc is the callback for creating reproduction jobs.
 type ReproduceFunc func(repo string, issue int) error
 
+// VerifyFixFunc is the callback for creating verify-fix jobs (with OPINAI_VERIFY_FIX=true).
+type VerifyFixFunc func(repo string, issue int) error
+
 // SandboxManagerIface abstracts sandbox operations for the dashboard.
 type SandboxManagerIface interface {
 	ListSandboxes() []SandboxInfo
@@ -168,6 +171,7 @@ type Server struct {
 	router    chi.Router
 	logBuf    *LogBuffer
 	reproduce ReproduceFunc
+	verifyFix VerifyFixFunc
 	sandbox   SandboxManagerIface
 }
 
@@ -181,6 +185,11 @@ func New(state *State, logBuf *LogBuffer) *Server {
 // SetReproduceCallback sets the function called for /api/reproduce.
 func (s *Server) SetReproduceCallback(fn ReproduceFunc) {
 	s.reproduce = fn
+}
+
+// SetVerifyFixCallback sets the function called for /api/verify-fix.
+func (s *Server) SetVerifyFixCallback(fn VerifyFixFunc) {
+	s.verifyFix = fn
 }
 
 // SetSandboxManager sets the sandbox manager for admin endpoints.
@@ -233,6 +242,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/jobs", s.handleJobs)
 		r.Post("/check-now", s.handleCheckNow)
 		r.Post("/reproduce", s.handleReproduce)
+		r.Post("/verify-fix", s.handleVerifyFix)
 		r.Post("/chat", s.handleChatFull)
 		r.Post("/runs/{id}/post-comment", s.handlePostComment)
 		r.Post("/rerun/*", s.handleRerun)

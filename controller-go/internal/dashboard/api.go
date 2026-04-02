@@ -123,6 +123,37 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- /api/verify-fix ---
+
+func (s *Server) handleVerifyFix(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo        string `json:"repo"`
+		IssueNumber int    `json:"issue_number"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		jsonError(w, "invalid request", 400)
+		return
+	}
+	if req.Repo == "" || req.IssueNumber == 0 {
+		jsonError(w, "repo and issue_number required", 400)
+		return
+	}
+	if s.verifyFix == nil {
+		jsonError(w, "verify-fix not available", 503)
+		return
+	}
+	if err := s.verifyFix(req.Repo, req.IssueNumber); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":       "triggered",
+		"repo":         req.Repo,
+		"issue_number": req.IssueNumber,
+		"mode":         "verify-fix",
+	})
+}
+
 // --- /api/runs/{id}/post-comment ---
 
 func (s *Server) handlePostComment(w http.ResponseWriter, r *http.Request) {
