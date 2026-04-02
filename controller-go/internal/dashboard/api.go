@@ -247,8 +247,13 @@ func decodeJSON(r *http.Request, v any) error {
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	json.NewEncoder(w).Encode(map[string]any{
+		"error":   true,
+		"message": msg,
+		"status":  code,
+	})
 }
 
 func intQuery(r *http.Request, key string, fallback int) int {

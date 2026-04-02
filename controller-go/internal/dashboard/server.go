@@ -205,6 +205,9 @@ func (s *Server) buildRouter() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	r.Use(requestLogger)
+	r.Use(corsMiddleware)
+	r.Use(rateLimitMiddleware)
 
 	// Static files
 	staticSub, err := fs.Sub(staticFS, "static")
