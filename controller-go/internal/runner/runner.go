@@ -271,18 +271,10 @@ func Run() {
 // --- helpers ---
 
 func startServer() (*os.Process, string) {
-	profile := loadProfile()
-	if profile == nil {
-		return nil, ""
-	}
-
-	buildCmd, _ := profile["build"].(string)
-	runCmd, _ := profile["run"].(string)
-	healthURL, _ := profile["health"].(string)
-
-	// Clone repo
 	repo := os.Getenv("REPO")
 	cloneDir := "/tmp/opinai-repo"
+
+	// ALWAYS clone the repo — needed for analysis, building, and code review
 	slog.Info("cloning repo", "repo", repo)
 	cmd := exec.Command("git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
 	cmd.Stdout = os.Stderr
@@ -292,11 +284,52 @@ func startServer() (*os.Process, string) {
 		return nil, ""
 	}
 
-	// Analyze README on first run — may return install_command
+	// ALWAYS analyze — determines deployment type and install command
 	readmeAnalysis := analyzeReadme(cloneDir)
 
-	// Set up writable container environment BEFORE any commands
+	// Set up writable container environment
 	setupContainerEnv()
+
+	// Resolve build + run commands from multiple sources (ascending priority)
+	// Sources: profile → env var → AI analysis (this run) → repo memory
+	profile := loadProfile()
+	buildCmd := ""
+	runCmd := ""
+	healthURL := ""
+	if profile != nil {
+		buildCmd, _ = profile["build"].(string)
+		runCmd, _ = profile["run"].(string)
+		healthURL, _ = profile["health"].(string)
+	}
+	if envCmd := os.Getenv("OPINAI_INSTALL_COMMAND"); envCmd != "" {
+		buildCmd = envCmd
+	}
+	if readmeAnalysis != nil {
+		if v := readmeAnalysis["install_command"]; v != "" {
+			buildCmd = v
+		}
+		// AI-generated build/run commands override profile
+		if v := readmeAnalysis["build_command"]; v != "" {
+			buildCmd = v
+		}
+		if v := readmeAnalysis["run_command"]; v != "" && v != "none" {
+			runCmd = v
+		} else if v == "none" {
+			runCmd = "" // explicitly no server
+		}
+	}
+	repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+	if v := extractMemoryValue(repoCtx, "install_command"); v != "" {
+		buildCmd = v
+	}
+	if v := extractMemoryValue(repoCtx, "working_install_command"); v != "" {
+		buildCmd = v
+	}
+	if v := extractMemoryValue(repoCtx, "working_run_command"); v != "" {
+		runCmd = v
+	}
+
+	slog.Info("resolved commands", "build", truncStr(buildCmd, 80), "run", truncStr(runCmd, 80))
 
 	// Install chain (ascending priority — last match wins):
 	// profile build → env var → README analysis → repo memory analyzed → repo memory working
@@ -379,12 +412,6 @@ func startServer() (*os.Process, string) {
 
 	if runCmd == "" {
 		return nil, ""
-	}
-
-	// Check for saved working run command
-	if saved := extractMemoryValue(os.Getenv("OPINAI_REPO_CONTEXT"), "working_run_command"); saved != "" {
-		runCmd = saved
-		slog.Info("using saved working run command", "cmd", runCmd)
 	}
 
 	// Start server
@@ -621,19 +648,23 @@ func analyzeReadme(cloneDir string) map[string]string {
 			"{\n"+
 			"  \"description\": \"what this project does in 1-2 sentences\",\n"+
 			"  \"tech_stack\": \"languages and frameworks\",\n"+
-			"  \"deployment_type\": \"kustomize|helm|docker|script|pip|go|npm|operator|none — based on what you found\",\n"+
-			"  \"deployment_command\": \"the command to deploy this for testing (e.g. kustomize build deployment/overlays/test | kubectl apply -f -)\",\n"+
+			"  \"deployment_type\": \"the type of project based on files found (e.g. kustomize, helm, docker, pip, go, npm, operator, etc)\",\n"+
 			"  \"needs_cluster\": \"true if this requires Kubernetes/OpenShift to run, false if it can run as a local process\",\n"+
-			"  \"test_strategy\": \"deploy-and-curl (deploy then test API) | start-and-curl (pip install then test) | code-review (analyze code without running) | unit-test (run existing tests)\",\n"+
+			"  \"test_strategy\": \"deploy-and-curl | start-and-curl | code-review | unit-test\",\n"+
 			"  \"how_to_test\": \"specific steps to test bugs in this project\",\n"+
 			"  \"deployment_needs\": \"infrastructure needed (CRDs, operators, databases, etc)\",\n"+
-			"  \"install_command\": \"MINIMAL shell command to install for testing in a rootless container with 512Mi RAM, no GPU. "+
-			"Use --user --break-system-packages for pip. Use --no-deps if heavy deps exist but aren't needed for testing. "+
-			"If this is a K8s operator/controller, the install_command should be empty (deployment_command handles it instead).\"\n"+
+			"  \"build_command\": \"the exact shell command to build/install this project for testing. "+
+			"Examples: 'pip install --user --no-deps myapp && pip install --user fastapi uvicorn' or "+
+			"'go build -o /tmp/server ./cmd/server' or 'make build' or '' (empty if no build needed). "+
+			"Must work in a rootless container with 512Mi RAM, no GPU. Use --user --break-system-packages for pip.\",\n"+
+			"  \"run_command\": \"the exact shell command to start the server for API testing. "+
+			"Examples: '/tmp/server --port 8000' or 'llm-katan --backend echo --port 8000' or "+
+			"'none' if no server is needed (K8s operators, libraries, CLI tools — use code-review strategy instead).\",\n"+
+			"  \"install_command\": \"same as build_command (for backward compatibility)\"\n"+
 			"}\n\n"+
-			"IMPORTANT: Determine deployment_type and needs_cluster from the actual files found, not assumptions. "+
-			"If you see kustomization.yaml or helm Chart.yaml, it's a K8s project. "+
-			"If you see only setup.py/pyproject.toml with no K8s files, it's a pip project.",
+			"IMPORTANT: Determine everything from the actual files found. "+
+			"If needs_cluster is true and the project cannot run locally, set run_command to 'none'. "+
+			"The runner will then analyze the source code instead of trying to run a server.",
 		os.Getenv("REPO"), readme, depsInfo, indicatorsStr, deployFileContents,
 	)
 	content, err := ai.Call(prompt, 1500)
