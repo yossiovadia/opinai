@@ -193,6 +193,7 @@ func markBacklogProcessed(repo string) {
 // for the next one. Called when a job completes so queued issues don't wait for
 // the next poll cycle.
 func (p *Poller) RetryPendingForRepo(repo string) {
+	slog.Info("retry pending: checking repo", "repo", repo)
 	stats, _ := database.GetStats(repo)
 	since := ""
 	if mem, _ := database.GetRepoMemory(repo, strPtr("monitored_since")); len(mem) > 0 {
