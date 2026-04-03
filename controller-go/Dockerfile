@@ -8,6 +8,8 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /opinai-go ./cmd/opinai
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl jq git bash openssl
-COPY --from=builder /opinai-go /usr/local/bin/opinai-go
-EXPOSE 8081 8444
-ENTRYPOINT ["opinai-go"]
+RUN apk add --no-cache python3 py3-pip
+COPY --from=builder /opinai-go /app/opinai
+RUN ln -s /app/opinai /app/opinai-go
+EXPOSE 8080 8443
+ENTRYPOINT ["/app/opinai"]
