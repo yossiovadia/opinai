@@ -271,6 +271,32 @@ tr:hover td {
   to { transform: rotate(360deg); }
 }
 
+.running-idle {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.running-active {
+  color: var(--green);
+  font-size: 13px;
+  cursor: pointer;
+  animation: pulseRunning 2s ease-in-out infinite;
+}
+
+@keyframes pulseRunning {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.row-highlight {
+  animation: rowFlash 2s ease-out;
+}
+
+@keyframes rowFlash {
+  0% { background: rgba(88, 166, 255, 0.25); }
+  100% { background: transparent; }
+}
+
 /* Buttons */
 .btn {
   display: inline-flex;

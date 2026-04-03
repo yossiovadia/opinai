@@ -23,8 +23,8 @@
       <span class="status-dot green" id="statusDot"></span>
       <span id="clusterName">Connecting...</span>
     </span>
-    <span id="runningIndicator" style="display:none;cursor:pointer" onclick="filterRunning()">
-      <span class="spin" style="display:inline-block;font-size:12px">&#x1F3C3;</span> <strong id="runningCount">0</strong> running
+    <span id="runningIndicator" class="running-idle" onclick="filterRunning()">
+      &#x1F3C3; <strong id="runningCount">0</strong> <span id="runningLabel">idle</span>
     </span>
     <span>Uptime: <strong id="uptime">--</strong></span>
     <span>Polls: <strong id="pollCount">0</strong></span>
@@ -825,22 +825,35 @@ function updateRunningCount() {
     if (r.status === 'Running' || r.status === 'Re-running') count++;
   });
   var el = document.getElementById('runningIndicator');
+  document.getElementById('runningCount').textContent = count;
   if (count > 0) {
-    el.style.display = '';
-    document.getElementById('runningCount').textContent = count;
+    el.className = 'running-active';
+    document.getElementById('runningLabel').textContent = 'running';
   } else {
-    el.style.display = 'none';
+    el.className = 'running-idle';
+    document.getElementById('runningLabel').textContent = 'idle';
   }
 }
 
 function filterRunning() {
+  var items = mergeIssues();
+  var hasRunning = items.some(function(r) { return r.status === 'Running' || r.status === 'Re-running'; });
+  if (!hasRunning) return;
   // Clear repo filter to show all, then scroll to issues table
   activeRepoFilter = null;
   renderIssues();
   renderRepoFilter();
-  // Scroll the issues section into view
+  // Scroll to and highlight running rows
   var container = document.getElementById('issuesContainer');
   if (container) container.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Flash running rows
+  document.querySelectorAll('.expandable').forEach(function(tr) {
+    var statusCell = tr.querySelector('.verdict-running');
+    if (statusCell) {
+      tr.classList.add('row-highlight');
+      setTimeout(function() { tr.classList.remove('row-highlight'); }, 2000);
+    }
+  });
 }
 
 // =====================================================================
