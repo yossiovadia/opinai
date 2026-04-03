@@ -42,7 +42,11 @@ func (s *Server) handleRerunAll(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		issues[run.Issue] = true
-		if s.reproduce != nil {
+		if s.rerun != nil {
+			if err := s.rerun(repo, run.Issue); err == nil {
+				triggered++
+			}
+		} else if s.reproduce != nil {
 			if err := s.reproduce(repo, run.Issue); err == nil {
 				triggered++
 			}

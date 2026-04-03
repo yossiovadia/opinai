@@ -311,7 +311,11 @@ func (jm *JobManager) runWatch() {
 			continue
 		}
 		finished := job.Status.Succeeded > 0 || job.Status.Failed > 0
-		if !finished || jm.recorded[job.Name] {
+		if !finished {
+			continue
+		}
+		if jm.recorded[job.Name] {
+			slog.Debug("skipping already-recorded job", "job", job.Name)
 			continue
 		}
 		slog.Info("watcher: job finished", "job", job.Name)
@@ -319,13 +323,21 @@ func (jm *JobManager) runWatch() {
 	}
 }
 
+// ClearRecorded removes a job from the recorded map so it can be re-harvested.
+// Call this when triggering a rerun for an issue.
+func (jm *JobManager) ClearRecorded(repo string, issue int) {
+	name := JobName(repo, issue)
+	delete(jm.recorded, name)
+	slog.Info("cleared recorded entry for rerun", "job", name)
+}
+
 // harvestSingleJob extracts results from a single completed job.
 func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	name := job.Name
 	if jm.recorded[name] {
+		slog.Debug("skipping already-recorded job", "job", name)
 		return
 	}
-	jm.recorded[name] = true
 
 	annotations := job.Annotations
 	if annotations == nil {
@@ -386,12 +398,17 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		report = "(no logs)"
 	}
 
-	database.AddRun(database.Run{
+	_, dbErr := database.AddRun(database.Run{
 		Repo: repo, Issue: issue, Title: title,
 		Verdict: verdict, Category: category, Confidence: confidence,
 		AIPowered: true, Duration: duration, Posted: false,
 		Report: report, SuggestedQuestions: suggestedQuestions, ReproDetails: reproDetails, CreatedAt: ts,
 	})
+	if dbErr != nil {
+		slog.Error("failed to store run in DB — will retry on next harvest", "job", name, "error", dbErr)
+		return
+	}
+	jm.recorded[name] = true
 	jm.broadcast("job_completed", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
 
 	sbNS := annotations["opinai/sandbox-namespace"]

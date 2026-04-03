@@ -109,6 +109,19 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			}
 			return jobMgr.CreateVerifyFixJob(repo, details.Number, details.Title)
 		})
+		srv.SetRerunCallback(func(repo string, issue int) error {
+			// Clear recorded state so the new job can be harvested
+			jobMgr.ClearRecorded(repo, issue)
+			// Delete old job to allow re-creation
+			name := controller.JobName(repo, issue)
+			_ = jobMgr.DeleteJob(name)
+			// Create new job
+			details, err := controller.FetchIssueDetails(repo, issue)
+			if err != nil {
+				return fmt.Errorf("fetch issue %s#%d: %w", repo, issue, err)
+			}
+			return jobMgr.CreateReproductionJob(repo, details.Number, details.Title)
+		})
 	}
 
 	// Poll interval

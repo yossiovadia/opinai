@@ -149,6 +149,9 @@ type ReproduceFunc func(repo string, issue int) error
 // VerifyFixFunc is the callback for creating verify-fix jobs (with OPINAI_VERIFY_FIX=true).
 type VerifyFixFunc func(repo string, issue int) error
 
+// RerunFunc is the callback for re-running an issue (clears old state and creates a new job).
+type RerunFunc func(repo string, issue int) error
+
 // SandboxManagerIface abstracts sandbox operations for the dashboard.
 type SandboxManagerIface interface {
 	ListSandboxes() []SandboxInfo
@@ -173,6 +176,7 @@ type Server struct {
 	hub       *Hub
 	reproduce ReproduceFunc
 	verifyFix VerifyFixFunc
+	rerun     RerunFunc
 	sandbox   SandboxManagerIface
 }
 
@@ -194,6 +198,11 @@ func (s *Server) SetReproduceCallback(fn ReproduceFunc) {
 // SetVerifyFixCallback sets the function called for /api/verify-fix.
 func (s *Server) SetVerifyFixCallback(fn VerifyFixFunc) {
 	s.verifyFix = fn
+}
+
+// SetRerunCallback sets the function called for /api/rerun.
+func (s *Server) SetRerunCallback(fn RerunFunc) {
+	s.rerun = fn
 }
 
 // SetSandboxManager sets the sandbox manager for admin endpoints.

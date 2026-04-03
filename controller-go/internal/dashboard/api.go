@@ -231,7 +231,12 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: delete K8s Job for re-run
+	if s.rerun != nil {
+		if err := s.rerun(repo, issue); err != nil {
+			jsonError(w, "rerun failed: "+err.Error(), 500)
+			return
+		}
+	}
 
 	json.NewEncoder(w).Encode(map[string]any{
 		"status": "rerun_triggered",
