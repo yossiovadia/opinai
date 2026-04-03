@@ -139,14 +139,22 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		"k8s", k8sClient != nil,
 	)
 
-	// Start job watcher for real-time result harvesting
-	if jobMgr != nil {
-		go jobMgr.StartWatcher()
-	}
-
-	// Start poller (if K8s available)
+	// Start poller and watcher (if K8s available)
 	if jobMgr != nil {
 		poller := controller.NewPoller(state, jobMgr, interval, repos)
+
+		// Wire callbacks that need the poller
+		srv.SetMarkRecordedCallback(func(repo string, issue int) {
+			jobMgr.MarkRecorded(repo, issue)
+		})
+		srv.SetRetryPendingCallback(func(repo string) {
+			poller.RetryPendingForRepo(repo)
+		})
+		jobMgr.SetOnComplete(func(repo string) {
+			poller.RetryPendingForRepo(repo)
+		})
+
+		go jobMgr.StartWatcher()
 		go poller.Start()
 	}
 

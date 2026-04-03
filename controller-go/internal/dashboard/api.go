@@ -335,9 +335,9 @@ func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Clear recorded map so the log-scraping harvester doesn't duplicate
-	if s.clearRecorded != nil {
-		s.clearRecorded(req.Repo, req.Issue)
+	// Mark as recorded so the log-scraping harvester skips this job
+	if s.markRecorded != nil {
+		s.markRecorded(req.Repo, req.Issue)
 	}
 
 	s.hub.Broadcast(WSEvent{
@@ -347,6 +347,11 @@ func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("received runner result via callback", "repo", req.Repo, "issue", req.Issue, "verdict", req.Verdict)
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+
+	// Trigger retry of pending issues for this repo (async)
+	if s.retryPending != nil {
+		go s.retryPending(req.Repo)
+	}
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {

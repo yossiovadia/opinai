@@ -155,6 +155,12 @@ type RerunFunc func(repo string, issue int) error
 // ClearRecordedFunc is a callback to clear the harvester's recorded map for an issue.
 type ClearRecordedFunc func(repo string, issue int)
 
+// MarkRecordedFunc marks a job as recorded so the harvester skips it.
+type MarkRecordedFunc func(repo string, issue int)
+
+// RetryPendingFunc triggers a check for pending issues in a repo after a job completes.
+type RetryPendingFunc func(repo string)
+
 // SandboxManagerIface abstracts sandbox operations for the dashboard.
 type SandboxManagerIface interface {
 	ListSandboxes() []SandboxInfo
@@ -181,6 +187,8 @@ type Server struct {
 	verifyFix VerifyFixFunc
 	rerun         RerunFunc
 	clearRecorded ClearRecordedFunc
+	markRecorded  MarkRecordedFunc
+	retryPending  RetryPendingFunc
 	sandbox       SandboxManagerIface
 }
 
@@ -212,6 +220,16 @@ func (s *Server) SetRerunCallback(fn RerunFunc) {
 // SetClearRecordedCallback sets the function to clear harvester recorded state.
 func (s *Server) SetClearRecordedCallback(fn ClearRecordedFunc) {
 	s.clearRecorded = fn
+}
+
+// SetMarkRecordedCallback sets the function to mark a job as already recorded.
+func (s *Server) SetMarkRecordedCallback(fn MarkRecordedFunc) {
+	s.markRecorded = fn
+}
+
+// SetRetryPendingCallback sets the function to retry pending issues for a repo.
+func (s *Server) SetRetryPendingCallback(fn RetryPendingFunc) {
+	s.retryPending = fn
 }
 
 // SetSandboxManager sets the sandbox manager for admin endpoints.

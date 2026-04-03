@@ -189,6 +189,40 @@ func markBacklogProcessed(repo string) {
 	}
 }
 
+// RetryPendingForRepo checks for unprocessed issues in a repo and creates a job
+// for the next one. Called when a job completes so queued issues don't wait for
+// the next poll cycle.
+func (p *Poller) RetryPendingForRepo(repo string) {
+	stats, _ := database.GetStats(repo)
+	since := ""
+	if mem, _ := database.GetRepoMemory(repo, strPtr("monitored_since")); len(mem) > 0 {
+		since = mem["monitored_since"]
+	}
+
+	issues, err := FetchOpenIssues(repo, since)
+	if err != nil {
+		slog.Warn("retry pending: failed to fetch issues", "repo", repo, "error", err)
+		return
+	}
+
+	for _, issue := range issues {
+		processed, _ := database.IsProcessed(repo, issue.Number)
+		if !processed {
+			slog.Info("retry pending: creating job for queued issue", "repo", repo, "issue", issue.Number)
+			if err := p.jobs.CreateReproductionJob(repo, issue.Number, issue.Title); err != nil {
+				slog.Error("retry pending: failed to create job", "repo", repo, "issue", issue.Number, "error", err)
+			}
+			return // one at a time per repo
+		}
+	}
+
+	// Update state
+	p.state.UpdateRepo(repo, dashboard.RepoStatus{
+		Pending:   0,
+		Processed: stats.Processed,
+	})
+}
+
 func checkPlanStaleness(repos []string) {
 	for _, repo := range repos {
 		plan, err := database.GetDeploymentPlan(repo)

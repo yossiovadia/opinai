@@ -33,12 +33,13 @@ type Broadcaster interface {
 
 // JobManager handles K8s Job creation and result harvesting.
 type JobManager struct {
-	client    kubernetes.Interface
-	namespace string
-	image     string
-	recorded  map[string]bool
-	sandbox   *sandbox.Manager
-	ws        Broadcaster
+	client     kubernetes.Interface
+	namespace  string
+	image      string
+	recorded   map[string]bool
+	sandbox    *sandbox.Manager
+	ws         Broadcaster
+	onComplete func(repo string) // called when a job completes, to retry pending issues
 }
 
 // NewJobManager creates a new JobManager.
@@ -55,6 +56,11 @@ func NewJobManager(client kubernetes.Interface, namespace, image string) *JobMan
 // SetBroadcaster sets the WebSocket hub for push notifications.
 func (jm *JobManager) SetBroadcaster(b Broadcaster) {
 	jm.ws = b
+}
+
+// SetOnComplete sets a callback invoked when a job finishes, to retry pending issues.
+func (jm *JobManager) SetOnComplete(fn func(repo string)) {
+	jm.onComplete = fn
 }
 
 func (jm *JobManager) broadcast(eventType string, data any) {
@@ -334,10 +340,20 @@ func (jm *JobManager) runWatch() {
 
 // ClearRecorded removes a job from the recorded map so it can be re-harvested.
 // Call this when triggering a rerun for an issue.
+// ClearRecorded removes a job from the recorded map so it can be re-harvested.
+// Call this when triggering a rerun for an issue.
 func (jm *JobManager) ClearRecorded(repo string, issue int) {
 	name := JobName(repo, issue)
 	delete(jm.recorded, name)
 	slog.Info("cleared recorded entry for rerun", "job", name)
+}
+
+// MarkRecorded marks a job as already recorded so the harvester skips it.
+// Call this when the runner has already posted results via the callback API.
+func (jm *JobManager) MarkRecorded(repo string, issue int) {
+	name := JobName(repo, issue)
+	jm.recorded[name] = true
+	slog.Debug("marked job as recorded via callback", "job", name)
 }
 
 // harvestSingleJob extracts results from a single completed job.
@@ -425,6 +441,11 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		if jm.sandbox.TeardownSandbox(sbNS) {
 			slog.Info("torn down sandbox after job", "namespace", sbNS, "job", name)
 		}
+	}
+
+	// Trigger retry of pending issues for this repo
+	if jm.onComplete != nil && repo != "" {
+		go jm.onComplete(repo)
 	}
 }
 
