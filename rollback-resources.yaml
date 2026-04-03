@@ -1,0 +1,419 @@
+apiVersion: v1
+items:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      deployment.kubernetes.io/revision: "81"
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"apps/v1","kind":"Deployment","metadata":{"annotations":{},"labels":{"app":"opinai-controller"},"name":"opinai-controller","namespace":"opinai"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"opinai-controller"}},"template":{"metadata":{"labels":{"app":"opinai-controller"}},"spec":{"containers":[{"env":[{"name":"GOOGLE_APPLICATION_CREDENTIALS","value":"/var/run/secrets/gcp/credentials.json"},{"name":"AI_PROVIDER","valueFrom":{"secretKeyRef":{"key":"AI_PROVIDER","name":"opinai-credentials","optional":true}}},{"name":"AI_PROJECT","valueFrom":{"secretKeyRef":{"key":"AI_PROJECT","name":"opinai-credentials","optional":true}}},{"name":"AI_REGION","valueFrom":{"secretKeyRef":{"key":"AI_REGION","name":"opinai-credentials","optional":true}}},{"name":"AI_MODEL","valueFrom":{"secretKeyRef":{"key":"AI_MODEL","name":"opinai-credentials","optional":true}}}],"envFrom":[{"configMapRef":{"name":"opinai-config"}},{"secretRef":{"name":"opinai-credentials"}}],"image":"image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest","imagePullPolicy":"Always","name":"controller","ports":[{"containerPort":8080,"name":"http","protocol":"TCP"},{"containerPort":8443,"name":"https","protocol":"TCP"}],"resources":{"limits":{"cpu":"500m","memory":"512Mi"},"requests":{"cpu":"100m","memory":"256Mi"}},"volumeMounts":[{"mountPath":"/data","name":"opinai-data"},{"mountPath":"/var/run/secrets/gcp","name":"gcp-credentials","readOnly":true}]}],"serviceAccountName":"opinai-controller","volumes":[{"name":"opinai-data","persistentVolumeClaim":{"claimName":"opinai-data"}},{"name":"gcp-credentials","secret":{"optional":true,"secretName":"opinai-gcp-credentials"}}]}}}}
+    creationTimestamp: "2026-03-31T21:22:38Z"
+    generation: 81
+    labels:
+      app: opinai-controller
+    name: opinai-controller
+    namespace: opinai
+    resourceVersion: "2055578"
+    uid: 53966e4a-4481-44d0-91c4-ebd628139f54
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: opinai-controller
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        annotations:
+          kubectl.kubernetes.io/restartedAt: "2026-04-03T11:15:06-07:00"
+        creationTimestamp: null
+        labels:
+          app: opinai-controller
+      spec:
+        containers:
+        - env:
+          - name: GOOGLE_APPLICATION_CREDENTIALS
+            value: /var/run/secrets/gcp/credentials.json
+          - name: AI_PROVIDER
+            valueFrom:
+              secretKeyRef:
+                key: AI_PROVIDER
+                name: opinai-credentials
+                optional: true
+          - name: AI_PROJECT
+            valueFrom:
+              secretKeyRef:
+                key: AI_PROJECT
+                name: opinai-credentials
+                optional: true
+          - name: AI_REGION
+            valueFrom:
+              secretKeyRef:
+                key: AI_REGION
+                name: opinai-credentials
+                optional: true
+          - name: AI_MODEL
+            valueFrom:
+              secretKeyRef:
+                key: AI_MODEL
+                name: opinai-credentials
+                optional: true
+          envFrom:
+          - configMapRef:
+              name: opinai-config
+          - secretRef:
+              name: opinai-credentials
+          image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
+          imagePullPolicy: Always
+          name: controller
+          ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
+          - containerPort: 8443
+            name: https
+            protocol: TCP
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /data
+            name: opinai-data
+          - mountPath: /var/run/secrets/gcp
+            name: gcp-credentials
+            readOnly: true
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        serviceAccount: opinai-controller
+        serviceAccountName: opinai-controller
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: opinai-data
+          persistentVolumeClaim:
+            claimName: opinai-data
+        - name: gcp-credentials
+          secret:
+            defaultMode: 420
+            optional: true
+            secretName: opinai-gcp-credentials
+  status:
+    availableReplicas: 1
+    conditions:
+    - lastTransitionTime: "2026-04-03T16:08:16Z"
+      lastUpdateTime: "2026-04-03T16:08:16Z"
+      message: Deployment has minimum availability.
+      reason: MinimumReplicasAvailable
+      status: "True"
+      type: Available
+    - lastTransitionTime: "2026-03-31T21:22:38Z"
+      lastUpdateTime: "2026-04-03T18:15:09Z"
+      message: ReplicaSet "opinai-controller-5d4f45c9c9" has successfully progressed.
+      reason: NewReplicaSetAvailable
+      status: "True"
+      type: Progressing
+    observedGeneration: 81
+    readyReplicas: 1
+    replicas: 1
+    updatedReplicas: 1
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app":"opinai-controller"},"name":"opinai-controller","namespace":"opinai"},"spec":{"ports":[{"name":"http","port":8080,"protocol":"TCP","targetPort":8080},{"name":"http-go","port":8081,"protocol":"TCP","targetPort":8081},{"name":"https","port":8443,"protocol":"TCP","targetPort":8443},{"name":"https-go","port":8444,"protocol":"TCP","targetPort":8444}],"selector":{"app":"opinai-controller"}}}
+    creationTimestamp: "2026-03-31T21:22:38Z"
+    labels:
+      app: opinai-controller
+    name: opinai-controller
+    namespace: opinai
+    resourceVersion: "967562"
+    uid: 7b16abf3-85f4-4a92-b98b-e892a2528b2c
+  spec:
+    clusterIP: 172.30.47.248
+    clusterIPs:
+    - 172.30.47.248
+    internalTrafficPolicy: Cluster
+    ipFamilies:
+    - IPv4
+    ipFamilyPolicy: SingleStack
+    ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    - name: http-go
+      port: 8081
+      protocol: TCP
+      targetPort: 8081
+    - name: https
+      port: 8443
+      protocol: TCP
+      targetPort: 8443
+    - name: https-go
+      port: 8444
+      protocol: TCP
+      targetPort: 8444
+    selector:
+      app: opinai-controller
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    annotations:
+      haproxy.router.openshift.io/timeout: 120s
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"route.openshift.io/v1","kind":"Route","metadata":{"annotations":{},"labels":{"app":"opinai-controller"},"name":"opinai-dashboard","namespace":"opinai"},"spec":{"port":{"targetPort":"http"},"tls":{"insecureEdgeTerminationPolicy":"Redirect","termination":"edge"},"to":{"kind":"Service","name":"opinai-controller"}}}
+      openshift.io/host.generated: "true"
+    creationTimestamp: "2026-03-31T21:22:39Z"
+    labels:
+      app: opinai-controller
+    name: opinai-dashboard
+    namespace: opinai
+    resourceVersion: "855140"
+    uid: 0b823eb7-8841-4422-9dd2-740170c9570a
+  spec:
+    host: opinai-dashboard-opinai.apps.ocp.qlwbw.sandbox67.opentlc.com
+    port:
+      targetPort: http
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+    to:
+      kind: Service
+      name: opinai-controller
+      weight: 100
+    wildcardPolicy: None
+  status:
+    ingress:
+    - conditions:
+      - lastTransitionTime: "2026-03-31T21:22:39Z"
+        status: "True"
+        type: Admitted
+      host: opinai-dashboard-opinai.apps.ocp.qlwbw.sandbox67.opentlc.com
+      routerCanonicalHostname: router-default.apps.ocp.qlwbw.sandbox67.opentlc.com
+      routerName: default
+      wildcardPolicy: None
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    annotations:
+      haproxy.router.openshift.io/timeout: 300s
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"route.openshift.io/v1","kind":"Route","metadata":{"annotations":{"haproxy.router.openshift.io/timeout":"300s"},"name":"opinai-dashboard-go","namespace":"opinai"},"spec":{"port":{"targetPort":"http"},"tls":{"insecureEdgeTerminationPolicy":"Redirect","termination":"edge"},"to":{"kind":"Service","name":"opinai-controller"}}}
+      openshift.io/host.generated: "true"
+    creationTimestamp: "2026-04-02T22:34:05Z"
+    name: opinai-dashboard-go
+    namespace: opinai
+    resourceVersion: "1769070"
+    uid: 6347e149-1294-4fac-96a8-e2fd9fd8f4ad
+  spec:
+    host: opinai-dashboard-go-opinai.apps.ocp.qlwbw.sandbox67.opentlc.com
+    port:
+      targetPort: http
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+    to:
+      kind: Service
+      name: opinai-controller
+      weight: 100
+    wildcardPolicy: None
+  status:
+    ingress:
+    - conditions:
+      - lastTransitionTime: "2026-04-02T22:34:05Z"
+        status: "True"
+        type: Admitted
+      host: opinai-dashboard-go-opinai.apps.ocp.qlwbw.sandbox67.opentlc.com
+      routerCanonicalHostname: router-default.apps.ocp.qlwbw.sandbox67.opentlc.com
+      routerName: default
+      wildcardPolicy: None
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"build.openshift.io/v1","kind":"BuildConfig","metadata":{"annotations":{},"name":"opinai-controller","namespace":"opinai"},"spec":{"output":{"to":{"kind":"ImageStreamTag","name":"opinai-controller:latest"}},"source":{"contextDir":".","git":{"ref":"main","uri":"https://github.com/yossiovadia/opinai.git"},"type":"Git"},"strategy":{"dockerStrategy":{"dockerfilePath":"controller/Dockerfile","noCache":true},"type":"Docker"}}}
+    creationTimestamp: "2026-03-31T21:21:46Z"
+    generation: 85
+    name: opinai-controller
+    namespace: opinai
+    resourceVersion: "2054334"
+    uid: a298a2f5-683a-4c91-ae24-083c83512d9d
+  spec:
+    failedBuildsHistoryLimit: 5
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: opinai-controller:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      contextDir: controller-go
+      git:
+        ref: main
+        uri: https://github.com/yossiovadia/opinai.git
+      type: Git
+    strategy:
+      dockerStrategy:
+        dockerfilePath: Dockerfile
+        noCache: true
+      type: Docker
+    successfulBuildsHistoryLimit: 5
+  status:
+    lastVersion: 79
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    creationTimestamp: "2026-03-31T21:21:45Z"
+    generation: 1
+    name: opinai-controller
+    namespace: opinai
+    resourceVersion: "2055465"
+    uid: 29f39fe4-485c-4a69-a4f2-2ab974a2f796
+  spec:
+    lookupPolicy:
+      local: false
+  status:
+    dockerImageRepository: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller
+    tags:
+    - items:
+      - created: "2026-04-03T18:15:04Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:40326f3326b3946c95869ed3e49c66eea332cbebabc3f418b245eef43dffb765
+        generation: 1
+        image: sha256:40326f3326b3946c95869ed3e49c66eea332cbebabc3f418b245eef43dffb765
+      - created: "2026-04-03T18:05:07Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:2b52e67c8cd8452be0e6d051b6a3cbab197eb64d00991d9f8569227ec792d920
+        generation: 1
+        image: sha256:2b52e67c8cd8452be0e6d051b6a3cbab197eb64d00991d9f8569227ec792d920
+      - created: "2026-04-03T18:00:34Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:499d9df77fd5e2fe060cab2ee06c21bd379e4b440069bd6442e4ac07cb2d498e
+        generation: 1
+        image: sha256:499d9df77fd5e2fe060cab2ee06c21bd379e4b440069bd6442e4ac07cb2d498e
+      - created: "2026-04-03T17:51:57Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:09c32d449106b6c15292bef6468ac1bd33737487df0a5b8783661b975da8f067
+        generation: 1
+        image: sha256:09c32d449106b6c15292bef6468ac1bd33737487df0a5b8783661b975da8f067
+      - created: "2026-04-03T17:49:15Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:837250a5f699309d88919200edcabfabc27f0cb8a9ec83276453f4267d59fc58
+        generation: 1
+        image: sha256:837250a5f699309d88919200edcabfabc27f0cb8a9ec83276453f4267d59fc58
+      - created: "2026-04-03T17:34:21Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:2e8f5bcbfef8c65bd3e78f8c53dc76ed799a7a29cb7ea1f698eb5c839279c248
+        generation: 1
+        image: sha256:2e8f5bcbfef8c65bd3e78f8c53dc76ed799a7a29cb7ea1f698eb5c839279c248
+      - created: "2026-04-03T17:24:59Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:1dd6a7786126a92f1f8f8447809fd93330d510cf99313e916c6b5f251f7f5eda
+        generation: 1
+        image: sha256:1dd6a7786126a92f1f8f8447809fd93330d510cf99313e916c6b5f251f7f5eda
+      - created: "2026-04-03T17:10:40Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:8cd990e31196f47bc3545ad13a844a16f060fc4427540afd0caaaf5444d95caa
+        generation: 1
+        image: sha256:8cd990e31196f47bc3545ad13a844a16f060fc4427540afd0caaaf5444d95caa
+      - created: "2026-04-03T16:57:20Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:d947ee9d0be0309ef51799d4c12b7f40c72054cb87ac16a03b14481bb4db839c
+        generation: 1
+        image: sha256:d947ee9d0be0309ef51799d4c12b7f40c72054cb87ac16a03b14481bb4db839c
+      - created: "2026-04-03T16:50:22Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:fb0203e1cec77f20fe4f0c84c033bd6b390dcde09584d6a6a5b054b69e431eb6
+        generation: 1
+        image: sha256:fb0203e1cec77f20fe4f0c84c033bd6b390dcde09584d6a6a5b054b69e431eb6
+      - created: "2026-04-03T16:43:35Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:dcec226a82f04fcbd8b2a0b191015e145e07712c7615fe83b3befdd27684800d
+        generation: 1
+        image: sha256:dcec226a82f04fcbd8b2a0b191015e145e07712c7615fe83b3befdd27684800d
+      - created: "2026-04-03T16:30:26Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:5f4dd2bb7c98760ea747d28abf0c3d98a4f25c188a5ea40501074e0bfd434ef5
+        generation: 1
+        image: sha256:5f4dd2bb7c98760ea747d28abf0c3d98a4f25c188a5ea40501074e0bfd434ef5
+      - created: "2026-04-03T16:11:34Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:9ce8e346e59ad0cb87c9ab33f53d29e4f1dc32d68a9f4c21486404c19ea21090
+        generation: 1
+        image: sha256:9ce8e346e59ad0cb87c9ab33f53d29e4f1dc32d68a9f4c21486404c19ea21090
+      - created: "2026-04-03T00:59:11Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:e7deeb295b01dec2c2443da3b31359cddb26be838eb2ebb93f333125f1e87946
+        generation: 1
+        image: sha256:e7deeb295b01dec2c2443da3b31359cddb26be838eb2ebb93f333125f1e87946
+      - created: "2026-04-03T00:51:09Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:9f5f63119ee15d8dac846c67729f9521f30947cb45d656741891b955b7d31f1b
+        generation: 1
+        image: sha256:9f5f63119ee15d8dac846c67729f9521f30947cb45d656741891b955b7d31f1b
+      - created: "2026-04-03T00:46:14Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:a8572553bb7b972b43a90ca7af10c5f287f627307a1bd480e70df744d7c21c18
+        generation: 1
+        image: sha256:a8572553bb7b972b43a90ca7af10c5f287f627307a1bd480e70df744d7c21c18
+      - created: "2026-04-03T00:31:09Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:995476646f6047636366aee1d03422f9eef1f48a2b763207b2236feb2951fe57
+        generation: 1
+        image: sha256:995476646f6047636366aee1d03422f9eef1f48a2b763207b2236feb2951fe57
+      - created: "2026-04-03T00:03:34Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:decc063ab0af5fc89e4b483f6fc600f69e8d63e38aab28f21d44b4143476308c
+        generation: 1
+        image: sha256:decc063ab0af5fc89e4b483f6fc600f69e8d63e38aab28f21d44b4143476308c
+      - created: "2026-04-03T00:00:03Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:5461fbad34d9b2b065f2a494bca927df5f4d886c8afd8bf3f1e4a988e63b3ca7
+        generation: 1
+        image: sha256:5461fbad34d9b2b065f2a494bca927df5f4d886c8afd8bf3f1e4a988e63b3ca7
+      - created: "2026-04-02T23:48:34Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:28767c9ce67fb4323b79fd3e2b13c1e4750de32cb0ecbf2bebec258ea47540fa
+        generation: 1
+        image: sha256:28767c9ce67fb4323b79fd3e2b13c1e4750de32cb0ecbf2bebec258ea47540fa
+      - created: "2026-04-02T23:31:14Z"
+        dockerImageReference: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller@sha256:e4171d4bc8922debf8ee6c46d34f269362172255ea3cea0ae6835901b268c65d
+        generation: 1
+        image: sha256:e4171d4bc8922debf8ee6c46d34f269362172255ea3cea0ae6835901b268c65d
+      tag: latest
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"v1","kind":"PersistentVolumeClaim","metadata":{"annotations":{},"name":"opinai-data","namespace":"opinai"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}
+      pv.kubernetes.io/bind-completed: "yes"
+      pv.kubernetes.io/bound-by-controller: "yes"
+      volume.beta.kubernetes.io/storage-provisioner: ebs.csi.aws.com
+      volume.kubernetes.io/selected-node: ip-10-0-17-108.us-east-2.compute.internal
+      volume.kubernetes.io/storage-provisioner: ebs.csi.aws.com
+    creationTimestamp: "2026-03-31T21:22:37Z"
+    finalizers:
+    - kubernetes.io/pvc-protection
+    name: opinai-data
+    namespace: opinai
+    resourceVersion: "458604"
+    uid: b1305d0f-02a4-4af0-908a-0251c02e49aa
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+    storageClassName: gp3-csi
+    volumeMode: Filesystem
+    volumeName: pvc-b1305d0f-02a4-4af0-908a-0251c02e49aa
+  status:
+    accessModes:
+    - ReadWriteOnce
+    capacity:
+      storage: 1Gi
+    phase: Bound
+kind: List
+metadata:
+  resourceVersion: ""

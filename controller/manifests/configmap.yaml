@@ -6,4 +6,3 @@ metadata:
 data:
   REPOS: "owner/repo1,owner/repo2"
   POLL_INTERVAL_MINUTES: "60"
-  DONE_LABEL: "opinai-done"

@@ -19,7 +19,7 @@ spec:
       containers:
         - name: runner
           image: image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest
-          command: ["/app/opinai-go", "--mode=runner"]
+          command: ["/app/opinai", "--mode=runner"]
           env:
             - name: REPO
               value: "{repo}"
@@ -30,8 +30,8 @@ spec:
                 name: opinai-credentials
           resources:
             requests:
-              cpu: 100m
-              memory: 256Mi
+              cpu: 200m
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi

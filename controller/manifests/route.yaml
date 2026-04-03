@@ -5,11 +5,14 @@ metadata:
   namespace: opinai
   labels:
     app: opinai-controller
+  annotations:
+    haproxy.router.openshift.io/timeout: 300s
 spec:
   to:
     kind: Service
     name: opinai-controller
   port:
-    targetPort: https
+    targetPort: http
   tls:
-    termination: passthrough
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

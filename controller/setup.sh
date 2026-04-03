@@ -68,13 +68,11 @@ case $provider_choice in
     AI_MODEL="${custom_model:-$AI_MODEL}"
 
     echo "  Testing Anthropic connection..."
-    # credentials handled below — no debug tracing
     TEST=$(curl -s -w "%{http_code}" -o /dev/null "https://api.anthropic.com/v1/messages" \
       -H "x-api-key: $AI_API_KEY" \
       -H "anthropic-version: 2023-06-01" \
       -H "content-type: application/json" \
       -d "{\"model\":\"$AI_MODEL\",\"max_tokens\":5,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" 2>/dev/null)
-    # end credentials section
     if [ "$TEST" = "200" ]; then
       echo "  ✅ Anthropic API working"
     else
@@ -91,7 +89,6 @@ case $provider_choice in
     ;;
   3)
     AI_PROVIDER="vertex"
-    # Try to auto-detect from env (same as Claude Code)
     DEFAULT_PROJECT="${ANTHROPIC_VERTEX_PROJECT_ID:-}"
     DEFAULT_REGION="${CLOUD_ML_REGION:-us-east5}"
 
@@ -105,7 +102,6 @@ case $provider_choice in
     read -rp "  Model [$AI_MODEL]: " custom_model
     AI_MODEL="${custom_model:-$AI_MODEL}"
 
-    # ADC credentials path
     DEFAULT_CREDS="$HOME/.config/gcloud/application_default_credentials.json"
     if [ -f "$DEFAULT_CREDS" ]; then
       echo "  Found ADC at $DEFAULT_CREDS"
@@ -122,13 +118,11 @@ case $provider_choice in
     echo "  Testing Vertex connection..."
     TOKEN=$(gcloud auth application-default print-access-token 2>/dev/null || echo "")
     if [ -n "$TOKEN" ]; then
-      # credentials handled below — no debug tracing
       TEST=$(curl -s -w "%{http_code}" -o /dev/null \
         "https://${AI_REGION}-aiplatform.googleapis.com/v1/projects/${AI_PROJECT}/locations/${AI_REGION}/publishers/anthropic/models/${AI_MODEL}:rawPredict" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d "{\"anthropic_version\":\"vertex-2023-10-16\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}" 2>/dev/null)
-      # end credentials section
       if [ "$TEST" = "200" ]; then
         echo "  ✅ Vertex AI working ($AI_MODEL)"
       else
@@ -166,64 +160,11 @@ echo ""
 # Step 4: Repos
 echo "📦 Step 4: Repositories to Monitor"
 echo ""
-read -rp "  Enter repos to monitor (comma-separated, e.g. owner/repo1,owner/repo2): " REPOS
-
-# For each repo, gather profile info
-PROFILE_FILES=""
-IFS="," read -ra REPO_ARRAY <<< "$REPOS"
-for repo in "${REPO_ARRAY[@]}"; do
-  repo=$(echo "$repo" | xargs)  # trim whitespace
-  echo ""
-  echo "  📚 Learning about $repo..."
-
-  # Try to auto-detect from README
-  README=$(gh api "repos/$repo/readme" --jq ".content" 2>/dev/null | base64 -d 2>/dev/null | head -20 || echo "")
-  if [ -n "$README" ]; then
-    echo "  Found README"
-  fi
-
-  LANG=$(gh api "repos/$repo" --jq ".language" 2>/dev/null || echo "unknown")
-  echo "  Language: $LANG"
-
-  DEFAULT_TYPE="other"
-  if [ "$LANG" = "Python" ]; then
-    DEFAULT_TYPE="api-server"
-  fi
-
-  read -rp "  Project type (api-server/cli/operator/library/other) [$DEFAULT_TYPE]: " proj_type
-  proj_type="${proj_type:-$DEFAULT_TYPE}"
-
-  read -rp "  Install command (e.g. pip install -e ., make build): " build_cmd
-  read -rp "  Run command (e.g. python -m myapp --port 8000): " run_cmd
-  read -rp "  Health check URL (e.g. http://localhost:8000/health): " health_url
-
-  read -rp "  Needs GPU? (y/n) [n]: " needs_gpu
-  needs_gpu="${needs_gpu:-n}"
-
-  read -rp "  Needs Kubernetes/OpenShift? (y/n) [n]: " needs_k8s
-  needs_k8s="${needs_k8s:-n}"
-
-  read -rp "  Dependencies (e.g. Redis, Ollama, Istio): " deps
-
-  # Sanitize repo name for configmap key
-  REPO_KEY=$(echo "$repo" | tr "/" "_" | tr "." "_" | tr "-" "_")
-  GPU=$( [[ "$needs_gpu" =~ ^[Yy] ]] && echo "true" || echo "false" )
-  K8S=$( [[ "$needs_k8s" =~ ^[Yy] ]] && echo "true" || echo "false" )
-
-  # Escape double quotes in user input for JSON safety
-  build_cmd="${build_cmd//\"/\\\"}"
-  run_cmd="${run_cmd//\"/\\\"}"
-  health_url="${health_url//\"/\\\"}"
-  deps="${deps//\"/\\\"}"
-
-  # Write profile JSON to temp file (avoids shell quoting hell)
-  PROFILE_TMPDIR="${PROFILE_TMPDIR:-$(mktemp -d)}"
-  cat > "$PROFILE_TMPDIR/REPO_PROFILE_${REPO_KEY}" << PROFEOF
-{"type":"$proj_type","build":"$build_cmd","run":"$run_cmd","health":"$health_url","gpu":$GPU,"k8s":$K8S,"deps":"$deps"}
-PROFEOF
-  PROFILE_FILES="$PROFILE_FILES --from-file=REPO_PROFILE_${REPO_KEY}=$PROFILE_TMPDIR/REPO_PROFILE_${REPO_KEY}"
-done
-
+echo "  Enter repos to monitor (comma-separated, e.g. owner/repo1,owner/repo2)"
+echo "  The AI will automatically analyze each repo's README, dependencies,"
+echo "  and deployment files — no manual configuration needed."
+echo ""
+read -rp "  Repos: " REPOS
 echo ""
 
 # Step 5: Namespace and polling
@@ -244,7 +185,6 @@ oc create namespace "$NAMESPACE" 2>/dev/null || echo "  Namespace $NAMESPACE alr
 echo "  ✅ Namespace ready"
 
 # Create secrets
-# credentials handled below — no debug tracing
 if [ "$AI_PROVIDER" = "vertex" ] && [ -n "$GCP_CREDS_PATH" ]; then
   oc create secret generic opinai-gcp-credentials -n "$NAMESPACE" \
     --from-file=credentials.json="$GCP_CREDS_PATH" \
@@ -261,15 +201,12 @@ oc create secret generic opinai-credentials -n "$NAMESPACE" \
   --from-literal=AI_MODEL="$AI_MODEL" \
   --from-literal=AI_BASE_URL="${AI_BASE_URL:-}" \
   --dry-run=client -o yaml | oc apply -f - >/dev/null 2>&1
-# end credentials section
 echo "  ✅ Credentials stored"
 
 # Create configmap
-eval oc create configmap opinai-config -n "$NAMESPACE" \
+oc create configmap opinai-config -n "$NAMESPACE" \
   --from-literal=REPOS="$REPOS" \
   --from-literal=POLL_INTERVAL_MINUTES="$INTERVAL" \
-  --from-literal=DONE_LABEL="opinai-done" \
-  "$PROFILE_FILES" \
   --dry-run=client -o yaml | oc apply -f - >/dev/null 2>&1
 echo "  ✅ Configuration stored"
 
@@ -298,11 +235,11 @@ spec:
     git:
       uri: https://github.com/yossiovadia/opinai.git
       ref: main
-    contextDir: .
+    contextDir: controller-go
   strategy:
     type: Docker
     dockerStrategy:
-      dockerfilePath: controller/Dockerfile
+      dockerfilePath: Dockerfile
       noCache: true
   output:
     to:
