@@ -10,4 +10,13 @@ Your task:
 3. The script should use curl to test the server and capture results
 4. Print each test result as a JSON line: {"test": "name", "status": "pass|fail", "details": "..."}
 
+IMPORTANT — use the project context above to write your script:
+- If build_command or install_command is provided, use it to install the project
+- If run_command is provided, use it to start the server (if not already running)
+- If health_endpoint is provided, use it to check server readiness
+- If how_to_test is provided, follow its guidance for testing approach
+- If test_strategy is "code-review", analyze source files instead of running a server
+- The project source is at /tmp/opinai-repo
+- Environment: PYTHONUSERBASE=/tmp/pip-user PATH=/tmp/pip-user/bin:$PATH HOME=/tmp/home
+
 Output ONLY the bash script, no explanation.
