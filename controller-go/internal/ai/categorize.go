@@ -2,6 +2,8 @@ package ai
 
 import (
 	"strings"
+
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
 // Categorize asks the AI to classify an issue as BUG/FEATURE/QUESTION/DOCS.
@@ -11,15 +13,9 @@ func Categorize(title, body string) string {
 		return "BUG"
 	}
 
-	prompt := "You are OpinAI. Categorize this GitHub issue:\n\n" +
-		"Title: " + title + "\n" +
-		"Body: " + body + "\n\n" +
-		"Categorize this issue: BUG (defect in existing behavior), " +
-		"FEATURE (request for new functionality), QUESTION (asking for help/clarification), " +
-		"or DOCS (documentation issue).\n\n" +
-		"Respond with ONLY one line in this exact format:\n" +
-		"Category: BUG\n" +
-		"(or FEATURE, QUESTION, DOCS)"
+	prompt := prompts.Render("categorize.txt", map[string]string{
+		"Title": title, "Body": body,
+	})
 
 	content, err := callWithConfig(cfg, prompt, 256)
 	if err != nil {

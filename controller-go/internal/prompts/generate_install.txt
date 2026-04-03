@@ -1,0 +1,11 @@
+Generate the MINIMAL install command for this project to run for API testing.
+
+Project: {{.Repo}}
+Files:
+{{.DepsInfo}}
+
+Constraints: rootless container, 512Mi RAM, NO GPU, python3 + pip available.
+Use --user --break-system-packages for pip.
+Use --no-deps if heavy deps (torch, tensorflow, vllm, cuda) are listed but not needed for testing.
+
+Respond with ONLY the shell command on a single line. No explanation.

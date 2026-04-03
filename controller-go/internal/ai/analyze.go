@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
 // AnalyzeDeployment generates deployment options for a repo.
@@ -32,35 +34,11 @@ func AnalyzeDeployment(repo, readme string, files map[string]string, clusterStat
 	}
 	namespaces := strings.Join(clusterState["namespaces"], ", ")
 
-	prompt := fmt.Sprintf(
-		"You are OpinAI. Analyze this project for deployment on OpenShift/Kubernetes.\n\n"+
-			"Project: %s\nProfile: %s\n\n"+
-			"README (first 3000 chars):\n%s\n\n"+
-			"Deployment files found:\n%s\n\n"+
-			"Cluster state:\n- CRDs: %s\n- Operators: %s\n- Namespaces: %s\n\n"+
-			"Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with "+
-			"an \"options\" array. Each option: id, name, description, estimated_time, best_for, "+
-			"steps (array of {type, content, required, description}), requirements, risks, recommended (bool).\n"+
-			"Also include at the top level:\n"+
-			"- project_type, detected_deployment_method, dependencies\n"+
-			"- resource_requirements: {\"cpu\": \"200m\", \"memory\": \"512Mi\"} — resources needed by the runner pod\n"+
-			"- install_notes: any special considerations\n\n"+
-			"CRITICAL — install_command generation rules:\n"+
-			"Analyze the project's dependency files (pyproject.toml, setup.py, requirements.txt, go.mod, package.json) "+
-			"and determine the MINIMAL install needed for API testing.\n"+
-			"- Identify HEAVY dependencies (torch, tensorflow, vllm, cuda, triton, xformers, bitsandbytes, etc) "+
-			"that are only needed for GPU/production usage\n"+
-			"- If the project has an echo/mock/test mode that does not need GPU/ML libraries, use that\n"+
-			"- For Python: consider using --no-deps + installing only lightweight deps separately\n"+
-			"- The install must work in a rootless container with NO GPU, 512Mi RAM\n"+
-			"- ALWAYS include --user --break-system-packages for pip commands\n"+
-			"- Generate the MINIMAL install command that gets the server running for API testing\n\n"+
-			"Example: If pyproject.toml lists torch>=2.0.0 but the server has an echo backend:\n"+
-			"  WRONG: pip install --user myproject  (downloads 2GB of torch)\n"+
-			"  RIGHT: pip install --user --no-deps myproject && pip install --user fastapi uvicorn click  (50MB)\n\n"+
-			"Your install_command must succeed in a rootless container with 512Mi RAM. Think carefully.",
-		repo, profileJSON, readme, filesSummary, crds, operators, namespaces,
-	)
+	prompt := prompts.Render("analyze_deployment.txt", map[string]string{
+		"Repo": repo, "ProfileJSON": profileJSON,
+		"Readme": readme, "FilesSummary": filesSummary,
+		"CRDs": crds, "Operators": operators, "Namespaces": namespaces,
+	})
 
 	content, err := callWithConfig(cfg, prompt, 8192)
 	if err != nil {

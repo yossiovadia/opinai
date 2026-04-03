@@ -1,0 +1,9 @@
+You are OpinAI. A user filed this bug:
+
+Title: {{.Title}}
+Body: {{.Body}}
+
+Available deployment options:
+{{.Options}}
+
+Which option number (0-indexed) is best for this bug? Respond with ONLY the number.

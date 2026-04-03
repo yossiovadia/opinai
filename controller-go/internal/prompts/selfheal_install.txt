@@ -1,0 +1,19 @@
+This install/start command failed in an OpenShift container:
+
+Command: {{.Command}}
+
+Error output (last 1500 chars):
+{{.ErrorOutput}}
+
+The container has: python3, pip3, git, curl, make, bash.
+It does NOT have root access. It has NO GPU. It has 512Mi RAM.
+PYTHONUSERBASE=/tmp/pip-user, HOME=/tmp/home.
+
+Strategies to try:
+1. Add --user --break-system-packages flags to pip
+2. Use --no-deps to skip heavy dependencies (torch, tensorflow, cuda, vllm, triton, xformers), then install only the lightweight deps needed for the server
+3. If the error is OOM or timeout, the package may be too large — use --no-deps approach
+4. If a dependency needs compilation, check if a pre-built wheel exists
+
+Provide the exact fixed shell command that would work.
+Respond with ONLY the fixed shell command on a single line. No explanation.

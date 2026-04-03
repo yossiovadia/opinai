@@ -9,13 +9,12 @@ import (
 
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
 // buildChatContext builds the system prompt with issue context, repo memory, and previous runs.
 func buildChatContext(ctx map[string]any) string {
-	system := "You are OpinAI, an AI bug reproduction assistant running on a Kubernetes cluster. " +
-		"You help developers understand bugs, analyze reproduction results, and suggest fixes. " +
-		"Be concise, technical, and helpful. Use markdown formatting.\n\n"
+	system := prompts.Render("chat_system.txt", nil) + "\n\n"
 
 	repo, _ := ctx["repo"].(string)
 	issueNum := 0

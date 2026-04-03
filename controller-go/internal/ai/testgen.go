@@ -2,6 +2,8 @@ package ai
 
 import (
 	"strings"
+
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
 // GenerateTests asks the AI to write a bash test script for an issue.
@@ -21,18 +23,10 @@ func GenerateTests(title, body, serverURL, profileContext, repoContext string) (
 			"Always check health before installing. Never install if the server is already running.\n"
 	}
 
-	prompt := "You are OpinAI, an automated bug reproduction system. " +
-		"A user filed this bug report:\n\n" +
-		"Title: " + title + "\n" +
-		"Body: " + body + "\n" +
-		serverCtx + profileContext + repoContext + "\n\n" +
-		"Your task:\n" +
-		"1. Analyze what the bug claims\n" +
-		"2. Write a bash test script that proves or disproves this bug\n" +
-		"3. The script should use curl to test the server and capture results\n" +
-		"4. Print each test result as a JSON line: " +
-		`{"test": "name", "status": "pass|fail", "details": "..."}` + "\n\n" +
-		"Output ONLY the bash script, no explanation."
+	prompt := prompts.Render("generate_test.txt", map[string]string{
+		"Title": title, "Body": body,
+		"ServerContext": serverCtx, "ProfileContext": profileContext, "RepoContext": repoContext,
+	})
 
 	content, err := callWithConfig(cfg, prompt, 4096)
 	if err != nil {
@@ -42,7 +36,6 @@ func GenerateTests(title, body, serverURL, profileContext, repoContext string) (
 		return "", nil
 	}
 
-	// Strip markdown code fences
 	var cleaned []string
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "```") {

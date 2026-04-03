@@ -2,6 +2,8 @@ package ai
 
 import (
 	"strings"
+
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
 // VerdictResult holds the AI's verdict on test results.
@@ -45,19 +47,10 @@ func GetVerdict(title, body, testOutput, issueState string) VerdictResult {
 		stateCtx = "\nThis is an OPEN issue.\n"
 	}
 
-	prompt := "You are OpinAI. A user filed this bug report:\n\n" +
-		"Title: " + title + "\n" +
-		"Body: " + body + "\n" +
-		stateCtx + "\n" +
-		"Here are the test results:\n\n" +
-		testOutput + "\n\n" +
-		"Give a brief verdict. " + verdictOptions + "\n" +
-		"Include this exact line:\nVerdict: <YOUR_VERDICT>\n\n" +
-		"Then a one-paragraph summary of what the tests showed.\n\n" +
-		"Also rate your confidence: HIGH (strong evidence), " +
-		"MEDIUM (some evidence but ambiguous), or LOW (mostly guessing).\n\n" +
-		"Include this exact line:\nConfidence: HIGH\n(or MEDIUM or LOW)\n\n" +
-		"Keep it concise."
+	prompt := prompts.Render("verdict.txt", map[string]string{
+		"Title": title, "Body": body,
+		"StateContext": stateCtx, "TestOutput": testOutput, "VerdictOptions": verdictOptions,
+	})
 
 	content, err := callWithConfig(cfg, prompt, 2048)
 	if err != nil {

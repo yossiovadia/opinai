@@ -1,0 +1,7 @@
+Based on this issue and reproduction results, suggest 5 specific follow-up questions a developer would want to ask. Make them specific to THIS issue, not generic.
+
+Issue title: {{.Title}}
+Issue body: {{.Body}}
+Reproduction verdict: {{.Verdict}}
+
+Format as a JSON array of strings. Output ONLY the JSON array, nothing else.

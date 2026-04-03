@@ -13,6 +13,7 @@ import (
 
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
 // setupRetryInfo tracks self-healing retries during setup for inclusion in reports.
@@ -639,34 +640,10 @@ func analyzeReadme(cloneDir string) map[string]string {
 	}
 
 	slog.Info("analyzing project", "repo", os.Getenv("REPO"), "deploy_indicators", len(foundIndicators))
-	prompt := fmt.Sprintf(
-		"Analyze this project from %s.\n\nREADME:\n%s\n\n"+
-			"Dependency files:%s\n\n"+
-			"Deployment/infrastructure files found: %s\n\n"+
-			"Deployment file contents:%s\n\n"+
-			"Provide a JSON summary (no markdown fences, just raw JSON):\n"+
-			"{\n"+
-			"  \"description\": \"what this project does in 1-2 sentences\",\n"+
-			"  \"tech_stack\": \"languages and frameworks\",\n"+
-			"  \"deployment_type\": \"the type of project based on files found (e.g. kustomize, helm, docker, pip, go, npm, operator, etc)\",\n"+
-			"  \"needs_cluster\": \"true if this requires Kubernetes/OpenShift to run, false if it can run as a local process\",\n"+
-			"  \"test_strategy\": \"deploy-and-curl | start-and-curl | code-review | unit-test\",\n"+
-			"  \"how_to_test\": \"specific steps to test bugs in this project\",\n"+
-			"  \"deployment_needs\": \"infrastructure needed (CRDs, operators, databases, etc)\",\n"+
-			"  \"build_command\": \"the exact shell command to build/install this project for testing. "+
-			"Examples: 'pip install --user --no-deps myapp && pip install --user fastapi uvicorn' or "+
-			"'go build -o /tmp/server ./cmd/server' or 'make build' or '' (empty if no build needed). "+
-			"Must work in a rootless container with 512Mi RAM, no GPU. Use --user --break-system-packages for pip.\",\n"+
-			"  \"run_command\": \"the exact shell command to start the server for API testing. "+
-			"Examples: '/tmp/server --port 8000' or 'llm-katan --backend echo --port 8000' or "+
-			"'none' if no server is needed (K8s operators, libraries, CLI tools — use code-review strategy instead).\",\n"+
-			"  \"install_command\": \"same as build_command (for backward compatibility)\"\n"+
-			"}\n\n"+
-			"IMPORTANT: Determine everything from the actual files found. "+
-			"If needs_cluster is true and the project cannot run locally, set run_command to 'none'. "+
-			"The runner will then analyze the source code instead of trying to run a server.",
-		os.Getenv("REPO"), readme, depsInfo, indicatorsStr, deployFileContents,
-	)
+	prompt := prompts.Render("analyze_readme.txt", map[string]string{
+		"Repo": os.Getenv("REPO"), "Readme": readme, "DepsInfo": depsInfo,
+		"Indicators": indicatorsStr, "DeployContents": deployFileContents,
+	})
 	content, err := ai.Call(prompt, 1500)
 	if err != nil || content == "" {
 		return nil
@@ -796,11 +773,9 @@ func generateSuggestedQuestions(title, body, verdictText string) string {
 	if !cfg.Available() {
 		return ""
 	}
-	prompt := "Based on this issue and reproduction results, suggest 5 specific follow-up questions " +
-		"a developer would want to ask. Make them specific to THIS issue, not generic.\n\n" +
-		"Issue title: " + title + "\nIssue body: " + truncStr(body, 500) + "\n" +
-		"Reproduction verdict: " + truncStr(verdictText, 500) + "\n\n" +
-		"Format as a JSON array of strings. Output ONLY the JSON array, nothing else."
+	prompt := prompts.Render("suggested_questions.txt", map[string]string{
+		"Title": title, "Body": truncStr(body, 500), "Verdict": truncStr(verdictText, 500),
+	})
 	reply, err := ai.Call(prompt, 512)
 	if err != nil || reply == "" {
 		return ""
@@ -846,15 +821,9 @@ func generateInstallCommand(cloneDir string) string {
 		return ""
 	}
 
-	prompt := fmt.Sprintf(
-		"Generate the MINIMAL install command for this project to run for API testing.\n\n"+
-			"Project: %s\nFiles:\n%s\n\n"+
-			"Constraints: rootless container, 512Mi RAM, NO GPU, python3 + pip available.\n"+
-			"Use --user --break-system-packages for pip.\n"+
-			"Use --no-deps if heavy deps (torch, tensorflow, vllm, cuda) are listed but not needed for testing.\n\n"+
-			"Respond with ONLY the shell command on a single line. No explanation.",
-		os.Getenv("REPO"), depsInfo,
-	)
+	prompt := prompts.Render("generate_install.txt", map[string]string{
+		"Repo": os.Getenv("REPO"), "DepsInfo": depsInfo,
+	})
 
 	reply, err := ai.Call(prompt, 256)
 	if err != nil || reply == "" {
@@ -959,11 +928,9 @@ func selectDeploymentOption(title, body string, options []struct {
 		optText += fmt.Sprintf("- %d) %s (%s): %s (best for: %s)\n", i, opt.ID, opt.Name, opt.Description, opt.BestFor)
 	}
 
-	prompt := "You are OpinAI. A user filed this bug:\n\n" +
-		"Title: " + title + "\nBody: " + body + "\n\n" +
-		"Available deployment options:\n" + optText + "\n" +
-		"Which option number (0-indexed) is best for this bug? " +
-		"Respond with ONLY the number."
+	prompt := prompts.Render("select_deployment.txt", map[string]string{
+		"Title": title, "Body": body, "Options": optText,
+	})
 
 	reply, err := ai.Call(prompt, 64)
 	if err != nil || reply == "" {

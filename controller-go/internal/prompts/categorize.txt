@@ -1,0 +1,10 @@
+You are OpinAI. Categorize this GitHub issue:
+
+Title: {{.Title}}
+Body: {{.Body}}
+
+Categorize this issue: BUG (defect in existing behavior), FEATURE (request for new functionality), QUESTION (asking for help/clarification), or DOCS (documentation issue).
+
+Respond with ONLY one line in this exact format:
+Category: BUG
+(or FEATURE, QUESTION, DOCS)
