@@ -96,6 +96,40 @@ func Run() {
 		}
 	}()
 
+	// Emit reproduction details for dashboard display
+	reproDetails := map[string]any{
+		"cloned":         true,
+		"server_started": serverURL != "",
+		"server_url":     serverURL,
+	}
+	if sandboxNS != "" {
+		reproDetails["method"] = "sandbox-deploy"
+		reproDetails["deployment_option"] = "Sandbox: " + sandboxNS
+	} else if deploymentPlan != "" {
+		reproDetails["method"] = "plan-deploy"
+	} else if serverURL != "" {
+		reproDetails["method"] = "live-deploy"
+	} else {
+		reproDetails["method"] = "code-review"
+	}
+	repoCtxForDetails := os.Getenv("OPINAI_REPO_CONTEXT")
+	if bc := extractMemoryValue(repoCtxForDetails, "working_install_command"); bc != "" {
+		reproDetails["build_command"] = bc
+	}
+	if rc := extractMemoryValue(repoCtxForDetails, "working_run_command"); rc != "" {
+		reproDetails["run_command"] = rc
+	}
+	if dt := extractMemoryValue(repoCtxForDetails, "deployment_type"); dt != "" {
+		reproDetails["deployment_type"] = dt
+	}
+	if ts := extractMemoryValue(repoCtxForDetails, "test_strategy"); ts != "" {
+		reproDetails["test_strategy"] = ts
+	}
+	reproJSON, _ := json.Marshal(reproDetails)
+	fmt.Println("--- OPINAI REPRODUCTION_DETAILS ---")
+	fmt.Println(string(reproJSON))
+	fmt.Println("--- END REPRODUCTION_DETAILS ---")
+
 	// Step 3: Categorize
 	category := ai.Categorize(title, body)
 	slog.Info("categorized", "category", category)

@@ -33,6 +33,9 @@ func buildChatContext(ctx map[string]any) string {
 					report = report[:1000]
 				}
 				system += fmt.Sprintf("Previous reproduction result:\n%s\n\n", report)
+				if run.ReproDetails != "" {
+					system += fmt.Sprintf("Reproduction details: %s\n\n", run.ReproDetails)
+				}
 				break
 			}
 		}

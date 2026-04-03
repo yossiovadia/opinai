@@ -16,7 +16,7 @@
 <header class="header">
   <div class="header-left">
     <div class="header-logo">&#x1F3B3; OpinAI</div>
-    <div class="header-tagline">Automated Bug Reproduction</div>
+    <div class="header-tagline">That's just, like, your opinion, man.</div>
   </div>
   <div class="header-right">
     <span>
@@ -449,7 +449,7 @@ function renderIssues() {
       '<td colspan="9"><div class="expand-content" id="expand-' + rowId + '">' +
         (isPending
           ? '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x1F504; Waiting for logs...</span></div>'
-          : renderMarkdown(expandContent)) +
+          : renderReproDetails(r) + renderMarkdown(expandContent)) +
       '</div></td>' +
     '</tr>';
   });
@@ -810,6 +810,27 @@ function sendSuggestion(text) {
 }
 
 // Markdown renderer — handles headings, bold, code, tables, details, lists
+function renderReproDetails(r) {
+  if (!r.repro_details) return '';
+  try {
+    var d = JSON.parse(r.repro_details);
+    var rows = '';
+    if (d.method) rows += '<tr><td style="color:var(--blue)">Method</td><td>' + escapeHtml(d.method) + '</td></tr>';
+    if (d.deployment_type) rows += '<tr><td style="color:var(--blue)">Deployment type</td><td>' + escapeHtml(d.deployment_type) + '</td></tr>';
+    if (d.deployment_option) rows += '<tr><td style="color:var(--blue)">Deployment option</td><td>' + escapeHtml(d.deployment_option) + '</td></tr>';
+    if (d.test_strategy) rows += '<tr><td style="color:var(--blue)">Test strategy</td><td>' + escapeHtml(d.test_strategy) + '</td></tr>';
+    if (d.build_command) rows += '<tr><td style="color:var(--blue)">Build command</td><td><code>' + escapeHtml(d.build_command) + '</code></td></tr>';
+    if (d.run_command) rows += '<tr><td style="color:var(--blue)">Run command</td><td><code>' + escapeHtml(d.run_command) + '</code></td></tr>';
+    if (d.server_url) rows += '<tr><td style="color:var(--blue)">Server URL</td><td>' + escapeHtml(d.server_url) + '</td></tr>';
+    rows += '<tr><td style="color:var(--blue)">Repo cloned</td><td>' + (d.cloned ? 'Yes' : 'No') + '</td></tr>';
+    rows += '<tr><td style="color:var(--blue)">Server started</td><td>' + (d.server_started ? 'Yes' : 'No') + '</td></tr>';
+    if (!rows) return '';
+    return '<details style="margin-bottom:12px;"><summary style="cursor:pointer;font-size:12px;color:var(--text-dim);">&#x1F527; Reproduction Details</summary>' +
+      '<table style="font-size:12px;margin-top:6px;border-collapse:collapse;min-width:auto;">' +
+      '<tbody>' + rows + '</tbody></table></details>';
+  } catch(e) { return ''; }
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
 

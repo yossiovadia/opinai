@@ -366,6 +366,7 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	verdict := parseVerdictMarker(podLogs, category)
 	suggestedComment := extractBlock(podLogs, "--- OPINAI SUGGESTED COMMENT ---", "--- END SUGGESTED COMMENT ---")
 	suggestedQuestions := extractBlock(podLogs, "--- OPINAI SUGGESTED_QUESTIONS ---", "--- END SUGGESTED_QUESTIONS ---")
+	reproDetails := extractBlock(podLogs, "--- OPINAI REPRODUCTION_DETAILS ---", "--- END REPRODUCTION_DETAILS ---")
 	storeRepoMemory(repo, podLogs)
 
 	issue := 0
@@ -389,7 +390,7 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		Repo: repo, Issue: issue, Title: title,
 		Verdict: verdict, Category: category, Confidence: confidence,
 		AIPowered: true, Duration: duration, Posted: false,
-		Report: report, SuggestedQuestions: suggestedQuestions, CreatedAt: ts,
+		Report: report, SuggestedQuestions: suggestedQuestions, ReproDetails: reproDetails, CreatedAt: ts,
 	})
 	jm.broadcast("job_completed", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
 
