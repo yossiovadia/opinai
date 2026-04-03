@@ -444,10 +444,8 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		}
 	}
 
-	// Trigger retry of pending issues for this repo
-	if jm.onComplete != nil && repo != "" {
-		go jm.onComplete(repo)
-	}
+	// NOTE: retry is triggered by the runner callback (/api/internal/result), not here.
+	// The callback arrives first and is more reliable. Having both causes duplicate retries.
 }
 
 // trySandboxDeploy checks if the repo needs K8s sandbox deployment and creates one if so.

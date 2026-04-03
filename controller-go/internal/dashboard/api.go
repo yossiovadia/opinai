@@ -337,8 +337,9 @@ func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Remove from pending queue
+	// Remove from pending queue and mark as processed BEFORE retry
 	database.RemovePending(req.Repo, req.Issue)
+	database.MarkProcessed(req.Repo, req.Issue, "")
 
 	// Mark as recorded so the log-scraping harvester skips this job
 	if s.markRecorded != nil {
