@@ -121,7 +121,8 @@ const API = '';
 const REFRESH_INTERVAL = 30000;
 let activeRepoFilter = null;
 let allRuns = [];
-var pendingReRuns = {}; // key: "repo#issue" → {timestamp: Date.now()}
+var pendingReRuns = {}; // key: "repo#issue" → {timestamp, repo, issue}
+var _autoExpandAfterRender = new Set(); // rowIds to auto-expand after next render
 
 async function fetchJSON(url) {
   const resp = await fetch(API + url);
@@ -330,9 +331,9 @@ function mergeIssues() {
 
   // Apply pending re-run overrides
   for (var pk in pendingReRuns) {
+    var pr = pendingReRuns[pk];
     if (map[pk]) {
       // Check if a NEW run arrived (timestamp after the re-run was triggered)
-      var pr = pendingReRuns[pk];
       var entry = map[pk];
       var runTs = entry.timestamp ? new Date(entry.timestamp).getTime() : 0;
       if (runTs > pr.timestamp) {
@@ -344,6 +345,14 @@ function mergeIssues() {
         entry.verdict = '';
         entry.confidence = '';
       }
+    } else {
+      // No existing row — inject a placeholder so the user sees immediate feedback
+      map[pk] = {
+        repo: pr.repo || '', issue: pr.issue || '', title: '',
+        category: '', verdict: '', confidence: '',
+        status: 'Re-running', duration: '', timestamp: new Date(pr.timestamp).toISOString(),
+        posted: false, report: '', runId: null, logs: ''
+      };
     }
   }
 
@@ -428,12 +437,20 @@ function renderIssues() {
       if (r.runId) actions += '<button class="btn" onclick="event.stopPropagation(); shareReport(' + r.runId + ')" title="Share report">&#x1F4CB;</button> ';
     }
     var isPending = pendingReRuns[(r.repo || '') + '#' + (r.issue || '')];
+    var isActive = (r.status === 'Running' || r.status === 'Re-running' || isPending);
     if ((r.status === 'Done' || r.status === 'Failed') && !isPending) {
       actions += '<button class="btn" onclick="event.stopPropagation(); rerun(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ', this)" title="Re-run">&#x1F504;</button>';
-    } else if (isPending) {
+    } else if (isActive) {
       actions += '<button class="btn" disabled><span class="spin">&#x1F504;</span></button>';
     }
-    // Verify Fix merged into Re-run (runner auto-detects closed issues)
+
+    // Build expanded content: live logs for active rows, report for completed
+    var expandInner;
+    if (isActive) {
+      expandInner = '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x23F3; Starting reproduction...</span></div>';
+    } else {
+      expandInner = renderReproDetails(r) + renderMarkdown(expandContent);
+    }
 
     html += '<tr class="expandable" onclick="toggleExpand(\'' + rowId + '\')">' +
       '<td><a href="' + issueUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(r.issue + '') + '</a></td>' +
@@ -448,9 +465,7 @@ function renderIssues() {
     '</tr>' +
     '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
       '<td colspan="9"><div class="expand-content" id="expand-' + rowId + '">' +
-        (isPending
-          ? '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x1F504; Waiting for logs...</span></div>'
-          : renderReproDetails(r) + renderMarkdown(expandContent)) +
+        expandInner +
       '</div></td>' +
     '</tr>';
   });
@@ -462,6 +477,24 @@ function renderIssues() {
   expandedRows.forEach(function(id) {
     var row = document.getElementById(id);
     if (row) row.style.display = '';
+  });
+
+  // Auto-expand rows queued for expansion (from reproduce/rerun triggers)
+  _autoExpandAfterRender.forEach(function(id) {
+    var row = document.getElementById(id);
+    if (row && row.style.display === 'none') {
+      row.style.display = '';
+      expandedRows.add(id);
+    }
+  });
+  _autoExpandAfterRender.clear();
+
+  // Start log streams for any expanded active rows
+  expandedRows.forEach(function(id) {
+    var logsEl = document.getElementById('logs-' + id);
+    if (logsEl && !_logStreams[id]) {
+      startLogStream(id, logsEl);
+    }
   });
 }
 
@@ -494,10 +527,24 @@ function startLogStream(rowId, logsEl) {
   var parts = rowId.replace('issue-', '').split('-');
   var issue = parts.pop();
   var repo = parts.join('-');
-  // Reconstruct owner/repo from dashed form — find it in allRuns
+  // Reconstruct owner/repo from dashed form — check all sources
   var realRepo = '';
-  for (var i = 0; i < allRuns.length; i++) {
-    if (allRuns[i].issue == issue) { realRepo = allRuns[i].repo; break; }
+  // Check pendingReRuns first (has the original repo name)
+  for (var pk in pendingReRuns) {
+    var pr = pendingReRuns[pk];
+    if (pr.issue == issue) { realRepo = pr.repo; break; }
+  }
+  // Check allRawJobs
+  if (!realRepo) {
+    for (var i = 0; i < allRawJobs.length; i++) {
+      if (allRawJobs[i].issue == issue) { realRepo = allRawJobs[i].repo; break; }
+    }
+  }
+  // Check allRuns
+  if (!realRepo) {
+    for (var i = 0; i < allRuns.length; i++) {
+      if (allRuns[i].issue == issue) { realRepo = allRuns[i].repo; break; }
+    }
   }
   if (!realRepo) return;
 
@@ -609,7 +656,10 @@ async function rerun(repo, issue, btn) {
       return;
     }
     // Mark as pending — spinner persists until new result arrives
-    pendingReRuns[key] = { timestamp: Date.now() };
+    pendingReRuns[key] = { timestamp: Date.now(), repo: repo, issue: issue };
+    // Queue auto-expand so the user sees live logs immediately
+    var rowId = 'issue-' + repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + issue;
+    _autoExpandAfterRender.add(rowId);
     renderIssues();
   } catch(e) {
     console.error('Rerun error:', e);
@@ -667,6 +717,12 @@ async function reproduceFromUrl() {
   } catch(e) { /* proceed anyway, server will validate */ }
   showToast('Reproducing ' + parsed.repo + '#' + parsed.issue + '...', 'info');
   input.value = '';
+  // Immediately show a running row with live logs
+  var rKey = parsed.repo + '#' + parsed.issue;
+  pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.issue };
+  var rRowId = 'issue-' + parsed.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + parsed.issue;
+  _autoExpandAfterRender.add(rRowId);
+  renderIssues();
   var source = new EventSource(API + '/api/reproduce-stream?repo=' + encodeURIComponent(parsed.repo) + '&issue=' + parsed.issue);
   source.addEventListener('progress', function(e) {
     var d = JSON.parse(e.data);
@@ -1050,11 +1106,20 @@ function connectWebSocket() {
           loadRepos();
           break;
         case 'job_update':
-        case 'job_created':
           loadIssues();
+          break;
+        case 'job_created':
           if (msg.data && msg.data.repo && msg.data.issue) {
+            // Ensure pending entry exists so a row appears immediately
+            var jcKey = msg.data.repo + '#' + msg.data.issue;
+            if (!pendingReRuns[jcKey]) {
+              pendingReRuns[jcKey] = { timestamp: Date.now(), repo: msg.data.repo, issue: msg.data.issue };
+            }
+            var jcRowId = 'issue-' + msg.data.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + msg.data.issue;
+            _autoExpandAfterRender.add(jcRowId);
             showToast('Job created: ' + msg.data.repo + '#' + msg.data.issue, 'info');
           }
+          loadIssues();
           break;
         case 'job_completed':
           // Clear pending re-run for this issue
