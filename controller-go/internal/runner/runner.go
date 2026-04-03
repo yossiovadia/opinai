@@ -19,6 +19,7 @@ import (
 // setupRetryInfo tracks self-healing retries during setup for inclusion in reports.
 var setupRetryInfo string
 var pendingInstallCmd string // saved only after server health confirmed
+var selectedDeployOption string // set by deployFromPlan for repro_details
 
 // Run executes the full reproduction flow. Called when --mode=runner.
 func Run() {
@@ -108,6 +109,9 @@ func Run() {
 		reproDetails["deployment_option"] = "Sandbox: " + sandboxNS
 	} else if deploymentPlan != "" {
 		reproDetails["method"] = "plan-deploy"
+		if selectedDeployOption != "" {
+			reproDetails["deployment_option"] = selectedDeployOption
+		}
 	} else if serverURL != "" {
 		reproDetails["method"] = "live-deploy"
 	} else {
@@ -395,7 +399,7 @@ func startServer() (*os.Process, string) {
 			slog.Info("using saved working install command", "cmd", installCmd)
 		}
 
-		if pendingInstallCmd != "" {
+		if installCmd != "" {
 			slog.Info("installing", "cmd", installCmd)
 			out, err := runInEnv(installCmd, cloneDir)
 			if err != nil {
@@ -925,6 +929,7 @@ func deployFromPlan(issueTitle, issueBody, planJSON string) string {
 
 	opt := plan.Options[selected]
 	slog.Info("selected deployment option", "option", opt.Name, "id", opt.ID)
+	selectedDeployOption = opt.Name
 	fmt.Printf("--- OPINAI SELECTED DEPLOYMENT: %s ---\n", opt.ID)
 
 	// Since the runner can't create K8s namespaces (no RBAC), log the selection
