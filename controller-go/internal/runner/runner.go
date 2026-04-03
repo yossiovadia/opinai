@@ -154,9 +154,7 @@ func Run() {
 				"**Category:** %s\n"+
 				"**Verdict:** %s\n"+
 				"**Analysis:** AI-powered (model: %s)\n\n"+
-				"This appears to be a **%s**, not a reproducible bug. Skipping reproduction.\n\n"+
-				"---\n"+
-				"*\"That's just, like, your opinion, man.\" -- [OpinAI](https://github.com/yossiovadia/opinai)*",
+				"This appears to be a **%s**, not a reproducible bug. Skipping reproduction.",
 			issueNumber, category, verdictEnum, os.Getenv("AI_MODEL"), catLabels[category],
 		)
 		postComment(repo, atoi(issueNumber), comment)
@@ -229,9 +227,7 @@ func Run() {
 				"**Category:** %s\n"+
 				"**Verdict:** ERROR\n"+
 				"**Analysis:** Skipped (AI analysis failed)\n\n"+
-				"Could not generate tests for this issue.\n\n"+
-				"---\n"+
-				"*\"That's just, like, your opinion, man.\" -- [OpinAI](https://github.com/yossiovadia/opinai)*",
+				"Could not generate tests for this issue.",
 			issueNumber, category,
 		)
 		postComment(repo, atoi(issueNumber), comment)
@@ -245,8 +241,19 @@ func Run() {
 	testOutput := runTests(script)
 	slog.Info("tests completed", "output_bytes", len(testOutput))
 
+	// Check if test output has structured results — if not, warn the verdict AI
+	resultsTable := parseResultsTable(testOutput)
+	hasStructuredResults := !strings.Contains(resultsTable, "(no structured results)")
+	verdictInput := testOutput
+	if !hasStructuredResults {
+		verdictInput += "\n\nWARNING: The test script produced NO structured JSON test results. " +
+			"This likely means the script crashed before completing its tests. " +
+			"Your confidence should be LOW unless the raw output clearly proves the bug exists or not."
+		slog.Warn("test script produced no structured results — likely crashed before producing JSON output")
+	}
+
 	// Step 6: Get verdict
-	vr := ai.GetVerdict(title, body, testOutput, issueState)
+	vr := ai.GetVerdict(title, body, verdictInput, issueState)
 	slog.Info("verdict", "verdict", vr.Verdict, "confidence", vr.Confidence)
 	fmt.Printf("--- OPINAI VERDICT: %s ---\n", vr.Verdict)
 	fmt.Printf("--- OPINAI CONFIDENCE: %s ---\n", vr.Confidence)
@@ -260,7 +267,6 @@ func Run() {
 	}
 
 	// Step 7: Build report
-	resultsTable := parseResultsTable(testOutput)
 	serverInfo := ""
 	if serverURL != "" {
 		serverInfo = fmt.Sprintf("**Server:** `%s`\n", serverURL)
@@ -291,9 +297,7 @@ func Run() {
 			"%s\n\n"+
 			"<details><summary>Raw test output</summary>\n\n"+
 			"```\n%s\n```\n\n"+
-			"</details>\n\n"+
-			"---\n"+
-			"*\"That's just, like, your opinion, man.\" -- [OpinAI](https://github.com/yossiovadia/opinai)*",
+			"</details>",
 		issueNumber, category, vr.Verdict, vr.Confidence, serverInfo, retryInfo,
 		os.Getenv("AI_MODEL"), resultsTable, verdictText, truncStr(testOutput, 5000),
 	)
@@ -511,7 +515,14 @@ func startServer() (*os.Process, string) {
 
 func runTests(script string) string {
 	tmpFile := "/tmp/opinai_test.sh"
-	content := "#!/usr/bin/env bash\nset -euo pipefail\n\n" + script
+	// Use set -uo pipefail (no -e) so the script continues after individual test failures
+	// and can still emit structured JSON results. Add a trap to catch unexpected exits.
+	preamble := `#!/usr/bin/env bash
+set -uo pipefail
+trap 'echo "{\"test\": \"script_execution\", \"status\": \"fail\", \"details\": \"script crashed at line $LINENO with exit code $?\"}"' ERR
+
+`
+	content := preamble + script
 	os.WriteFile(tmpFile, []byte(content), 0o755)
 	defer os.Remove(tmpFile)
 
