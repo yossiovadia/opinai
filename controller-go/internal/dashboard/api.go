@@ -28,6 +28,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"repos_count":     len(s.state.GetRepos()),
 		"total_runs":      dbStats.TotalRuns,
 		"total_processed": dbStats.TotalProcessed,
+		"bugs_confirmed":  dbStats.BugsConfirmed,
+		"not_reproducible": dbStats.NotReproducible,
 	})
 }
 

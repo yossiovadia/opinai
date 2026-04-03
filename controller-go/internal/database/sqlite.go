@@ -260,14 +260,18 @@ func GetStats(repo string) (RepoStats, error) {
 }
 
 type TotalStats struct {
-	TotalRuns      int `json:"total_runs"`
-	TotalProcessed int `json:"total_processed"`
+	TotalRuns        int `json:"total_runs"`
+	TotalProcessed   int `json:"total_processed"`
+	BugsConfirmed    int `json:"bugs_confirmed"`
+	NotReproducible  int `json:"not_reproducible"`
 }
 
 func GetTotalStats() (TotalStats, error) {
 	var s TotalStats
 	db.QueryRow("SELECT COUNT(*) FROM runs").Scan(&s.TotalRuns)
 	db.QueryRow("SELECT COUNT(*) FROM processed_issues").Scan(&s.TotalProcessed)
+	db.QueryRow("SELECT COUNT(*) FROM runs WHERE verdict = 'BUG_CONFIRMED'").Scan(&s.BugsConfirmed)
+	db.QueryRow("SELECT COUNT(*) FROM runs WHERE verdict = 'NOT_REPRODUCIBLE'").Scan(&s.NotReproducible)
 	return s, nil
 }
 

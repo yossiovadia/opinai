@@ -23,6 +23,9 @@
       <span class="status-dot green" id="statusDot"></span>
       <span id="clusterName">Connecting...</span>
     </span>
+    <span id="runningIndicator" style="display:none;cursor:pointer" onclick="filterRunning()">
+      <span class="spin" style="display:inline-block;font-size:12px">&#x1F3C3;</span> <strong id="runningCount">0</strong> running
+    </span>
     <span>Uptime: <strong id="uptime">--</strong></span>
     <span>Polls: <strong id="pollCount">0</strong></span>
     <a href="/admin" style="color:var(--text-dim);font-size:13px">&#x2699;&#xFE0F; Admin</a>
@@ -224,9 +227,9 @@ async function loadStatus() {
     // Update hero stats
     var hs = document.getElementById('heroStats');
     if (hs) hs.innerHTML =
-      '<span>&#x1F534; ' + (data.total_runs || 0) + ' runs</span>' +
-      '<span>&#x1F4E6; ' + (data.repos_count || 0) + ' repos</span>' +
-      '<span>&#x2705; ' + (data.total_processed || 0) + ' processed</span>';
+      '<span>&#x1F534; ' + (data.bugs_confirmed || 0) + ' bugs confirmed</span>' +
+      '<span>&#x26A0;&#xFE0F; ' + (data.not_reproducible || 0) + ' not reproduced</span>' +
+      '<span>&#x1F4E6; ' + (data.repos_count || 0) + ' repos monitored</span>';
   } catch(e) {
     document.getElementById('statusDot').className = 'status-dot red';
     document.getElementById('clusterName').textContent = 'Disconnected';
@@ -496,6 +499,9 @@ function renderIssues() {
       startLogStream(id, logsEl);
     }
   });
+
+  // Keep running indicator in sync
+  updateRunningCount();
 }
 
 var _logStreams = {}; // track active log SSE connections by rowId
@@ -749,6 +755,32 @@ document.getElementById('reproduceInput').addEventListener('keydown', function(e
 async function refreshAll() {
   animateRefresh();
   await Promise.all([loadStatus(), loadRepos(), loadIssues()]);
+  updateRunningCount();
+}
+
+function updateRunningCount() {
+  var items = mergeIssues();
+  var count = 0;
+  items.forEach(function(r) {
+    if (r.status === 'Running' || r.status === 'Re-running') count++;
+  });
+  var el = document.getElementById('runningIndicator');
+  if (count > 0) {
+    el.style.display = '';
+    document.getElementById('runningCount').textContent = count;
+  } else {
+    el.style.display = 'none';
+  }
+}
+
+function filterRunning() {
+  // Clear repo filter to show all, then scroll to issues table
+  activeRepoFilter = null;
+  renderIssues();
+  renderRepoFilter();
+  // Scroll the issues section into view
+  var container = document.getElementById('issuesContainer');
+  if (container) container.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // =====================================================================

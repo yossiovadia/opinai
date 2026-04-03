@@ -242,15 +242,22 @@ func TestGetStats(t *testing.T) {
 
 func TestGetTotalStats(t *testing.T) {
 	setupTestDB(t)
-	AddRun(Run{Repo: "a/a", Issue: 1, CreatedAt: "2026-01-01"})
-	AddRun(Run{Repo: "b/b", Issue: 2, CreatedAt: "2026-01-02"})
+	AddRun(Run{Repo: "a/a", Issue: 1, Verdict: "BUG_CONFIRMED", CreatedAt: "2026-01-01"})
+	AddRun(Run{Repo: "b/b", Issue: 2, Verdict: "NOT_REPRODUCIBLE", CreatedAt: "2026-01-02"})
+	AddRun(Run{Repo: "c/c", Issue: 3, Verdict: "BUG_CONFIRMED", CreatedAt: "2026-01-03"})
 	MarkProcessed("a/a", 1, "j")
 
 	s, _ := GetTotalStats()
-	if s.TotalRuns != 2 {
-		t.Errorf("total_runs = %d", s.TotalRuns)
+	if s.TotalRuns != 3 {
+		t.Errorf("total_runs = %d, want 3", s.TotalRuns)
 	}
 	if s.TotalProcessed != 1 {
-		t.Errorf("total_processed = %d", s.TotalProcessed)
+		t.Errorf("total_processed = %d, want 1", s.TotalProcessed)
+	}
+	if s.BugsConfirmed != 2 {
+		t.Errorf("bugs_confirmed = %d, want 2", s.BugsConfirmed)
+	}
+	if s.NotReproducible != 1 {
+		t.Errorf("not_reproducible = %d, want 1", s.NotReproducible)
 	}
 }
