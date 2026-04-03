@@ -64,15 +64,47 @@ func (s *Server) handleAnalyzeStream(w http.ResponseWriter, r *http.Request) {
 
 	clusterState := readClusterState()
 
-	// Stage 3: Calling AI
+	// Stage 3: Calling AI (with keepalive ticker)
 	writeSSE(w, "progress", map[string]string{
-		"stage": "calling_ai", "message": "AI analyzing deployment options (30-60s)...",
+		"stage": "calling_ai", "message": "AI analyzing deployment options...",
 	})
 
 	profile := loadProfile(repo)
 	profileJSON, _ := json.Marshal(profile)
 
-	planData, err := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON))
+	type aiResult struct {
+		data map[string]any
+		err  error
+	}
+	aiDone := make(chan aiResult, 1)
+	go func() {
+		data, err := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON))
+		aiDone <- aiResult{data, err}
+	}()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	aiStart := time.Now()
+	var planData map[string]any
+	var err error
+
+waitLoop:
+	for {
+		select {
+		case res := <-aiDone:
+			planData, err = res.data, res.err
+			break waitLoop
+		case <-ticker.C:
+			elapsed := int(time.Since(aiStart).Seconds())
+			writeSSE(w, "progress", map[string]string{
+				"stage":   "calling_ai",
+				"message": fmt.Sprintf("AI analyzing project... (%ds elapsed)", elapsed),
+			})
+		case <-r.Context().Done():
+			return
+		}
+	}
+
 	if err != nil {
 		writeSSE(w, "error", map[string]string{"message": "Analysis failed: " + err.Error()})
 		return
