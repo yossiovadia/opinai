@@ -571,6 +571,15 @@ function showToast(message, type) {
 function streamAnalyze(repo, statusEl, onDone) {
   statusEl.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> Reading repository files...';
   var source = new EventSource('/api/admin/analyze-stream?repo=' + encodeURIComponent(repo));
+  var finished = false;
+
+  function finish(success) {
+    if (finished) return;
+    finished = true;
+    source.close();
+    if (onDone) onDone(success);
+  }
+
   source.addEventListener('progress', function(e) {
     var d = JSON.parse(e.data);
     statusEl.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> ' + escapeHtml(d.message);
@@ -579,16 +588,42 @@ function streamAnalyze(repo, statusEl, onDone) {
     var d = JSON.parse(e.data);
     statusEl.innerHTML = '&#x2705; ' + escapeHtml(d.message);
     showToast('Analysis complete for ' + repo, 'success');
-    source.close();
-    if (onDone) onDone(true);
+    finish(true);
   });
   source.addEventListener('error', function(e) {
+    // Named SSE event "error" from the server
     try { var d = JSON.parse(e.data); statusEl.innerHTML = '&#x26A0;&#xFE0F; ' + escapeHtml(d.message); }
     catch(x) { statusEl.innerHTML = '&#x26A0;&#xFE0F; Analysis failed — you can retry.'; }
     showToast('Analysis failed for ' + repo, 'error');
-    source.close();
-    if (onDone) onDone(false);
+    finish(false);
   });
+  // Handle connection drops (server closed stream without sending done/error)
+  source.onerror = function() {
+    if (finished) return;
+    // Delay briefly to let any buffered done/error events process first
+    setTimeout(function() {
+      if (finished) return;
+      if (source.readyState === EventSource.CLOSED) {
+        // Check if plan was actually saved (server may have succeeded but stream dropped)
+        fetchJSON('/api/admin/deployment-plan/' + repo).then(function(plan) {
+          if (finished) return;
+          if (plan && plan.options && plan.options.length) {
+            statusEl.innerHTML = '&#x2705; Analysis complete (stream closed early)';
+            showToast('Analysis complete for ' + repo, 'success');
+            finish(true);
+          } else {
+            statusEl.innerHTML = '&#x26A0;&#xFE0F; Connection lost — you can retry.';
+            showToast('Analysis connection lost for ' + repo, 'error');
+            finish(false);
+          }
+        }).catch(function() {
+          if (finished) return;
+          statusEl.innerHTML = '&#x26A0;&#xFE0F; Connection lost — you can retry.';
+          finish(false);
+        });
+      }
+    }, 500);
+  };
 }
 
 async function analyzeDeployment(repo, btn) {
