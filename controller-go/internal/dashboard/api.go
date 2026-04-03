@@ -355,8 +355,12 @@ func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 
 	// Trigger retry of pending issues for this repo (async)
+	// Delay briefly so K8s has time to mark the job as inactive
 	if s.retryPending != nil {
-		go s.retryPending(req.Repo)
+		go func() {
+			time.Sleep(5 * time.Second)
+			s.retryPending(req.Repo)
+		}()
 	}
 }
 
