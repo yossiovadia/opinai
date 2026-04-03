@@ -906,7 +906,7 @@ func deployFromPlan(issueTitle, issueBody, planJSON string) string {
 }
 
 func selectDeploymentOption(title, body string, options []struct {
-	ID          string `json:"id"`
+	ID          any    `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	BestFor     string `json:"best_for"`
