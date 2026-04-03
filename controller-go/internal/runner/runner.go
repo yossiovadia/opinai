@@ -72,8 +72,8 @@ func Run() {
 				break
 			}
 		}
-	} else if deploymentPlan != "" && (isK8sProject() || verifyFix) {
-		// K8s project with deployment plan — ask AI which option to use
+	} else if deploymentPlan != "" {
+		// Deploy from plan — AI determines steps
 		serverURL = deployFromPlan(title, body, deploymentPlan)
 		if serverURL != "" {
 			os.Setenv("SERVER_URL", serverURL)
