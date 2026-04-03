@@ -401,28 +401,65 @@ async function loadLogs() {
 }
 
 // --- AI Knowledge ---
+var _knowledgeLabels = {
+  description: 'Description',
+  tech_stack: 'Tech Stack',
+  deployment_type: 'Deployment Type',
+  install_command: 'Install Command',
+  working_install_command: 'Working Install Command',
+  install_notes: 'Install Notes',
+  test_strategy: 'Test Strategy',
+  needs_cluster: 'Needs Cluster',
+  how_to_test: 'How to Test',
+  run_command: 'Run Command',
+  working_run_command: 'Working Run Command',
+  last_analyzed_issue: 'Last Analyzed Issue',
+  last_verdict: 'Last Verdict',
+  last_confidence: 'Last Confidence'
+};
+
+function formatMemoryValue(key, value) {
+  if (!value) return '<span style="color:var(--text-dim)">—</span>';
+  if (key.indexOf('command') >= 0) {
+    return '<code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:11px">' + escapeHtml(value) + '</code>';
+  }
+  if (key === 'needs_cluster') {
+    return value === 'true'
+      ? '<span style="color:var(--yellow)">Yes</span>'
+      : '<span style="color:var(--green)">No</span>';
+  }
+  return escapeHtml(value);
+}
+
 async function loadMemory() {
   try {
     var data = await fetchJSON('/api/admin/db-memory');
     var container = document.getElementById('memoryContainer');
     var repos = Object.keys(data);
     if (!repos.length) {
-      container.innerHTML = '<div class="empty" style="padding:12px">No AI knowledge yet. Run a reproduction to start learning.</div>';
+      container.innerHTML = '<div class="empty" style="padding:12px">No AI knowledge yet. Add a repo and run analysis to start learning.</div>';
       return;
     }
     var html = '';
     repos.forEach(function(repo) {
-      html += '<div class="repo-card" style="margin-bottom:8px">';
-      html += '<div class="repo-card-header"><span class="repo-card-name">' + escapeHtml(repo) + '</span></div>';
       var entries = data[repo];
-      Object.keys(entries).forEach(function(key) {
+      var keys = Object.keys(entries);
+      // Sort: known keys first in logical order, then the rest
+      var ordered = Object.keys(_knowledgeLabels).filter(function(k) { return entries[k]; });
+      var extra = keys.filter(function(k) { return !_knowledgeLabels[k]; }).sort();
+      var allKeys = ordered.concat(extra);
+
+      html += '<div class="repo-card" style="margin-bottom:12px">';
+      html += '<div class="repo-card-header"><span class="repo-card-name">&#x1F4E6; ' + escapeHtml(repo) + '</span>';
+      html += '<span style="font-size:11px;color:var(--text-dim)">' + allKeys.length + ' fields</span></div>';
+      html += '<div style="display:grid;grid-template-columns:160px 1fr;gap:4px 12px;margin-top:8px;font-size:12px">';
+      allKeys.forEach(function(key) {
         var e = entries[key];
-        html += '<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;">' +
-          '<span style="color:var(--blue);min-width:140px;font-weight:500">' + escapeHtml(key) + '</span>' +
-          '<span style="color:var(--text)">' + escapeHtml(e.value || '') + '</span>' +
-        '</div>';
+        var label = _knowledgeLabels[key] || key;
+        html += '<div style="color:var(--blue);font-weight:500;padding:4px 0">' + escapeHtml(label) + '</div>';
+        html += '<div style="padding:4px 0;word-break:break-word">' + formatMemoryValue(key, e.value) + '</div>';
       });
-      html += '</div>';
+      html += '</div></div>';
     });
     container.innerHTML = html;
   } catch(e) {

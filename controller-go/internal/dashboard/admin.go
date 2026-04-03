@@ -551,6 +551,45 @@ func autoUpdateProfileFromPlan(repo string, planData map[string]any) {
 		newProfile["type"] = t
 	}
 	updateRepoEnv(repo, newProfile, false)
+
+	// Store key analysis fields in repo_memory so AI Knowledge is populated
+	memFields := map[string]string{
+		"description":       "",
+		"tech_stack":         projectType,
+		"deployment_type":    "",
+		"install_command":    "",
+		"install_notes":      "",
+		"needs_cluster":      "",
+		"test_strategy":      "",
+	}
+	if v, _ := planData["description"].(string); v != "" {
+		memFields["description"] = v
+	}
+	if v, _ := planData["detected_deployment_method"].(string); v != "" {
+		memFields["deployment_type"] = v
+	}
+	if v, _ := planData["install_command"].(string); v != "" {
+		memFields["install_command"] = v
+	}
+	if v, _ := planData["install_notes"].(string); v != "" {
+		memFields["install_notes"] = v
+	}
+	if depsStr != "" {
+		memFields["tech_stack"] = depsStr
+	}
+	if needsK8s {
+		memFields["needs_cluster"] = "true"
+		memFields["test_strategy"] = "code-review"
+	} else {
+		memFields["needs_cluster"] = "false"
+		memFields["test_strategy"] = "deploy-and-curl"
+	}
+	for k, v := range memFields {
+		if v != "" {
+			database.SetRepoMemory(repo, k, v)
+		}
+	}
+	slog.Info("stored AI knowledge from deployment analysis", "repo", repo)
 }
 
 func ghGetDashboard(path string) ([]byte, int, error) {
