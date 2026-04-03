@@ -18,6 +18,7 @@ import (
 
 // setupRetryInfo tracks self-healing retries during setup for inclusion in reports.
 var setupRetryInfo string
+var pendingInstallCmd string // saved only after server health confirmed
 
 // Run executes the full reproduction flow. Called when --mode=runner.
 func Run() {
@@ -394,7 +395,7 @@ func startServer() (*os.Process, string) {
 			slog.Info("using saved working install command", "cmd", installCmd)
 		}
 
-		if installCmd != "" {
+		if pendingInstallCmd != "" {
 			slog.Info("installing", "cmd", installCmd)
 			out, err := runInEnv(installCmd, cloneDir)
 			if err != nil {
@@ -406,8 +407,8 @@ func startServer() (*os.Process, string) {
 					slog.Info("trying AI-suggested fix", "cmd", fixedCmd)
 					_, err2 := runInEnv(fixedCmd, cloneDir)
 					if err2 == nil {
-						slog.Info("AI fix worked — saving")
-						emitRepoMemory(map[string]string{"working_install_command": fixedCmd})
+						slog.Info("AI fix worked — will save after server health check")
+						pendingInstallCmd = fixedCmd // track for later save
 						setupRetryInfo = "AI fixed install: " + truncStr(fixedCmd, 80)
 					} else {
 						slog.Warn("AI fix also failed, trying fresh generation", "error", err2)
@@ -418,8 +419,8 @@ func startServer() (*os.Process, string) {
 							slog.Info("trying AI-generated fresh install", "cmd", freshCmd)
 							_, err3 := runInEnv(freshCmd, cloneDir)
 							if err3 == nil {
-								slog.Info("fresh install worked — saving")
-								emitRepoMemory(map[string]string{"working_install_command": freshCmd})
+								slog.Info("fresh install worked — will save after health check")
+								pendingInstallCmd = freshCmd
 								setupRetryInfo = "AI generated install: " + truncStr(freshCmd, 80)
 							} else {
 								slog.Warn("all install attempts failed", "error", err3)
@@ -433,14 +434,12 @@ func startServer() (*os.Process, string) {
 						slog.Info("trying AI-generated fresh install", "cmd", freshCmd)
 						_, err3 := runInEnv(freshCmd, cloneDir)
 						if err3 == nil {
-							slog.Info("fresh install worked — saving")
-							emitRepoMemory(map[string]string{"working_install_command": freshCmd})
+							slog.Info("fresh install worked — will save after health check")
+							pendingInstallCmd = freshCmd
 							setupRetryInfo = "AI generated install: " + truncStr(freshCmd, 80)
 						}
 					}
 				}
-			} else if !strings.Contains(repoCtx, "working_install_command:") {
-				emitRepoMemory(map[string]string{"working_install_command": installCmd})
 			}
 		}
 	}
@@ -489,6 +488,11 @@ func startServer() (*os.Process, string) {
 		checkCmd := exec.Command("curl", "-sf", healthURL)
 		if checkCmd.Run() == nil {
 			slog.Info("server healthy", "seconds", i)
+			// Only save working_install_command AFTER server is confirmed healthy
+			if pendingInstallCmd != "" {
+				emitRepoMemory(map[string]string{"working_install_command": pendingInstallCmd})
+				slog.Info("saved working install command (server healthy)", "cmd", truncStr(pendingInstallCmd, 80))
+			}
 			return cmd.Process, serverURL
 		}
 		if cmd.ProcessState != nil {
