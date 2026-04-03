@@ -227,6 +227,7 @@ async function smartAddRepo() {
   if (!repo) { status.innerHTML = '<span style="color:var(--red)">Invalid repo format. Use owner/repo or a GitHub URL.</span>'; return; }
 
   btn.disabled = true;
+  btn.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> Analyzing...';
 
   // Step 1: Add the repo
   status.innerHTML = '&#x1F4E6; Adding <strong>' + escapeHtml(repo) + '</strong>...';
@@ -236,11 +237,13 @@ async function smartAddRepo() {
     if (!resp.ok) {
       status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(data.error || 'unknown') + '</span>';
       btn.disabled = false;
+      btn.innerHTML = '&#x2795; Add &amp; Analyze';
       return;
     }
   } catch(e) {
     status.innerHTML = '<span style="color:var(--red)">Failed to add repo: ' + escapeHtml(e.message || 'network error') + '</span>';
     btn.disabled = false;
+    btn.innerHTML = '&#x2795; Add &amp; Analyze';
     return;
   }
 
@@ -248,7 +251,12 @@ async function smartAddRepo() {
   loadRepos();
 
   // Step 2: Analyze via SSE stream
-  streamAnalyze(repo, status, function() { btn.disabled = false; loadRepos(); loadDeploymentPlans(); });
+  streamAnalyze(repo, status, function(success) {
+    btn.disabled = false;
+    btn.innerHTML = '&#x2795; Add &amp; Analyze';
+    loadRepos();
+    loadDeploymentPlans();
+  });
 }
 
 document.getElementById('addRepoInput').addEventListener('keydown', function(e) {
@@ -469,7 +477,7 @@ async function loadDeploymentPlans() {
       try { plan = await fetchJSON('/api/admin/deployment-plan/' + r.name); } catch(e) {}
       if (plan && plan.options && plan.options.length) {
         html += '<span class="deploy-badge ' + (plan.status || 'analyzed') + '">' + escapeHtml(plan.status || 'analyzed') + '</span> ';
-        html += '<button class="btn" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')" style="font-size:11px">Re-analyze</button>';
+        html += '<button class="btn" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\', this)" style="font-size:11px">Re-analyze</button>';
         html += '</div></div>';
         html += '<div class="deploy-options">';
         plan.options.forEach(function(opt) {
@@ -491,7 +499,7 @@ async function loadDeploymentPlans() {
         });
         html += '</div>';
       } else {
-        html += '<button class="btn btn-primary" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\')" style="font-size:11px">&#x1F50D; Analyze Deployment</button>';
+        html += '<button class="btn btn-primary" onclick="analyzeDeployment(\'' + escapeHtml(r.name) + '\', this)" style="font-size:11px">&#x1F50D; Analyze Deployment</button>';
         html += '</div></div>';
       }
       html += '</div>';
@@ -502,31 +510,67 @@ async function loadDeploymentPlans() {
   }
 }
 
+function showToast(message, type) {
+  type = type || 'info';
+  var container = document.getElementById('toastContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+  var toast = document.createElement('div');
+  toast.className = 'toast toast-' + type;
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(function() { toast.classList.add('toast-visible'); });
+  setTimeout(function() {
+    toast.classList.remove('toast-visible');
+    toast.classList.add('toast-hiding');
+    setTimeout(function() { toast.remove(); }, 300);
+  }, 4000);
+}
+
 function streamAnalyze(repo, statusEl, onDone) {
+  statusEl.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> Reading repository files...';
   var source = new EventSource('/api/admin/analyze-stream?repo=' + encodeURIComponent(repo));
   source.addEventListener('progress', function(e) {
     var d = JSON.parse(e.data);
-    statusEl.innerHTML = d.message;
+    statusEl.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> ' + escapeHtml(d.message);
   });
   source.addEventListener('done', function(e) {
     var d = JSON.parse(e.data);
     statusEl.innerHTML = '&#x2705; ' + escapeHtml(d.message);
+    showToast('Analysis complete for ' + repo, 'success');
     source.close();
-    if (onDone) onDone();
+    if (onDone) onDone(true);
   });
   source.addEventListener('error', function(e) {
     try { var d = JSON.parse(e.data); statusEl.innerHTML = '&#x26A0;&#xFE0F; ' + escapeHtml(d.message); }
     catch(x) { statusEl.innerHTML = '&#x26A0;&#xFE0F; Analysis failed — you can retry.'; }
+    showToast('Analysis failed for ' + repo, 'error');
     source.close();
-    if (onDone) onDone();
+    if (onDone) onDone(false);
   });
 }
 
-async function analyzeDeployment(repo) {
+async function analyzeDeployment(repo, btn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> Analyzing...';
+  }
   var container = document.getElementById('deployPlansContainer');
-  container.innerHTML = '<div class="empty" style="padding:20px" id="analyzeStatus">&#x23F3; Starting analysis...</div>';
-  var statusEl = document.getElementById('analyzeStatus');
-  streamAnalyze(repo, statusEl, function() { loadDeploymentPlans(); loadRepos(); });
+  // Append a status line rather than replacing everything
+  var statusDiv = document.createElement('div');
+  statusDiv.className = 'empty';
+  statusDiv.style.padding = '12px';
+  statusDiv.id = 'analyzeStatus-' + repo.replace(/[^a-zA-Z0-9]/g, '_');
+  container.insertBefore(statusDiv, container.firstChild);
+  streamAnalyze(repo, statusDiv, function() {
+    if (btn) { btn.disabled = false; }
+    loadDeploymentPlans();
+    loadRepos();
+  });
 }
 
 // --- Sandboxes ---
