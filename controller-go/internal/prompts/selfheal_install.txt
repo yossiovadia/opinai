@@ -11,9 +11,12 @@ PYTHONUSERBASE=/tmp/pip-user, HOME=/tmp/home.
 
 Strategies to try:
 1. Add --user --break-system-packages flags to pip
-2. Use --no-deps to skip heavy dependencies (torch, tensorflow, cuda, vllm, triton, xformers), then install only the lightweight deps needed for the server
-3. If the error is OOM or timeout, the package may be too large — use --no-deps approach
-4. If a dependency needs compilation, check if a pre-built wheel exists
+2. Use --no-deps ONLY on the main package to skip heavy deps (torch, tensorflow, cuda, vllm, triton, xformers)
+3. Then install lightweight deps in a SEPARATE pip install WITHOUT --no-deps so their sub-dependencies are pulled in
+4. WRONG: pip install --no-deps pkg1 && pip install --no-deps fastapi click (fastapi needs starlette!)
+5. RIGHT: pip install --no-deps pkg1 && pip install fastapi click (fastapi pulls starlette automatically)
+6. If the error is OOM or timeout, the package may be too large — use --no-deps on that package only
+7. If a dependency needs compilation, check if a pre-built wheel exists
 
 Provide the exact fixed shell command that would work.
 Respond with ONLY the fixed shell command on a single line. No explanation.
