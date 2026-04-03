@@ -109,6 +109,9 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			}
 			return jobMgr.CreateVerifyFixJob(repo, details.Number, details.Title)
 		})
+		srv.SetClearRecordedCallback(func(repo string, issue int) {
+			jobMgr.ClearRecorded(repo, issue)
+		})
 		srv.SetRerunCallback(func(repo string, issue int) error {
 			// Clear recorded state so the new job can be harvested
 			jobMgr.ClearRecorded(repo, issue)

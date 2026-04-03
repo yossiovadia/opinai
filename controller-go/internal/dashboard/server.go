@@ -152,6 +152,9 @@ type VerifyFixFunc func(repo string, issue int) error
 // RerunFunc is the callback for re-running an issue (clears old state and creates a new job).
 type RerunFunc func(repo string, issue int) error
 
+// ClearRecordedFunc is a callback to clear the harvester's recorded map for an issue.
+type ClearRecordedFunc func(repo string, issue int)
+
 // SandboxManagerIface abstracts sandbox operations for the dashboard.
 type SandboxManagerIface interface {
 	ListSandboxes() []SandboxInfo
@@ -176,8 +179,9 @@ type Server struct {
 	hub       *Hub
 	reproduce ReproduceFunc
 	verifyFix VerifyFixFunc
-	rerun     RerunFunc
-	sandbox   SandboxManagerIface
+	rerun         RerunFunc
+	clearRecorded ClearRecordedFunc
+	sandbox       SandboxManagerIface
 }
 
 // New creates the dashboard server with all routes.
@@ -203,6 +207,11 @@ func (s *Server) SetVerifyFixCallback(fn VerifyFixFunc) {
 // SetRerunCallback sets the function called for /api/rerun.
 func (s *Server) SetRerunCallback(fn RerunFunc) {
 	s.rerun = fn
+}
+
+// SetClearRecordedCallback sets the function to clear harvester recorded state.
+func (s *Server) SetClearRecordedCallback(fn ClearRecordedFunc) {
+	s.clearRecorded = fn
 }
 
 // SetSandboxManager sets the sandbox manager for admin endpoints.
@@ -271,6 +280,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/chat-history", s.handleChatHistory)
 		r.Post("/chat-history/clear", s.handleClearChatHistory)
 		r.Post("/runs/{id}/post-comment", s.handlePostComment)
+		r.Delete("/runs/*", s.handleDeleteRuns)
 		r.Post("/rerun/*", s.handleRerun)
 		r.Post("/rerun-all/*", s.handleRerunAll)
 		r.Get("/report/{id}", s.handleReport)

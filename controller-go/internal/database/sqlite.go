@@ -296,6 +296,15 @@ func MarkProcessed(repo string, issue int, jobName string) error {
 	return err
 }
 
+// DeleteIssueRuns removes all runs and processed_issues entries for a repo+issue.
+func DeleteIssueRuns(repo string, issue int) error {
+	mu.Lock()
+	defer mu.Unlock()
+	db.Exec("DELETE FROM runs WHERE repo = ? AND issue = ?", repo, issue)
+	db.Exec("DELETE FROM processed_issues WHERE repo = ? AND issue = ?", repo, issue)
+	return nil
+}
+
 // --- Deployment Plans ---
 
 type DeploymentPlan struct {

@@ -452,6 +452,9 @@ function renderIssues() {
     } else if (isActive) {
       actions += '<button class="btn" disabled><span class="spin">&#x1F504;</span></button>';
     }
+    if (!isActive && r.repo && r.issue) {
+      actions += ' <button class="btn" onclick="event.stopPropagation(); deleteIssue(\'' + escapeHtml(r.repo) + '\', ' + r.issue + ')" title="Delete" style="color:var(--text-dim)">&#x1F5D1;&#xFE0F;</button>';
+    }
 
     // Build expanded content: live logs for active rows, report for completed
     var expandInner;
@@ -709,6 +712,26 @@ async function rerun(repo, issue, btn) {
     showToast('Failed to trigger re-run', 'error');
     delete pendingReRuns[key];
     if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F504;'; }
+  }
+}
+
+async function deleteIssue(repo, issue) {
+  if (!confirm('Delete issue #' + issue + ' results? This removes all runs and allows re-testing.')) return;
+  try {
+    var resp = await fetch(API + '/api/runs/' + repo + '/' + issue, { method: 'DELETE' });
+    if (!resp.ok) {
+      var data = await resp.json();
+      showToast('Delete failed: ' + (data.message || resp.status), 'error');
+      return;
+    }
+    showToast('Deleted results for ' + repo + '#' + issue, 'info');
+    // Remove from local state immediately
+    allRuns = allRuns.filter(function(r) { return !(r.repo === repo && r.issue == issue); });
+    delete pendingReRuns[repo + '#' + issue];
+    renderIssues();
+    loadStatus();
+  } catch(e) {
+    showToast('Failed to delete', 'error');
   }
 }
 

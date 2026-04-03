@@ -209,6 +209,40 @@ func (s *Server) handlePostComment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- DELETE /api/runs/{owner}/{repo}/{issue} ---
+
+func (s *Server) handleDeleteRuns(w http.ResponseWriter, r *http.Request) {
+	wildcard := chi.URLParam(r, "*")
+	if wildcard == "" {
+		wildcard = strings.TrimPrefix(r.URL.Path, "/api/runs/")
+	}
+	wildcard = strings.TrimPrefix(wildcard, "/")
+
+	parts := strings.Split(wildcard, "/")
+	if len(parts) < 2 {
+		jsonError(w, "invalid path: expected owner/repo/issue", 400)
+		return
+	}
+	issueStr := parts[len(parts)-1]
+	repo := strings.Join(parts[:len(parts)-1], "/")
+	issue, err := strconv.Atoi(issueStr)
+	if err != nil || issue == 0 {
+		jsonError(w, "invalid issue number: "+issueStr, 400)
+		return
+	}
+
+	database.DeleteIssueRuns(repo, issue)
+	if s.clearRecorded != nil {
+		s.clearRecorded(repo, issue)
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "deleted",
+		"repo":   repo,
+		"issue":  issue,
+	})
+}
+
 // --- /api/rerun/{repo}/{issue} ---
 
 func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
