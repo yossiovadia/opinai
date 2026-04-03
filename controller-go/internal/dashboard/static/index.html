@@ -406,6 +406,12 @@ function renderIssues() {
     if (row.style.display !== 'none') expandedRows.add(row.id);
   });
 
+  // Close active log streams — DOM elements are about to be replaced
+  for (var sid in _logStreams) {
+    _logStreams[sid].close();
+  }
+  _logStreams = {};
+
   var items = mergeIssues();
   if (activeRepoFilter) items = items.filter(function(r) { return r.repo === activeRepoFilter; });
   var container = document.getElementById('issuesContainer');
@@ -552,10 +558,16 @@ function startLogStream(rowId, logsEl) {
       if (allRuns[i].issue == issue) { realRepo = allRuns[i].repo; break; }
     }
   }
-  if (!realRepo) return;
+  if (!realRepo) {
+    console.warn('[SSE] startLogStream: could not resolve repo for rowId=' + rowId);
+    return;
+  }
 
-  var source = new EventSource(API + '/api/job-logs?repo=' + encodeURIComponent(realRepo) + '&issue=' + issue);
+  var sseUrl = API + '/api/job-logs?repo=' + encodeURIComponent(realRepo) + '&issue=' + issue;
+  console.log('[SSE] connecting:', sseUrl, 'rowId=' + rowId);
+  var source = new EventSource(sseUrl);
   _logStreams[rowId] = source;
+  var _retryCount = 0;
 
   source.addEventListener('log', function(e) {
     var d = JSON.parse(e.data);
@@ -565,17 +577,42 @@ function startLogStream(rowId, logsEl) {
   source.addEventListener('progress', function(e) {
     var d = JSON.parse(e.data);
     logsEl.textContent += '[' + d.message + ']\n';
+    logsEl.scrollTop = logsEl.scrollHeight;
   });
   source.addEventListener('done', function(e) {
+    console.log('[SSE] done:', rowId);
     source.close();
     delete _logStreams[rowId];
     logsEl.textContent += '\n[Stream ended — refreshing results...]\n';
     setTimeout(loadIssues, 2000);
   });
-  source.addEventListener('error', function() {
-    source.close();
-    delete _logStreams[rowId];
-  });
+  source.onopen = function() {
+    console.log('[SSE] connected:', rowId);
+    _retryCount = 0;
+  };
+  source.onerror = function(e) {
+    console.warn('[SSE] error on', rowId, 'readyState=' + source.readyState);
+    // readyState 0 = CONNECTING (browser will auto-retry), 2 = CLOSED
+    if (source.readyState === EventSource.CLOSED) {
+      delete _logStreams[rowId];
+      _retryCount++;
+      if (_retryCount < 10) {
+        // Server may have closed due to no pod yet — retry after delay
+        console.log('[SSE] retrying in 3s (attempt ' + _retryCount + ')');
+        setTimeout(function() {
+          // Only retry if the DOM element still exists (row not collapsed/gone)
+          var el = document.getElementById('logs-' + rowId);
+          if (el && !_logStreams[rowId]) {
+            startLogStream(rowId, el);
+          }
+        }, 3000);
+      } else {
+        console.warn('[SSE] giving up after 10 retries:', rowId);
+        logsEl.textContent += '\n[Log stream unavailable — will show results when complete]\n';
+      }
+    }
+    // If CONNECTING, browser auto-retries — do nothing
+  };
 }
 
 // --- Actions ---

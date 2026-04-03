@@ -337,9 +337,10 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Wait for pod to exist (up to 60s)
+	// Wait for pod to be ready for log streaming (up to 60s)
 	ctx := r.Context()
 	var podName string
+	podReady := false
 	for i := 0; i < 30; i++ {
 		pods, err := k8sClient.CoreV1().Pods(namespace).List(ctx, k8sMetav1.ListOptions{
 			LabelSelector: "job-name=" + jobName,
@@ -348,9 +349,15 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 			podName = pods.Items[0].Name
 			phase := string(pods.Items[0].Status.Phase)
 			if phase == "Running" || phase == "Succeeded" || phase == "Failed" {
+				podReady = true
+				writeSSE(w, "progress", map[string]string{"message": "Pod " + phase + " — streaming logs..."})
 				break
 			}
 			writeSSE(w, "progress", map[string]string{"message": "Pod " + phase + "..."})
+		} else {
+			writeSSE(w, "progress", map[string]string{
+				"message": fmt.Sprintf("Waiting for pod... (%ds)", (i+1)*2),
+			})
 		}
 		select {
 		case <-ctx.Done():
@@ -359,8 +366,12 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if podName == "" {
-		writeSSE(w, "error", map[string]string{"message": "No pod found for job " + jobName})
+	if podName == "" || !podReady {
+		msg := "No pod found for job " + jobName
+		if podName != "" {
+			msg = "Pod " + podName + " did not start within 60s"
+		}
+		writeSSE(w, "error", map[string]string{"message": msg})
 		return
 	}
 
