@@ -110,11 +110,19 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		return nil
 	}
 
-	// Check if job already exists
-	_, err := jm.client.BatchV1().Jobs(jm.namespace).Get(ctx, name, metav1.GetOptions{})
+	// Check if job already exists — only skip if it's still active
+	existing, err := jm.client.BatchV1().Jobs(jm.namespace).Get(ctx, name, metav1.GetOptions{})
 	if err == nil {
-		slog.Info("job already exists, skipping", "job", name)
-		return nil
+		if existing.Status.Active > 0 {
+			slog.Info("job already exists and is active, skipping", "job", name)
+			return nil
+		}
+		// Job exists but is finished — delete it to allow re-creation
+		slog.Info("deleting completed job to allow re-creation", "job", name)
+		bg := metav1.DeletePropagationBackground
+		jm.client.BatchV1().Jobs(jm.namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &bg})
+		// Brief wait for deletion to propagate
+		time.Sleep(2 * time.Second)
 	}
 
 	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
