@@ -855,7 +855,7 @@ func isK8sProject() bool {
 func deployFromPlan(issueTitle, issueBody, planJSON string) string {
 	var plan struct {
 		Options []struct {
-			ID          string `json:"id"`
+			ID          any    `json:"id"`
 			Name        string `json:"name"`
 			Description string `json:"description"`
 			BestFor     string `json:"best_for"`
