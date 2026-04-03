@@ -105,6 +105,13 @@ func migrate() error {
 	db.Exec("ALTER TABLE deployment_plans ADD COLUMN commit_sha TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE runs ADD COLUMN suggested_questions TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE runs ADD COLUMN repro_details TEXT DEFAULT ''")
+	db.Exec(`CREATE TABLE IF NOT EXISTS pending_reproductions (
+		repo TEXT NOT NULL,
+		issue INTEGER NOT NULL,
+		title TEXT DEFAULT '',
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (repo, issue)
+	)`)
 	return nil
 }
 
@@ -303,6 +310,45 @@ func DeleteIssueRuns(repo string, issue int) error {
 	db.Exec("DELETE FROM runs WHERE repo = ? AND issue = ?", repo, issue)
 	db.Exec("DELETE FROM processed_issues WHERE repo = ? AND issue = ?", repo, issue)
 	return nil
+}
+
+// --- Pending Reproductions ---
+
+type PendingItem struct {
+	Repo  string `json:"repo"`
+	Issue int    `json:"issue"`
+	Title string `json:"title"`
+}
+
+func AddPending(repo string, issue int, title string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec(
+		"INSERT OR IGNORE INTO pending_reproductions (repo, issue, title) VALUES (?, ?, ?)",
+		repo, issue, title,
+	)
+	return err
+}
+
+func RemovePending(repo string, issue int) {
+	mu.Lock()
+	defer mu.Unlock()
+	db.Exec("DELETE FROM pending_reproductions WHERE repo = ? AND issue = ?", repo, issue)
+}
+
+func GetPendingForRepo(repo string) []PendingItem {
+	rows, err := db.Query("SELECT repo, issue, title FROM pending_reproductions WHERE repo = ? ORDER BY created_at", repo)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var items []PendingItem
+	for rows.Next() {
+		var p PendingItem
+		rows.Scan(&p.Repo, &p.Issue, &p.Title)
+		items = append(items, p)
+	}
+	return items
 }
 
 // --- Deployment Plans ---

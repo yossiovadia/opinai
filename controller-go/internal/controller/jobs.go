@@ -434,6 +434,7 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		return
 	}
 	jm.recorded[name] = true
+	database.RemovePending(repo, issue)
 	jm.broadcast("job_completed", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
 
 	sbNS := annotations["opinai/sandbox-namespace"]

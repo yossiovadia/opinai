@@ -147,6 +147,7 @@ func (s *Server) handleReproduceStream(w http.ResponseWriter, r *http.Request) {
 		writeSSE(w, "error", map[string]string{"message": "Controller not ready"})
 		return
 	}
+	database.AddPending(repo, issue, "")
 	if err := s.reproduce(repo, issue); err != nil {
 		writeSSE(w, "error", map[string]string{"message": "Failed to create job: " + err.Error()})
 		return

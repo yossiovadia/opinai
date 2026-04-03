@@ -114,6 +114,7 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Controller not ready", 503)
 		return
 	}
+	database.AddPending(req.Repo, req.IssueNumber, "")
 	if err := s.reproduce(req.Repo, req.IssueNumber); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -267,6 +268,7 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	database.AddPending(repo, issue, "")
 	if s.rerun != nil {
 		if err := s.rerun(repo, issue); err != nil {
 			jsonError(w, "rerun failed: "+err.Error(), 500)
@@ -334,6 +336,9 @@ func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
 			database.SetRepoMemory(req.Repo, k, v)
 		}
 	}
+
+	// Remove from pending queue
+	database.RemovePending(req.Repo, req.Issue)
 
 	// Mark as recorded so the log-scraping harvester skips this job
 	if s.markRecorded != nil {

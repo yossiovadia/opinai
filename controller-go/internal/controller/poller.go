@@ -194,22 +194,36 @@ func markBacklogProcessed(repo string) {
 // the next poll cycle.
 func (p *Poller) RetryPendingForRepo(repo string) {
 	slog.Info("retry pending: checking repo", "repo", repo)
-	stats, _ := database.GetStats(repo)
+
+	// Check the pending_reproductions queue first (manually triggered issues)
+	pending := database.GetPendingForRepo(repo)
+	for _, item := range pending {
+		processed, _ := database.IsProcessed(repo, item.Issue)
+		if !processed {
+			slog.Info("retry pending: creating job for queued issue", "repo", repo, "issue", item.Issue)
+			if err := p.jobs.CreateReproductionJob(repo, item.Issue, item.Title); err != nil {
+				slog.Error("retry pending: failed to create job", "repo", repo, "issue", item.Issue, "error", err)
+			}
+			return // one at a time per repo
+		}
+		// Already processed — clean up stale entry
+		database.RemovePending(repo, item.Issue)
+	}
+
+	// Also check polled issues from GitHub
 	since := ""
 	if mem, _ := database.GetRepoMemory(repo, strPtr("monitored_since")); len(mem) > 0 {
 		since = mem["monitored_since"]
 	}
-
 	issues, err := FetchOpenIssues(repo, since)
 	if err != nil {
 		slog.Warn("retry pending: failed to fetch issues", "repo", repo, "error", err)
 		return
 	}
-
 	for _, issue := range issues {
 		processed, _ := database.IsProcessed(repo, issue.Number)
 		if !processed {
-			slog.Info("retry pending: creating job for queued issue", "repo", repo, "issue", issue.Number)
+			slog.Info("retry pending: creating job for polled issue", "repo", repo, "issue", issue.Number)
 			if err := p.jobs.CreateReproductionJob(repo, issue.Number, issue.Title); err != nil {
 				slog.Error("retry pending: failed to create job", "repo", repo, "issue", issue.Number, "error", err)
 			}
@@ -217,7 +231,8 @@ func (p *Poller) RetryPendingForRepo(repo string) {
 		}
 	}
 
-	// Update state
+	// Nothing pending — update state
+	stats, _ := database.GetStats(repo)
 	p.state.UpdateRepo(repo, dashboard.RepoStatus{
 		Pending:   0,
 		Processed: stats.Processed,
