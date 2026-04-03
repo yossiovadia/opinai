@@ -721,6 +721,20 @@ func analyzeReadme(cloneDir string) map[string]string {
 		}
 		return result
 	}
+
+	// Try to extract JSON object from response text (AI may wrap it in explanation)
+	if start := strings.Index(content, "{"); start >= 0 {
+		if end := strings.LastIndex(content, "}"); end > start {
+			candidate := content[start : end+1]
+			if json.Unmarshal([]byte(candidate), &result) == nil {
+				emitRepoMemory(result)
+				slog.Info("emitted README knowledge (extracted from text)", "keys", len(result))
+				return result
+			}
+		}
+	}
+
+	slog.Warn("could not parse AI analysis as JSON, storing raw description only")
 	emitRepoMemory(map[string]string{"description": truncStr(content, 500)})
 	return nil
 }

@@ -552,44 +552,51 @@ func autoUpdateProfileFromPlan(repo string, planData map[string]any) {
 	}
 	updateRepoEnv(repo, newProfile, false)
 
-	// Store key analysis fields in repo_memory so AI Knowledge is populated
-	memFields := map[string]string{
-		"description":       "",
-		"tech_stack":         projectType,
-		"deployment_type":    "",
-		"install_command":    "",
-		"install_notes":      "",
-		"needs_cluster":      "",
-		"test_strategy":      "",
+	// Store all analysis fields in repo_memory for AI context during reproduction
+	memFields := map[string]string{}
+
+	// Direct string fields from AI response
+	directFields := map[string]string{
+		"description":        "description",
+		"detected_deployment_method": "deployment_type",
+		"install_command":    "install_command",
+		"install_notes":      "install_notes",
+		"how_to_test":        "how_to_test",
+		"build_command":      "build_command",
+		"run_command":         "run_command",
+		"health_endpoint":    "health_endpoint",
 	}
-	if v, _ := planData["description"].(string); v != "" {
-		memFields["description"] = v
+	for aiKey, memKey := range directFields {
+		if v, _ := planData[aiKey].(string); v != "" && v != "none" {
+			memFields[memKey] = v
+		}
 	}
-	if v, _ := planData["detected_deployment_method"].(string); v != "" {
-		memFields["deployment_type"] = v
-	}
-	if v, _ := planData["install_command"].(string); v != "" {
-		memFields["install_command"] = v
-	}
-	if v, _ := planData["install_notes"].(string); v != "" {
-		memFields["install_notes"] = v
+
+	// Derived fields
+	if projectType != "" {
+		memFields["tech_stack"] = projectType
 	}
 	if depsStr != "" {
 		memFields["tech_stack"] = depsStr
 	}
 	if needsK8s {
 		memFields["needs_cluster"] = "true"
-		memFields["test_strategy"] = "code-review"
+		if memFields["test_strategy"] == "" {
+			memFields["test_strategy"] = "code-review"
+		}
 	} else {
 		memFields["needs_cluster"] = "false"
-		memFields["test_strategy"] = "deploy-and-curl"
+		if memFields["test_strategy"] == "" {
+			memFields["test_strategy"] = "deploy-and-curl"
+		}
 	}
+
 	for k, v := range memFields {
 		if v != "" {
 			database.SetRepoMemory(repo, k, v)
 		}
 	}
-	slog.Info("stored AI knowledge from deployment analysis", "repo", repo)
+	slog.Info("stored AI knowledge from deployment analysis", "repo", repo, "fields", len(memFields))
 }
 
 func ghGetDashboard(path string) ([]byte, int, error) {

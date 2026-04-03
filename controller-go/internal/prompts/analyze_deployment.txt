@@ -17,9 +17,16 @@ Cluster state:
 Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with an "options" array. Each option: id, name, description, estimated_time, best_for, steps (array of {type, content, required, description}), requirements, risks, recommended (bool).
 
 Also include at the top level:
-- project_type, detected_deployment_method, dependencies
+- project_type: e.g. "api-server", "operator", "cli", "library"
+- description: 1-2 sentence summary of what this project does
+- detected_deployment_method: e.g. "pip", "docker", "helm", "kustomize"
+- dependencies: array of dependency names
 - resource_requirements: {"cpu": "200m", "memory": "512Mi"} — resources needed by the runner pod
-- install_notes: any special considerations
+- install_notes: any special considerations for install
+- how_to_test: 1-2 sentences on how to test bugs in this project (e.g. "Start the API server, send HTTP requests to the endpoints, check responses match expected behavior")
+- build_command: the command to build/install the project for testing (e.g. "pip install --user --break-system-packages -e .")
+- run_command: the command to start the server/service for testing (e.g. "python -m myapp --port 8000"), or "none" if not applicable
+- health_endpoint: the health check URL if any (e.g. "http://localhost:8000/health"), or "" if unknown
 
 CRITICAL — install_command generation rules:
 Analyze the project's dependency files (pyproject.toml, setup.py, requirements.txt, go.mod, package.json) and determine the MINIMAL install needed for API testing.

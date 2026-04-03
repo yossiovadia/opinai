@@ -401,27 +401,43 @@ async function loadLogs() {
 }
 
 // --- AI Knowledge ---
-var _knowledgeLabels = {
-  description: 'Description',
-  tech_stack: 'Tech Stack',
-  deployment_type: 'Deployment Type',
-  install_command: 'Install Command',
-  working_install_command: 'Working Install Command',
-  install_notes: 'Install Notes',
-  test_strategy: 'Test Strategy',
-  needs_cluster: 'Needs Cluster',
-  how_to_test: 'How to Test',
-  run_command: 'Run Command',
-  working_run_command: 'Working Run Command',
+var _knowledgeSections = [
+  { id: 'overview', title: 'Overview', open: true, keys: [
+    { key: 'description', label: 'Description' },
+    { key: 'tech_stack', label: 'Tech Stack' }
+  ]},
+  { id: 'deploy', title: 'Deployment', open: false, keys: [
+    { key: 'deployment_type', label: 'Deployment Type' },
+    { key: 'needs_cluster', label: 'Needs Cluster' },
+    { key: 'install_notes', label: 'Install Notes' }
+  ]},
+  { id: 'commands', title: 'Commands', open: false, keys: [
+    { key: 'install_command', label: 'Install Command' },
+    { key: 'working_install_command', label: 'Working Install Command' },
+    { key: 'build_command', label: 'Build Command' },
+    { key: 'run_command', label: 'Run Command' },
+    { key: 'working_run_command', label: 'Working Run Command' },
+    { key: 'health_endpoint', label: 'Health Endpoint' }
+  ]},
+  { id: 'testing', title: 'Testing', open: false, keys: [
+    { key: 'how_to_test', label: 'How to Test' },
+    { key: 'test_strategy', label: 'Test Strategy' }
+  ]}
+];
+var _allKnownKeys = {};
+_knowledgeSections.forEach(function(s) { s.keys.forEach(function(k) { _allKnownKeys[k.key] = k.label; }); });
+// Extra known keys not in sections
+var _extraLabels = {
   last_analyzed_issue: 'Last Analyzed Issue',
   last_verdict: 'Last Verdict',
   last_confidence: 'Last Confidence'
 };
+for (var ek in _extraLabels) _allKnownKeys[ek] = _extraLabels[ek];
 
 function formatMemoryValue(key, value) {
-  if (!value) return '<span style="color:var(--text-dim)">—</span>';
-  if (key.indexOf('command') >= 0) {
-    return '<code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:11px">' + escapeHtml(value) + '</code>';
+  if (!value) return '<span style="color:var(--text-dim)">\u2014</span>';
+  if (key.indexOf('command') >= 0 || key === 'health_endpoint') {
+    return '<code style="background:var(--bg);padding:2px 6px;border-radius:4px;font-size:11px;display:inline-block;max-width:100%;word-break:break-all">' + escapeHtml(value) + '</code>';
   }
   if (key === 'needs_cluster') {
     return value === 'true'
@@ -429,6 +445,24 @@ function formatMemoryValue(key, value) {
       : '<span style="color:var(--green)">No</span>';
   }
   return escapeHtml(value);
+}
+
+function renderKnowledgeSection(section, entries) {
+  var rows = '';
+  var count = 0;
+  section.keys.forEach(function(k) {
+    var e = entries[k.key];
+    if (!e) return;
+    count++;
+    rows += '<div style="color:var(--blue);font-weight:500;padding:4px 0">' + escapeHtml(k.label) + '</div>';
+    rows += '<div style="padding:4px 0;word-break:break-word">' + formatMemoryValue(k.key, e.value) + '</div>';
+  });
+  if (!count) return '';
+  return '<details style="margin-top:8px"' + (section.open ? ' open' : '') + '>' +
+    '<summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text);padding:4px 0">' +
+    escapeHtml(section.title) + ' <span style="color:var(--text-dim);font-weight:400">(' + count + ')</span></summary>' +
+    '<div style="display:grid;grid-template-columns:160px 1fr;gap:4px 12px;margin-top:6px;font-size:12px">' +
+    rows + '</div></details>';
 }
 
 async function loadMemory() {
@@ -443,23 +477,36 @@ async function loadMemory() {
     var html = '';
     repos.forEach(function(repo) {
       var entries = data[repo];
-      var keys = Object.keys(entries);
-      // Sort: known keys first in logical order, then the rest
-      var ordered = Object.keys(_knowledgeLabels).filter(function(k) { return entries[k]; });
-      var extra = keys.filter(function(k) { return !_knowledgeLabels[k]; }).sort();
-      var allKeys = ordered.concat(extra);
-
       html += '<div class="repo-card" style="margin-bottom:12px">';
       html += '<div class="repo-card-header"><span class="repo-card-name">&#x1F4E6; ' + escapeHtml(repo) + '</span>';
-      html += '<span style="font-size:11px;color:var(--text-dim)">' + allKeys.length + ' fields</span></div>';
-      html += '<div style="display:grid;grid-template-columns:160px 1fr;gap:4px 12px;margin-top:8px;font-size:12px">';
-      allKeys.forEach(function(key) {
-        var e = entries[key];
-        var label = _knowledgeLabels[key] || key;
-        html += '<div style="color:var(--blue);font-weight:500;padding:4px 0">' + escapeHtml(label) + '</div>';
-        html += '<div style="padding:4px 0;word-break:break-word">' + formatMemoryValue(key, e.value) + '</div>';
+      html += '<span style="font-size:11px;color:var(--text-dim)">' + Object.keys(entries).length + ' fields</span></div>';
+
+      // Render grouped sections
+      _knowledgeSections.forEach(function(section) {
+        html += renderKnowledgeSection(section, entries);
       });
-      html += '</div></div>';
+
+      // Render any extra keys not in sections
+      var extraKeys = Object.keys(entries).filter(function(k) {
+        return !_allKnownKeys[k];
+      }).sort();
+      // Also show known-but-unsectioned keys (last_verdict etc)
+      for (var ek in _extraLabels) {
+        if (entries[ek]) extraKeys.unshift(ek);
+      }
+      if (extraKeys.length) {
+        html += '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--text);padding:4px 0">Other <span style="color:var(--text-dim);font-weight:400">(' + extraKeys.length + ')</span></summary>';
+        html += '<div style="display:grid;grid-template-columns:160px 1fr;gap:4px 12px;margin-top:6px;font-size:12px">';
+        extraKeys.forEach(function(key) {
+          var e = entries[key];
+          var label = _allKnownKeys[key] || key;
+          html += '<div style="color:var(--blue);font-weight:500;padding:4px 0">' + escapeHtml(label) + '</div>';
+          html += '<div style="padding:4px 0;word-break:break-word">' + formatMemoryValue(key, e.value) + '</div>';
+        });
+        html += '</div></details>';
+      }
+
+      html += '</div>';
     });
     container.innerHTML = html;
   } catch(e) {
