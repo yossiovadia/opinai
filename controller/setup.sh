@@ -256,7 +256,7 @@ sed "s/namespace: opinai/namespace: $NAMESPACE/g" "$SCRIPT_DIR/manifests/pvc.yam
 echo "  ✅ Persistent storage ready"
 
 # Deploy controller
-sed "s/namespace: opinai/namespace: $NAMESPACE/g" "$SCRIPT_DIR/manifests/deployment.yaml" | oc apply -f - >/dev/null 2>&1
+sed -e "s/namespace: opinai/namespace: $NAMESPACE/g" -e "s|svc:5000/opinai/|svc:5000/$NAMESPACE/|g" "$SCRIPT_DIR/manifests/deployment.yaml" | oc apply -f - >/dev/null 2>&1
 echo "  ✅ Controller deployed"
 
 # Apply Service + Route for dashboard
