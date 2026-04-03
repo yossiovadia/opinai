@@ -151,6 +151,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		{Name: "OPINAI_SANDBOX_ENDPOINTS", Value: sandboxEndpointsJSON},
 		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
+		{Name: "OPINAI_CONTROLLER_URL", Value: fmt.Sprintf("http://opinai-controller.%s.svc:8080", jm.namespace)},
 	}
 	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)
 	env = append(env, secretEnvVar("AI_PROJECT", "opinai-credentials", "AI_PROJECT")...)
@@ -617,7 +618,13 @@ func (jm *JobManager) DeleteJob(name string) error {
 }
 
 // CleanupOrphanedJobs deletes jobs whose repo is no longer monitored.
+// If the monitored list is empty, no cleanup is performed — an empty list
+// means repos haven't loaded yet, not that all repos were removed.
 func (jm *JobManager) CleanupOrphanedJobs(monitoredRepos []string) {
+	if len(monitoredRepos) == 0 {
+		slog.Debug("skipping orphan cleanup — monitored repos list is empty")
+		return
+	}
 	ctx := context.Background()
 	jobs, err := jm.client.BatchV1().Jobs(jm.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=opinai-runner",

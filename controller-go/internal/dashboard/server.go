@@ -265,6 +265,7 @@ func (s *Server) buildRouter() chi.Router {
 	r.Post("/api/chat-stream", s.handleChatStream)
 	r.Get("/api/check-now-stream", s.handleCheckNowStream)
 	r.Get("/api/job-logs", s.handleJobLogs)
+	r.Post("/api/internal/result", s.handleInternalResult)
 	r.Post("/api/webhook/github", s.handleGitHubWebhook)
 
 	// Core API

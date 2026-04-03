@@ -288,6 +288,67 @@ func decodeJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
+// --- POST /api/internal/result ---
+// Called by the runner pod to report reproduction results directly.
+
+func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo               string            `json:"repo"`
+		Issue              int               `json:"issue"`
+		Title              string            `json:"title"`
+		Category           string            `json:"category"`
+		Verdict            string            `json:"verdict"`
+		Confidence         string            `json:"confidence"`
+		Duration           string            `json:"duration"`
+		Report             string            `json:"report"`
+		SuggestedQuestions string            `json:"suggested_questions"`
+		ReproDetails       string            `json:"repro_details"`
+		RepoMemory         map[string]string `json:"repo_memory"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		jsonError(w, "invalid request: "+err.Error(), 400)
+		return
+	}
+	if req.Repo == "" || req.Issue == 0 {
+		jsonError(w, "repo and issue required", 400)
+		return
+	}
+
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	_, dbErr := database.AddRun(database.Run{
+		Repo: req.Repo, Issue: req.Issue, Title: req.Title,
+		Category: req.Category, Verdict: req.Verdict, Confidence: req.Confidence,
+		Duration: req.Duration, AIPowered: true, Posted: false,
+		Report: req.Report, SuggestedQuestions: req.SuggestedQuestions,
+		ReproDetails: req.ReproDetails, CreatedAt: ts,
+	})
+	if dbErr != nil {
+		slog.Error("internal result: failed to store run", "error", dbErr)
+		jsonError(w, "failed to store run: "+dbErr.Error(), 500)
+		return
+	}
+
+	// Store repo memory
+	for k, v := range req.RepoMemory {
+		if v != "" {
+			database.SetRepoMemory(req.Repo, k, v)
+		}
+	}
+
+	// Clear recorded map so the log-scraping harvester doesn't duplicate
+	if s.clearRecorded != nil {
+		s.clearRecorded(req.Repo, req.Issue)
+	}
+
+	s.hub.Broadcast(WSEvent{
+		Type: "job_completed",
+		Data: map[string]any{"repo": req.Repo, "issue": req.Issue, "verdict": req.Verdict},
+	})
+
+	slog.Info("received runner result via callback", "repo", req.Repo, "issue", req.Issue, "verdict", req.Verdict)
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+}
+
 func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

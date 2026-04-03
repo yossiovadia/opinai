@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 var setupRetryInfo string
 var pendingInstallCmd string // saved only after server health confirmed
 var selectedDeployOption string // set by deployFromPlan for repro_details
+var collectedRepoMemory = map[string]string{} // accumulated for postResult
 
 // Run executes the full reproduction flow. Called when --mode=runner.
 func Run() {
@@ -163,6 +165,12 @@ func Run() {
 			"last_analyzed_issue": issueNumber,
 			"last_verdict":       verdictEnum,
 		})
+		postResult(map[string]any{
+			"repo": repo, "issue": atoi(issueNumber), "title": title,
+			"category": category, "verdict": verdictEnum, "confidence": "HIGH",
+			"report": comment, "repro_details": string(reproJSON),
+			"repo_memory": collectedRepoMemory,
+		})
 		slog.Info("skipped reproduction", "verdict", verdictEnum)
 		return
 	}
@@ -232,6 +240,12 @@ func Run() {
 		)
 		postComment(repo, atoi(issueNumber), comment)
 		addLabel(repo, atoi(issueNumber))
+		postResult(map[string]any{
+			"repo": repo, "issue": atoi(issueNumber), "title": title,
+			"category": category, "verdict": "ERROR", "confidence": "LOW",
+			"report": comment, "repro_details": string(reproJSON),
+			"repo_memory": collectedRepoMemory,
+		})
 		return
 	}
 	slog.Info("test script generated", "bytes", len(script))
@@ -308,6 +322,13 @@ func Run() {
 		"last_analyzed_issue": issueNumber,
 		"last_verdict":       vr.Verdict,
 		"last_confidence":    vr.Confidence,
+	})
+	postResult(map[string]any{
+		"repo": repo, "issue": atoi(issueNumber), "title": title,
+		"category": category, "verdict": vr.Verdict, "confidence": vr.Confidence,
+		"duration": "", "report": comment,
+		"suggested_questions": suggestedQs, "repro_details": string(reproJSON),
+		"repo_memory": collectedRepoMemory,
 	})
 	slog.Info("reproduction complete", "repo", repo, "issue", issueNumber)
 }
@@ -571,6 +592,34 @@ func emitRepoMemory(data map[string]string) {
 	fmt.Println("--- OPINAI REPO MEMORY ---")
 	fmt.Println(string(b))
 	fmt.Println("--- END REPO MEMORY ---")
+	// Also collect for direct callback
+	for k, v := range data {
+		if v != "" {
+			collectedRepoMemory[k] = v
+		}
+	}
+}
+
+// postResult sends the reproduction result directly to the controller API.
+// Falls back silently if the controller URL is not set or the POST fails —
+// the log-scraping harvester will pick up the result as a fallback.
+func postResult(result map[string]any) {
+	controllerURL := os.Getenv("OPINAI_CONTROLLER_URL")
+	if controllerURL == "" {
+		return
+	}
+	b, _ := json.Marshal(result)
+	resp, err := http.Post(controllerURL+"/api/internal/result", "application/json", strings.NewReader(string(b)))
+	if err != nil {
+		slog.Warn("failed to POST result to controller", "error", err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		slog.Info("result posted to controller successfully")
+	} else {
+		slog.Warn("controller returned non-200 for result", "status", resp.StatusCode)
+	}
 }
 
 func loadProfile() map[string]any {
