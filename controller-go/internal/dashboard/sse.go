@@ -22,6 +22,7 @@ import (
 
 	"github.com/yossiovadia/opinai/controller-go/internal/agent"
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
+	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
 
@@ -127,7 +128,7 @@ waitLoop:
 	files := fetchRepoDeployFiles(repo)
 	readme := fetchRepoReadme(repo)
 	clusterState := readClusterState()
-	profile := loadProfile(repo)
+	profile := config.LoadRepoProfile(repo)
 	profileJSON, _ := json.Marshal(profile)
 
 	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON))
@@ -168,7 +169,7 @@ func (s *Server) handleAnalyzeStreamFallback(w http.ResponseWriter, r *http.Requ
 		"stage": "calling_ai", "message": "AI analyzing deployment options...",
 	})
 
-	profile := loadProfile(repo)
+	profile := config.LoadRepoProfile(repo)
 	profileJSON, _ := json.Marshal(profile)
 
 	type aiResult struct {
@@ -270,6 +271,10 @@ func (s *Server) handleReproduceStream(w http.ResponseWriter, r *http.Request) {
 		writeSSE(w, "error", map[string]string{"message": "Controller not ready"})
 		return
 	}
+
+	// Record timestamp before job creation so we only match runs created after this point.
+	jobCreatedAfter := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+
 	database.AddPending(repo, issue, "")
 	if err := s.reproduce(repo, issue); err != nil {
 		writeSSE(w, "error", map[string]string{"message": "Failed to create job: " + err.Error()})
@@ -280,9 +285,6 @@ func (s *Server) handleReproduceStream(w http.ResponseWriter, r *http.Request) {
 		"stage": "job_created", "message": "Job created. Waiting for pod to start...",
 	})
 
-	// Poll job status via K8s — use the same approach: fetch /api/jobs periodically
-	// Since we're inside the dashboard process, we can call the handler's data source.
-	// For simplicity, poll our own /api/jobs endpoint or directly check DB.
 	prevLogLen := 0
 	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
 	jobName := fmt.Sprintf("opinai-%s-%d", repoSafe, issue)
@@ -290,10 +292,10 @@ func (s *Server) handleReproduceStream(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < 120; i++ { // 10 minutes
 		time.Sleep(5 * time.Second)
 
-		// Check if run appeared in DB (means job completed and was harvested)
-		runs, _ := database.GetRuns(repo, 5)
+		// Check if a NEW run appeared in DB (created after we started the job)
+		runs, _ := database.GetRunsByIssue(repo, issue)
 		for _, run := range runs {
-			if run.Issue == issue {
+			if run.CreatedAt >= jobCreatedAfter {
 				writeSSE(w, "done", map[string]string{
 					"message": fmt.Sprintf("Reproduction complete for %s#%d — %s", repo, issue, run.Verdict),
 				})

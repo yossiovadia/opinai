@@ -15,6 +15,7 @@ import (
 
 	"github.com/yossiovadia/opinai/controller-go/internal/agent"
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
+	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
 	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
@@ -162,7 +163,6 @@ func Run() {
 			issueNumber, category, verdictEnum, os.Getenv("AI_MODEL"), catLabels[category],
 		)
 		postComment(repo, atoi(issueNumber), comment)
-		addLabel(repo, atoi(issueNumber))
 		emitRepoMemory(map[string]string{
 			"last_analyzed_issue": issueNumber,
 			"last_verdict":       verdictEnum,
@@ -228,7 +228,7 @@ func Run() {
 		profileCtx := loadProfileContext()
 
 		// Tell the AI it has server control for config-dependent bugs
-		profile2 := loadProfile()
+		profile2 := config.LoadRepoProfile(os.Getenv("REPO"))
 		runCommand := ""
 		if profile2 != nil {
 			runCommand, _ = profile2["run"].(string)
@@ -275,7 +275,6 @@ func Run() {
 				issueNumber, category,
 			)
 			postComment(repo, atoi(issueNumber), comment)
-			addLabel(repo, atoi(issueNumber))
 			postResult(map[string]any{
 				"repo": repo, "issue": atoi(issueNumber), "title": title,
 				"category": category, "verdict": "ERROR", "confidence": "LOW",
@@ -396,7 +395,6 @@ func Run() {
 	)
 
 	postComment(repo, atoi(issueNumber), comment)
-	addLabel(repo, atoi(issueNumber))
 	emitRepoMemory(map[string]string{
 		"last_analyzed_issue": issueNumber,
 		"last_verdict":       vr.Verdict,
@@ -438,7 +436,7 @@ func startServer() (*os.Process, string) {
 
 	// Resolve build + run commands from multiple sources (ascending priority)
 	// Sources: profile → env var → AI analysis (this run) → repo memory
-	profile := loadProfile()
+	profile := config.LoadRepoProfile(os.Getenv("REPO"))
 	buildCmd := ""
 	runCmd := ""
 	healthURL := ""
@@ -656,10 +654,6 @@ func postComment(repo string, issue int, body string) {
 	}
 }
 
-func addLabel(repo string, issue int) {
-	// No-op: tracking is done via database only, no GitHub labels
-}
-
 func emitRepoMemory(data map[string]string) {
 	b, _ := json.Marshal(data)
 	fmt.Println("--- OPINAI REPO MEMORY ---")
@@ -695,21 +689,8 @@ func postResult(result map[string]any) {
 	}
 }
 
-func loadProfile() map[string]any {
-	repo := os.Getenv("REPO")
-	r := strings.NewReplacer("/", "_", "-", "_", ".", "_")
-	key := "REPO_PROFILE_" + r.Replace(repo)
-	raw := os.Getenv(key)
-	if raw == "" {
-		return nil
-	}
-	var profile map[string]any
-	json.Unmarshal([]byte(raw), &profile)
-	return profile
-}
-
 func loadProfileContext() string {
-	profile := loadProfile()
+	profile := config.LoadRepoProfile(os.Getenv("REPO"))
 	if profile == nil {
 		return ""
 	}

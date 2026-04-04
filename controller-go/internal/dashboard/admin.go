@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
+	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
 
@@ -23,7 +24,7 @@ func (s *Server) handleAdminReposGet(w http.ResponseWriter, r *http.Request) {
 	repos := ParseRepos(os.Getenv("REPOS"))
 	result := make([]map[string]any, 0, len(repos))
 	for _, name := range repos {
-		profile := loadProfile(name)
+		profile := config.LoadRepoProfile(name)
 		result = append(result, map[string]any{
 			"name":    name,
 			"profile": profile,
@@ -309,7 +310,7 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 	// Read repo files from GitHub
 	files := fetchRepoDeployFiles(req.Repo)
 	readme := fetchRepoReadme(req.Repo)
-	profile := loadProfile(req.Repo)
+	profile := config.LoadRepoProfile(req.Repo)
 	profileJSON, _ := json.Marshal(profile)
 
 	// Read cluster state
@@ -374,19 +375,6 @@ func (s *Server) handleAdminSandboxCleanup(w http.ResponseWriter, r *http.Reques
 }
 
 // --- repo profile helpers ---
-
-func loadProfile(repo string) map[string]any {
-	key := profileKey(repo)
-	raw := os.Getenv(key)
-	if raw == "" {
-		return map[string]any{}
-	}
-	var profile map[string]any
-	if err := json.Unmarshal([]byte(raw), &profile); err != nil {
-		return map[string]any{}
-	}
-	return profile
-}
 
 func profileKey(repo string) string {
 	r := strings.NewReplacer("/", "_", "-", "_", ".", "_")
@@ -541,7 +529,7 @@ func autoUpdateProfileFromPlan(repo string, planData map[string]any) {
 		"type": projectType, "build": "", "run": "", "health": "",
 		"deps": depsStr, "k8s": needsK8s, "gpu": needsGPU,
 	}
-	existing := loadProfile(repo)
+	existing := config.LoadRepoProfile(repo)
 	for _, k := range []string{"build", "run", "health"} {
 		if v, ok := existing[k]; ok && v != "" {
 			newProfile[k] = v

@@ -1,10 +1,8 @@
 package controller
 
 import (
-	"encoding/json"
 	"log/slog"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/dashboard"
@@ -102,41 +100,6 @@ func (p *Poller) Start() {
 	}
 }
 
-func loadRepoProfile(repo string) map[string]any {
-	r := strings.NewReplacer("/", "_", "-", "_", ".", "_")
-	key := "REPO_PROFILE_" + r.Replace(repo)
-	raw := os.Getenv(key)
-	if raw == "" {
-		return nil
-	}
-	var profile map[string]any
-	if err := json.Unmarshal([]byte(raw), &profile); err != nil {
-		return nil
-	}
-	return profile
-}
-
-func getBool(m map[string]any, key string) bool {
-	v, ok := m[key]
-	if !ok {
-		return false
-	}
-	switch b := v.(type) {
-	case bool:
-		return b
-	case string:
-		return strings.EqualFold(b, "true")
-	default:
-		return false
-	}
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
 
 // ensureMonitoredSince returns the "monitored_since" timestamp for a repo.
 // If none exists, sets it to now (new repo) or earliest known activity (existing repo).

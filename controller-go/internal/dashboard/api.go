@@ -66,13 +66,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(runs)
 }
 
-// --- /api/jobs ---
-
-func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
-	// Stub: return empty array (K8s integration in Phase 3)
-	json.NewEncoder(w).Encode([]any{})
-}
-
 // --- /api/check-now ---
 
 func (s *Server) handleCheckNow(w http.ResponseWriter, r *http.Request) {

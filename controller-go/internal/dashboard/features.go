@@ -108,14 +108,7 @@ func (s *Server) handleRunHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	issue, _ := strconv.Atoi(issueStr)
 
-	// Get all runs for this repo+issue
-	allRuns, _ := database.GetRuns(repo, 100)
-	var history []database.Run
-	for _, run := range allRuns {
-		if run.Issue == issue {
-			history = append(history, run)
-		}
-	}
+	history, _ := database.GetRunsByIssue(repo, issue)
 	if history == nil {
 		history = []database.Run{}
 	}

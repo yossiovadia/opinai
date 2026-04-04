@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -249,6 +248,3 @@ func Sanitize(text string) string {
 	return text
 }
 
-func init() {
-	_ = slog.Default() // suppress unused import
-}

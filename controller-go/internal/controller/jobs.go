@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
@@ -464,7 +465,7 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		return "", "", ""
 	}
 
-	profile := loadRepoProfileForJob(repo)
+	profile := config.LoadRepoProfile(repo)
 	isK8s := false
 	if profile != nil {
 		if b, ok := profile["k8s"].(bool); ok {
@@ -627,17 +628,6 @@ func extractPlanResources(planJSON string) PlanResources {
 	return r
 }
 
-func loadRepoProfileForJob(repo string) map[string]any {
-	r := strings.NewReplacer("/", "_", "-", "_", ".", "_")
-	key := "REPO_PROFILE_" + r.Replace(repo)
-	raw := os.Getenv(key)
-	if raw == "" {
-		return nil
-	}
-	var profile map[string]any
-	json.Unmarshal([]byte(raw), &profile)
-	return profile
-}
 
 func truncateStr(s string, n int) string {
 	if len(s) <= n {

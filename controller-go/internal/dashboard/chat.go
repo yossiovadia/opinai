@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
+	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
@@ -49,7 +50,7 @@ func buildChatContext(ctx map[string]any) string {
 			system += "\n"
 		}
 
-		profile := loadProfile(repo)
+		profile := config.LoadRepoProfile(repo)
 		if len(profile) > 0 {
 			b, _ := json.Marshal(profile)
 			system += "Project profile: " + string(b) + "\n\n"

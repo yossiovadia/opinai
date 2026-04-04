@@ -166,6 +166,19 @@ func GetRuns(repo string, limit int) ([]Run, error) {
 	return scanRuns(rows)
 }
 
+// GetRunsByIssue returns all runs for a specific repo+issue, newest first.
+func GetRunsByIssue(repo string, issue int) ([]Run, error) {
+	rows, err := db.Query(
+		"SELECT id,repo,issue,title,category,verdict,confidence,report,posted,posted_at,ai_powered,duration,suggested_questions,repro_details,created_at FROM runs WHERE repo = ? AND issue = ? ORDER BY created_at DESC",
+		repo, issue,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRuns(rows)
+}
+
 func GetRun(id int64) (*Run, error) {
 	row := db.QueryRow("SELECT id,repo,issue,title,category,verdict,confidence,report,posted,posted_at,ai_powered,duration,suggested_questions,repro_details,created_at FROM runs WHERE id = ?", id)
 	return scanRun(row)
