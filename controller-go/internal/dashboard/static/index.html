@@ -281,7 +281,19 @@ async function loadRepos() {
 let allRawJobs = [];
 let expandedRows = new Set();
 
-async function loadIssues() {
+var _loadIssuesTimer = null;
+function loadIssues() {
+  // Debounce: coalesce rapid calls (e.g. multiple WS messages) into one render
+  if (_loadIssuesTimer) clearTimeout(_loadIssuesTimer);
+  _loadIssuesTimer = setTimeout(_doLoadIssues, 2000);
+}
+function loadIssuesImmediate() {
+  // Skip debounce for user-initiated actions
+  if (_loadIssuesTimer) clearTimeout(_loadIssuesTimer);
+  _doLoadIssues();
+}
+async function _doLoadIssues() {
+  _loadIssuesTimer = null;
   try {
     var results = await Promise.all([fetchJSON('/api/jobs'), fetchJSON('/api/runs')]);
     allRawJobs = results[0];
@@ -786,30 +798,25 @@ async function reproduceFromUrl() {
       return;
     }
   } catch(e) { /* proceed anyway, server will validate */ }
-  showToast('Reproducing ' + parsed.repo + '#' + parsed.issue + '...', 'info');
   input.value = '';
-  // Immediately show a running row with live logs
+  // Queue the issue and show it immediately
   var rKey = parsed.repo + '#' + parsed.issue;
   pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.issue };
   var rRowId = 'issue-' + parsed.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + parsed.issue;
   _autoExpandAfterRender.add(rRowId);
   renderIssues();
-  var source = new EventSource(API + '/api/reproduce-stream?repo=' + encodeURIComponent(parsed.repo) + '&issue=' + parsed.issue);
-  source.addEventListener('progress', function(e) {
-    var d = JSON.parse(e.data);
-    showToast(d.message, 'info');
-  });
-  source.addEventListener('done', function(e) {
-    var d = JSON.parse(e.data);
-    showToast(d.message, 'success');
-    source.close();
-    refreshAll();
-  });
-  source.addEventListener('error', function(e) {
-    try { var d = JSON.parse(e.data); showToast(d.message, 'error'); } catch(x) { showToast('Reproduction failed', 'error'); }
-    source.close();
-    refreshAll();
-  });
+  try {
+    await fetchJSON('/api/reproduce', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ repo: parsed.repo, issue_number: parsed.issue })
+    });
+    showToast('Queued: ' + parsed.repo + '#' + parsed.issue, 'info');
+  } catch(e) {
+    showToast('Failed to queue: ' + (e.message || e), 'error');
+    delete pendingReRuns[rKey];
+  }
+  loadIssuesImmediate();
 }
 
 // Enter key on reproduce input
@@ -819,7 +826,7 @@ document.getElementById('reproduceInput').addEventListener('keydown', function(e
 
 async function refreshAll() {
   animateRefresh();
-  await Promise.all([loadStatus(), loadRepos(), loadIssues()]);
+  await Promise.all([loadStatus(), loadRepos(), _doLoadIssues()]);
   updateRunningCount();
 }
 
