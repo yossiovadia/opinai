@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yossiovadia/opinai/controller-go/internal/agent"
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
 	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
@@ -175,11 +176,8 @@ func Run() {
 		return
 	}
 
-	// Step 4: Generate tests
-	profileCtx := loadProfileContext()
+	// Step 4-5: Agent investigation (with fallback to legacy flow)
 	repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
-
-	// Add issue state context
 	var stateCtx string
 	if issueState == "closed" {
 		stateCtx = "\n\nThis issue is CLOSED (presumably fixed). Analyze whether the fix is correct. " +
@@ -187,130 +185,162 @@ func Run() {
 	} else {
 		stateCtx = "\n\nThis is an OPEN issue. Reproduce the bug and confirm or deny it.\n"
 	}
-	repoCtx = repoCtx + stateCtx
+	agentRepoCtx := repoCtx + stateCtx
 
-	// Tell the AI it has server control for config-dependent bugs
-	profile2 := loadProfile()
-	runCommand := ""
-	if profile2 != nil {
-		runCommand, _ = profile2["run"].(string)
-	}
-	if runCommand != "" && serverURL != "" {
-		repoCtx += fmt.Sprintf(
-			"\n\nYou have full control of the server. If the bug requires restarting with different "+
-				"configuration (env vars, flags), you can kill the existing server and restart it.\n"+
-				"Current start command: %s\n"+
-				"Server binary directory: /tmp/opinai-repo\n"+
-				"Environment: PYTHONUSERBASE=/tmp/pip-user HOME=/tmp/home\n", runCommand)
-	}
+	slog.Info("starting agent investigation")
+	agentResult := agent.Investigate(title, body, serverURL, "/tmp/opinai-repo", agentRepoCtx, 10)
 
-	// Determine test strategy from analysis
-	repoMemCtx := os.Getenv("OPINAI_REPO_CONTEXT")
-	testStrategy := extractMemoryValue(repoMemCtx, "test_strategy")
-	needsCluster := extractMemoryValue(repoMemCtx, "needs_cluster")
-	sandboxNS2 := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
-
-	if needsCluster == "true" && sandboxNS2 == "" && serverURL == "" {
-		// K8s project with no sandbox and no running server — fall back to code review
-		if testStrategy == "" || testStrategy == "deploy-and-curl" {
-			testStrategy = "code-review"
-		}
-		repoCtx += "\n\nThis project requires Kubernetes but no cluster deployment is available. " +
-			"Use a CODE REVIEW strategy: analyze the source code to determine if the reported bug exists. " +
-			"Check the relevant source files, look for the described behavior, and give your verdict " +
-			"based on code analysis rather than runtime testing.\n" +
-			"The project source is at: /tmp/opinai-repo\n" +
-			"You can use: find, grep, cat to examine the code.\n"
-	}
-	if testStrategy != "" && testStrategy != "code-review" {
-		repoCtx += fmt.Sprintf("\n\nRecommended test strategy: %s\n", testStrategy)
-	}
-
-	script, err := ai.GenerateTests(title, body, serverURL, profileCtx, repoCtx)
-	if err != nil || script == "" {
-		fmt.Println("--- OPINAI VERDICT: ERROR ---")
-		comment := fmt.Sprintf(
-			"## OpinAI Bug Reproduction Report\n\n"+
-				"**Issue:** #%s\n"+
-				"**Category:** %s\n"+
-				"**Verdict:** ERROR\n"+
-				"**Analysis:** Skipped (AI analysis failed)\n\n"+
-				"Could not generate tests for this issue.",
-			issueNumber, category,
-		)
-		postComment(repo, atoi(issueNumber), comment)
-		addLabel(repo, atoi(issueNumber))
-		postResult(map[string]any{
-			"repo": repo, "issue": atoi(issueNumber), "title": title,
-			"category": category, "verdict": "ERROR", "confidence": "LOW",
-			"report": comment, "repro_details": string(reproJSON),
-			"repo_memory": collectedRepoMemory,
-		})
-		return
-	}
-	slog.Info("test script generated", "bytes", len(script))
-
-	// Step 4b: Self-critique — have AI review the script before running
-	critiqued, err := ai.CritiqueTest(script, title, body)
-	if err != nil {
-		slog.Warn("critique failed, using original script", "error", err)
-	} else if critiqued != script {
-		slog.Info("AI critique returned corrected script", "bytes", len(critiqued))
-		script = critiqued
-	} else {
-		slog.Info("AI approved test script")
-	}
-
-	// Step 5: Run tests with crash retry (max 2 retries, 3 total attempts)
-	slog.Info("running tests...")
-	testOutput := runTests(script)
+	var vr ai.VerdictResult
+	var script string
+	var testOutput string
+	var resultsTable string
 	retryCount := 0
-	const maxRetries = 2
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		resultsTable := parseResultsTable(testOutput)
-		hasResults := !strings.Contains(resultsTable, "(no structured results)")
-		// Only retry if the script crashed (no structured results AND error exit)
-		if hasResults || !strings.Contains(testOutput, "[script exited with error:") {
-			break
+	if agentResult.Verdict != "" && agentResult.Verdict != "INCONCLUSIVE" {
+		// Agent produced a definitive verdict
+		slog.Info("agent investigation succeeded", "verdict", agentResult.Verdict, "confidence", agentResult.Confidence)
+		vr = ai.VerdictResult{
+			Verdict:    agentResult.Verdict,
+			Confidence: agentResult.Confidence,
+			Text:       agentResult.Report,
 		}
-		slog.Warn("test script crashed, requesting AI fix", "attempt", attempt+1)
-		fixedScript, err := ai.RegenerateTest(title, body, script, truncStr(testOutput, 3000))
-		if err != nil || fixedScript == "" {
-			slog.Warn("AI could not fix crashed script", "error", err)
-			break
+		script = agentResult.TestScript
+		testOutput = agentResult.TestOutput
+		if testOutput == "" {
+			testOutput = agentResult.Report
 		}
-		script = fixedScript
+		resultsTable = parseResultsTable(testOutput)
+
+		reproDetails["investigation_method"] = "agent"
+		reproDetails["agent_iterations"] = agentResult.Iterations
+		reproDetails["agent_tool_calls"] = agentResult.ToolCalls
+		if len(agentResult.FilesRead) > 0 {
+			reproDetails["files_investigated"] = agentResult.FilesRead
+		}
+	} else {
+		// Agent failed or was inconclusive — fall back to legacy flow
+		slog.Warn("agent investigation inconclusive, falling back to legacy flow", "report", truncStr(agentResult.Report, 200))
+		reproDetails["investigation_method"] = "legacy"
+
+		profileCtx := loadProfileContext()
+
+		// Tell the AI it has server control for config-dependent bugs
+		profile2 := loadProfile()
+		runCommand := ""
+		if profile2 != nil {
+			runCommand, _ = profile2["run"].(string)
+		}
+		if runCommand != "" && serverURL != "" {
+			agentRepoCtx += fmt.Sprintf(
+				"\n\nYou have full control of the server. If the bug requires restarting with different "+
+					"configuration (env vars, flags), you can kill the existing server and restart it.\n"+
+					"Current start command: %s\n"+
+					"Server binary directory: /tmp/opinai-repo\n"+
+					"Environment: PYTHONUSERBASE=/tmp/pip-user HOME=/tmp/home\n", runCommand)
+		}
+
+		repoMemCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+		testStrategy := extractMemoryValue(repoMemCtx, "test_strategy")
+		needsCluster := extractMemoryValue(repoMemCtx, "needs_cluster")
+		sandboxNS2 := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
+
+		if needsCluster == "true" && sandboxNS2 == "" && serverURL == "" {
+			if testStrategy == "" || testStrategy == "deploy-and-curl" {
+				testStrategy = "code-review"
+			}
+			agentRepoCtx += "\n\nThis project requires Kubernetes but no cluster deployment is available. " +
+				"Use a CODE REVIEW strategy: analyze the source code to determine if the reported bug exists. " +
+				"Check the relevant source files, look for the described behavior, and give your verdict " +
+				"based on code analysis rather than runtime testing.\n" +
+				"The project source is at: /tmp/opinai-repo\n" +
+				"You can use: find, grep, cat to examine the code.\n"
+		}
+		if testStrategy != "" && testStrategy != "code-review" {
+			agentRepoCtx += fmt.Sprintf("\n\nRecommended test strategy: %s\n", testStrategy)
+		}
+
+		script, err = ai.GenerateTests(title, body, serverURL, profileCtx, agentRepoCtx)
+		if err != nil || script == "" {
+			fmt.Println("--- OPINAI VERDICT: ERROR ---")
+			comment := fmt.Sprintf(
+				"## OpinAI Bug Reproduction Report\n\n"+
+					"**Issue:** #%s\n"+
+					"**Category:** %s\n"+
+					"**Verdict:** ERROR\n"+
+					"**Analysis:** Skipped (AI analysis failed)\n\n"+
+					"Could not generate tests for this issue.",
+				issueNumber, category,
+			)
+			postComment(repo, atoi(issueNumber), comment)
+			addLabel(repo, atoi(issueNumber))
+			postResult(map[string]any{
+				"repo": repo, "issue": atoi(issueNumber), "title": title,
+				"category": category, "verdict": "ERROR", "confidence": "LOW",
+				"report": comment, "repro_details": string(reproJSON),
+				"repo_memory": collectedRepoMemory,
+			})
+			return
+		}
+		slog.Info("test script generated", "bytes", len(script))
+
+		critiqued, critiqueErr := ai.CritiqueTest(script, title, body)
+		if critiqueErr != nil {
+			slog.Warn("critique failed, using original script", "error", critiqueErr)
+		} else if critiqued != script {
+			slog.Info("AI critique returned corrected script", "bytes", len(critiqued))
+			script = critiqued
+		} else {
+			slog.Info("AI approved test script")
+		}
+
+		slog.Info("running tests...")
 		testOutput = runTests(script)
-		retryCount++
-	}
+		const maxRetries = 2
 
-	slog.Info("tests completed", "output_bytes", len(testOutput), "retries", retryCount)
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			rt := parseResultsTable(testOutput)
+			hasResults := !strings.Contains(rt, "(no structured results)")
+			if hasResults || !strings.Contains(testOutput, "[script exited with error:") {
+				break
+			}
+			slog.Warn("test script crashed, requesting AI fix", "attempt", attempt+1)
+			fixedScript, fixErr := ai.RegenerateTest(title, body, script, truncStr(testOutput, 3000))
+			if fixErr != nil || fixedScript == "" {
+				slog.Warn("AI could not fix crashed script", "error", fixErr)
+				break
+			}
+			script = fixedScript
+			testOutput = runTests(script)
+			retryCount++
+		}
+
+		slog.Info("tests completed", "output_bytes", len(testOutput), "retries", retryCount)
+
+		resultsTable = parseResultsTable(testOutput)
+		hasStructuredResults := !strings.Contains(resultsTable, "(no structured results)")
+		verdictInput := testOutput
+		if !hasStructuredResults {
+			verdictInput += "\n\nWARNING: The test script produced NO structured JSON test results. " +
+				"This likely means the script crashed before completing its tests. " +
+				"Your confidence should be LOW unless the raw output clearly proves the bug exists or not."
+			slog.Warn("test script produced no structured results")
+		}
+
+		vr = ai.GetVerdict(title, body, verdictInput, issueState)
+	}
 
 	// Save the final test script into repro_details
-	reproDetails["test_script"] = script
+	if script != "" {
+		reproDetails["test_script"] = script
+	}
 	if retryCount > 0 {
 		reproDetails["test_retries"] = retryCount
 	}
 	reproJSON, _ = json.Marshal(reproDetails)
-	// Re-emit updated repro details
 	fmt.Println("--- OPINAI REPRODUCTION_DETAILS ---")
 	fmt.Println(string(reproJSON))
 	fmt.Println("--- END REPRODUCTION_DETAILS ---")
 
-	// Check if test output has structured results — if not, warn the verdict AI
-	resultsTable := parseResultsTable(testOutput)
-	hasStructuredResults := !strings.Contains(resultsTable, "(no structured results)")
-	verdictInput := testOutput
-	if !hasStructuredResults {
-		verdictInput += "\n\nWARNING: The test script produced NO structured JSON test results. " +
-			"This likely means the script crashed before completing its tests. " +
-			"Your confidence should be LOW unless the raw output clearly proves the bug exists or not."
-		slog.Warn("test script produced no structured results — likely crashed before producing JSON output")
-	}
-
-	// Step 6: Get verdict
-	vr := ai.GetVerdict(title, body, verdictInput, issueState)
 	slog.Info("verdict", "verdict", vr.Verdict, "confidence", vr.Confidence)
 	fmt.Printf("--- OPINAI VERDICT: %s ---\n", vr.Verdict)
 	fmt.Printf("--- OPINAI CONFIDENCE: %s ---\n", vr.Confidence)
