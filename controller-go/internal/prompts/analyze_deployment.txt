@@ -23,6 +23,8 @@ Use this to understand what RBAC, CRDs, endpoints, and resources the application
 ## Project's Own K8s Manifests (rendered from Helm/Kustomize)
 The following are the project's actual deployment manifests. Use these as the SOURCE OF TRUTH for:
 - ServiceAccounts, ClusterRoles, ClusterRoleBindings (copy exactly, do NOT guess RBAC)
+- IMPORTANT: If the project uses controller-runtime, operator-sdk, or kubebuilder, the app will also need cluster-wide access to configmaps and leases (for leader election and runtime config). Add these to the ClusterRole even if they're not in the rendered manifests — they come from the framework's runtime behavior.
+- Common controller-runtime ClusterRole rules: configmaps (get/list/watch/create/update), leases (get/list/watch/create/update), events (create/patch)
 - Resource limits and requests (use the project's own values)
 - Container ports and probe definitions
 - Any CRDs or custom resources the app creates
