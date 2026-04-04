@@ -64,7 +64,7 @@ Option 1: "install-from-docs" — Follow the project's own install instructions:
 3. For Helm charts: "helm upgrade --install <release> <chart-path> -n NAMESPACE_PLACEHOLDER --set app.image=IMAGE_PLACEHOLDER" (the system auto-splits .image into .image.registry/.repository/.tag)
 4. For kustomize: "kubectl apply -k <path> -n NAMESPACE_PLACEHOLDER"
 5. For raw manifests: "kubectl apply -f <path> -n NAMESPACE_PLACEHOLDER"
-6. Add "wait" steps for deployments/statefulsets
+6. Do NOT add "wait" steps — the system automatically waits for all deployments to be ready after all steps complete
 
 Option 2: "code-review" — No deployment, just code analysis (always include as fallback)
 
