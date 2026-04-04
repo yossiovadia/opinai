@@ -277,56 +277,68 @@ func (s *Server) buildRouter() chi.Router {
 	// WebSocket
 	r.Get("/ws", s.hub.HandleWS)
 
-	// SSE streaming endpoints (outside jsonContentType middleware)
-	r.Get("/api/admin/analyze-stream", s.handleAnalyzeStream)
-	r.Get("/api/reproduce-stream", s.handleReproduceStream)
-	r.Post("/api/chat-stream", s.handleChatStream)
-	r.Get("/api/check-now-stream", s.handleCheckNowStream)
-	r.Get("/api/job-logs", s.handleJobLogs)
-	r.Post("/api/internal/result", s.handleInternalResult)
+	// Public SSE endpoints (no auth)
 	r.Post("/api/webhook/github", s.handleGitHubWebhook)
+
+	// Protected SSE endpoints (bearer auth, outside jsonContentType)
+	r.Group(func(r chi.Router) {
+		r.Use(bearerAuthMiddleware)
+		r.Get("/api/admin/analyze-stream", s.handleAnalyzeStream)
+		r.Get("/api/reproduce-stream", s.handleReproduceStream)
+		r.Post("/api/chat-stream", s.handleChatStream)
+		r.Get("/api/check-now-stream", s.handleCheckNowStream)
+		r.Get("/api/job-logs", s.handleJobLogs)
+		r.Post("/api/internal/result", s.handleInternalResult)
+	})
 
 	// Core API
 	r.Route("/api", func(r chi.Router) {
 		r.Use(jsonContentType)
+
+		// Public endpoints (no auth)
 		r.Get("/status", s.handleStatus)
 		r.Get("/repos", s.handleRepos)
 		r.Get("/runs", s.handleRuns)
-		r.Post("/check-now", s.handleCheckNow)
-		r.Post("/reproduce", s.handleReproduce)
-		r.Post("/verify-fix", s.handleVerifyFix)
-		r.Post("/chat", s.handleChatFull)
-		r.Get("/chat-history", s.handleChatHistory)
-		r.Post("/chat-history/clear", s.handleClearChatHistory)
-		r.Post("/runs/{id}/post-comment", s.handlePostComment)
-		r.Delete("/runs/*", s.handleDeleteRuns)
-		r.Post("/rerun/*", s.handleRerun)
-		r.Post("/rerun-all/*", s.handleRerunAll)
 		r.Get("/report/{id}", s.handleReport)
 		r.Get("/run-history", s.handleRunHistory)
 
-		// Admin
-		r.Route("/admin", func(r chi.Router) {
-			r.Get("/repos", s.handleAdminReposGet)
-			r.Post("/repos", s.handleAdminReposAdd)
-			r.Put("/repos", s.handleAdminReposUpdate)
-			r.Delete("/repos", s.handleAdminReposDelete)
-			r.Get("/settings", s.handleAdminSettings)
-			r.Put("/settings", s.handleAdminSettingsUpdate)
-			r.Get("/system", s.handleAdminSystem)
-			r.Get("/logs", s.handleAdminLogs)
-			r.Post("/test-ai", s.handleAdminTestAI)
-			r.Post("/test-github", s.handleAdminTestGitHub)
-			r.Get("/db-stats", s.handleAdminDBStats)
-			r.Get("/db-runs", s.handleAdminDBRuns)
-			r.Get("/db-memory", s.handleAdminDBMemory)
-			r.Get("/repo-memory/*", s.handleAdminRepoMemory)
-			r.Get("/deployment-plan/*", s.handleAdminGetPlan)
-			r.Put("/deployment-plan/*", s.handleAdminUpdatePlan)
-			r.Post("/analyze-deployment", s.handleAdminAnalyze)
-			r.Get("/sandboxes", s.handleAdminSandboxes)
-			r.Delete("/sandboxes/*", s.handleAdminSandboxDelete)
-			r.Post("/sandboxes/cleanup", s.handleAdminSandboxCleanup)
+		// Protected endpoints (bearer auth)
+		r.Group(func(r chi.Router) {
+			r.Use(bearerAuthMiddleware)
+			r.Post("/check-now", s.handleCheckNow)
+			r.Post("/reproduce", s.handleReproduce)
+			r.Post("/verify-fix", s.handleVerifyFix)
+			r.Post("/chat", s.handleChatFull)
+			r.Get("/chat-history", s.handleChatHistory)
+			r.Post("/chat-history/clear", s.handleClearChatHistory)
+			r.Post("/runs/{id}/post-comment", s.handlePostComment)
+			r.Delete("/runs/*", s.handleDeleteRuns)
+			r.Post("/rerun/*", s.handleRerun)
+			r.Post("/rerun-all/*", s.handleRerunAll)
+
+			// Admin
+			r.Route("/admin", func(r chi.Router) {
+				r.Get("/repos", s.handleAdminReposGet)
+				r.Post("/repos", s.handleAdminReposAdd)
+				r.Put("/repos", s.handleAdminReposUpdate)
+				r.Delete("/repos", s.handleAdminReposDelete)
+				r.Get("/settings", s.handleAdminSettings)
+				r.Put("/settings", s.handleAdminSettingsUpdate)
+				r.Get("/system", s.handleAdminSystem)
+				r.Get("/logs", s.handleAdminLogs)
+				r.Post("/test-ai", s.handleAdminTestAI)
+				r.Post("/test-github", s.handleAdminTestGitHub)
+				r.Get("/db-stats", s.handleAdminDBStats)
+				r.Get("/db-runs", s.handleAdminDBRuns)
+				r.Get("/db-memory", s.handleAdminDBMemory)
+				r.Get("/repo-memory/*", s.handleAdminRepoMemory)
+				r.Get("/deployment-plan/*", s.handleAdminGetPlan)
+				r.Put("/deployment-plan/*", s.handleAdminUpdatePlan)
+				r.Post("/analyze-deployment", s.handleAdminAnalyze)
+				r.Get("/sandboxes", s.handleAdminSandboxes)
+				r.Delete("/sandboxes/*", s.handleAdminSandboxDelete)
+				r.Post("/sandboxes/cleanup", s.handleAdminSandboxCleanup)
+			})
 		})
 	})
 
@@ -340,7 +352,22 @@ func jsonContentType(next http.Handler) http.Handler {
 	})
 }
 
-// StartHTTP starts the HTTP server.
+// NewHTTPServer creates an HTTP server (does not start it).
+func (s *Server) NewHTTPServer(addr string) *http.Server {
+	return &http.Server{Addr: addr, Handler: s.router}
+}
+
+// NewHTTPSServer creates an HTTPS server with a self-signed cert (does not start it).
+func (s *Server) NewHTTPSServer(addr string) *http.Server {
+	tlsCfg, err := selfSignedTLSConfig()
+	if err != nil {
+		slog.Error("failed to generate TLS cert", "error", err)
+		return nil
+	}
+	return &http.Server{Addr: addr, Handler: s.router, TLSConfig: tlsCfg}
+}
+
+// StartHTTP starts the HTTP server (blocks).
 func (s *Server) StartHTTP(addr string) {
 	slog.Info("dashboard HTTP server starting", "addr", addr)
 	srv := &http.Server{Addr: addr, Handler: s.router}
@@ -349,7 +376,7 @@ func (s *Server) StartHTTP(addr string) {
 	}
 }
 
-// StartHTTPS starts the HTTPS server with a self-signed certificate.
+// StartHTTPS starts the HTTPS server with a self-signed certificate (blocks).
 func (s *Server) StartHTTPS(addr string) {
 	tlsCfg, err := selfSignedTLSConfig()
 	if err != nil {

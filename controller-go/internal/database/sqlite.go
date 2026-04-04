@@ -112,6 +112,10 @@ func migrate() error {
 		created_at TEXT DEFAULT (datetime('now')),
 		PRIMARY KEY (repo, issue)
 	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS monitored_repos (
+		repo TEXT NOT NULL PRIMARY KEY,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
 	return nil
 }
 
@@ -498,6 +502,40 @@ func ClearChatHistory(repo string, issue int) error {
 	defer mu.Unlock()
 	_, err := db.Exec("DELETE FROM chat_history WHERE repo = ? AND issue = ?", repo, issue)
 	return err
+}
+
+// --- Monitored Repos ---
+
+// AddMonitoredRepo persists a repo to the monitored list.
+func AddMonitoredRepo(repo string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("INSERT OR IGNORE INTO monitored_repos (repo) VALUES (?)", repo)
+	return err
+}
+
+// RemoveMonitoredRepo removes a repo from the monitored list.
+func RemoveMonitoredRepo(repo string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM monitored_repos WHERE repo = ?", repo)
+	return err
+}
+
+// GetMonitoredRepos returns all persisted monitored repos.
+func GetMonitoredRepos() []string {
+	rows, err := db.Query("SELECT repo FROM monitored_repos ORDER BY created_at")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var repos []string
+	for rows.Next() {
+		var repo string
+		rows.Scan(&repo)
+		repos = append(repos, repo)
+	}
+	return repos
 }
 
 func Now() string {

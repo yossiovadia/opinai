@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -59,8 +64,28 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 	}
 
 	namespace := dashboard.Env("NAMESPACE", "opinai")
-	image := dashboard.Env("OPINAI_IMAGE", "image-registry.openshift-image-registry.svc:5000/opinai/opinai-controller:latest")
-	repos := dashboard.ParseRepos(dashboard.Env("REPOS", ""))
+	image := dashboard.Env("OPINAI_IMAGE", fmt.Sprintf("image-registry.openshift-image-registry.svc:5000/%s/opinai-controller:latest", namespace))
+
+	// Merge repos from env var and database for persistence across restarts
+	envRepos := dashboard.ParseRepos(dashboard.Env("REPOS", ""))
+	dbRepos := database.GetMonitoredRepos()
+	repoSet := make(map[string]bool)
+	for _, r := range envRepos {
+		repoSet[r] = true
+	}
+	for _, r := range dbRepos {
+		repoSet[r] = true
+	}
+	var repos []string
+	for r := range repoSet {
+		repos = append(repos, r)
+	}
+	// Persist env repos to DB so they survive restart
+	for _, r := range envRepos {
+		database.AddMonitoredRepo(r)
+	}
+	// Update REPOS env var so other code sees the full list
+	os.Setenv("REPOS", strings.Join(repos, ","))
 
 	// Shared state
 	state := dashboard.NewState()
@@ -158,9 +183,43 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		go poller.Start()
 	}
 
-	// Start dashboard
-	go srv.StartHTTPS(httpsAddr)
-	srv.StartHTTP(httpAddr) // blocks
+	// Create HTTP servers
+	httpSrv := srv.NewHTTPServer(httpAddr)
+	httpsSrv := srv.NewHTTPSServer(httpsAddr)
+
+	// Start servers in goroutines
+	go func() {
+		slog.Info("dashboard HTTP server starting", "addr", httpAddr)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("HTTP server error", "error", err)
+		}
+	}()
+	if httpsSrv != nil {
+		go func() {
+			slog.Info("dashboard HTTPS server starting", "addr", httpsAddr)
+			if err := httpsSrv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				slog.Error("HTTPS server error", "error", err)
+			}
+		}()
+	}
+
+	// Graceful shutdown on SIGTERM/SIGINT
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
+	sig := <-quit
+	slog.Info("shutting down", "signal", sig)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(ctx); err != nil {
+		slog.Error("HTTP shutdown error", "error", err)
+	}
+	if httpsSrv != nil {
+		if err := httpsSrv.Shutdown(ctx); err != nil {
+			slog.Error("HTTPS shutdown error", "error", err)
+		}
+	}
+	slog.Info("shutdown complete")
 }
 
 func initK8sClient() (kubernetes.Interface, error) {

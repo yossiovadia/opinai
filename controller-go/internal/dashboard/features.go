@@ -146,7 +146,8 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var payload struct {
 		Repository struct {
-			FullName string `json:"full_name"`
+			FullName      string `json:"full_name"`
+			DefaultBranch string `json:"default_branch"`
 		} `json:"repository"`
 		Ref string `json:"ref"`
 	}
@@ -167,7 +168,23 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("webhook: push received", "repo", repo, "ref", payload.Ref)
+	// Only re-run on pushes to the default branch (main/master)
+	defaultBranch := payload.Repository.DefaultBranch
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+	expectedRef := "refs/heads/" + defaultBranch
+	if payload.Ref != expectedRef {
+		slog.Info("webhook: ignoring push to non-default branch", "repo", repo, "ref", payload.Ref, "default", defaultBranch)
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ignored",
+			"reason": "not default branch",
+			"ref":    payload.Ref,
+		})
+		return
+	}
+
+	slog.Info("webhook: push to default branch", "repo", repo, "ref", payload.Ref)
 
 	// Re-run all BUG_CONFIRMED issues (check if they're fixed)
 	runs, _ := database.GetRuns(repo, 50)

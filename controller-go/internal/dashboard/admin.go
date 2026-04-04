@@ -21,7 +21,23 @@ import (
 // --- GET /api/admin/repos ---
 
 func (s *Server) handleAdminReposGet(w http.ResponseWriter, r *http.Request) {
-	repos := ParseRepos(os.Getenv("REPOS"))
+	// Merge env var repos with DB-persisted repos
+	envRepos := ParseRepos(os.Getenv("REPOS"))
+	dbRepos := database.GetMonitoredRepos()
+	seen := make(map[string]bool)
+	var repos []string
+	for _, r := range envRepos {
+		if !seen[r] {
+			seen[r] = true
+			repos = append(repos, r)
+		}
+	}
+	for _, r := range dbRepos {
+		if !seen[r] {
+			seen[r] = true
+			repos = append(repos, r)
+		}
+	}
 	result := make([]map[string]any, 0, len(repos))
 	for _, name := range repos {
 		profile := config.LoadRepoProfile(name)
@@ -48,7 +64,7 @@ func (s *Server) handleAdminReposAdd(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	// Update state
+	database.AddMonitoredRepo(req.Name)
 	s.state.UpdateRepo(req.Name, RepoStatus{ManualOnly: true})
 	json.NewEncoder(w).Encode(map[string]any{"status": "added", "name": req.Name})
 }
@@ -90,7 +106,7 @@ func (s *Server) handleAdminReposDelete(w http.ResponseWriter, r *http.Request) 
 	if err := database.DeleteRepoData(req.Name); err != nil {
 		slog.Warn("failed to clean DB for repo", "repo", req.Name, "error", err)
 	}
-	// Remove from state
+	database.RemoveMonitoredRepo(req.Name)
 	s.state.DeleteRepo(req.Name)
 
 	json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "name": req.Name})

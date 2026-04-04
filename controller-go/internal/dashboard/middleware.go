@@ -3,6 +3,7 @@ package dashboard
 import (
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -53,17 +54,61 @@ func corsMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+
 		origin := r.Header.Get("Origin")
-		if origin == "" {
-			origin = "*"
-		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		allowedOrigin := corsAllowedOrigin(origin)
+
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Max-Age", "3600")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// corsAllowedOrigin checks if the origin is in OPINAI_ALLOWED_ORIGINS.
+// If the env var is not set, all origins are allowed (backward compat).
+func corsAllowedOrigin(origin string) string {
+	allowed := os.Getenv("OPINAI_ALLOWED_ORIGINS")
+	if allowed == "" {
+		// No restriction configured — allow all
+		if origin == "" {
+			return "*"
+		}
+		return origin
+	}
+	for _, a := range strings.Split(allowed, ",") {
+		a = strings.TrimSpace(a)
+		if a == origin {
+			return origin
+		}
+	}
+	// Origin not in allowlist — return first allowed origin (browser will reject)
+	return strings.TrimSpace(strings.Split(allowed, ",")[0])
+}
+
+// --- Bearer Token Auth ---
+
+// bearerAuthMiddleware checks Authorization: Bearer <token> against OPINAI_API_TOKEN.
+// If the env var is not set, auth is skipped (backward compat).
+func bearerAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := os.Getenv("OPINAI_API_TOKEN")
+		if token == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		auth := r.Header.Get("Authorization")
+		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(401)
+			w.Write([]byte(`{"error":true,"message":"Unauthorized","status":401}`))
 			return
 		}
 		next.ServeHTTP(w, r)
