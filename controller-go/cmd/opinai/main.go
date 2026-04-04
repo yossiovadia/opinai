@@ -203,6 +203,7 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 
 		go jobMgr.StartWatcher()
 		go poller.Start()
+		go poller.StartPendingProcessor()
 	}
 
 	// Create HTTP servers

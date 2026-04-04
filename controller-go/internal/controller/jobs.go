@@ -123,7 +123,7 @@ func (jm *JobManager) ListJobs() []JobInfo {
 		if job.Status.Active > 0 {
 			status = "Running"
 		} else if job.Status.Succeeded > 0 {
-			status = "Complete"
+			status = "Completed"
 		} else if job.Status.Failed > 0 {
 			status = "Failed"
 		}
@@ -534,6 +534,11 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		if jm.sandbox.TeardownSandbox(sbNS) {
 			slog.Info("torn down sandbox after job", "namespace", sbNS, "job", name)
 		}
+	}
+
+	// Delete completed K8s Job to keep the dashboard clean
+	if err := jm.DeleteJob(name); err != nil {
+		slog.Warn("failed to delete completed job", "job", name, "error", err)
 	}
 
 	// NOTE: retry is triggered by the runner callback (/api/internal/result), not here.

@@ -160,6 +160,45 @@ func markBacklogProcessed(repo string) {
 	}
 }
 
+// StartPendingProcessor runs a loop that checks pending_reproductions every 10s
+// and creates jobs for queued items. This ensures the /api/reproduce endpoint
+// returns immediately while jobs are created in the background.
+func (p *Poller) StartPendingProcessor() {
+	slog.Info("pending processor started")
+	for {
+		pending := database.GetAllPending()
+		for _, item := range pending {
+			// Skip if already processed
+			processed, _ := database.IsProcessed(item.Repo, item.Issue)
+			if processed {
+				database.RemovePending(item.Repo, item.Issue)
+				continue
+			}
+
+			// Check concurrency — skip if repo already has a running job
+			_, repoActive := p.jobs.countRunningJobs(item.Repo)
+			if repoActive {
+				continue
+			}
+
+			slog.Info("pending processor: creating job", "repo", item.Repo, "issue", item.Issue)
+			title := item.Title
+			if title == "" {
+				// Fetch title from GitHub if not stored
+				if details, err := FetchIssueDetails(item.Repo, item.Issue); err == nil {
+					title = details.Title
+				}
+			}
+			if err := p.jobs.CreateReproductionJob(item.Repo, item.Issue, title); err != nil {
+				slog.Error("pending processor: failed to create job", "repo", item.Repo, "issue", item.Issue, "error", err)
+			}
+			// Process one at a time, then re-check on next cycle
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
 // RetryPendingForRepo checks for unprocessed issues in a repo and creates a job
 // for the next one. Called when a job completes so queued issues don't wait for
 // the next poll cycle.

@@ -386,6 +386,22 @@ func GetPendingForRepo(repo string) []PendingItem {
 	return items
 }
 
+// GetAllPending returns all pending reproductions across all repos.
+func GetAllPending() []PendingItem {
+	rows, err := db.Query("SELECT repo, issue, title FROM pending_reproductions ORDER BY created_at")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var items []PendingItem
+	for rows.Next() {
+		var p PendingItem
+		rows.Scan(&p.Repo, &p.Issue, &p.Title)
+		items = append(items, p)
+	}
+	return items
+}
+
 // --- Deployment Plans ---
 
 type DeploymentPlan struct {

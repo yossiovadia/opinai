@@ -121,13 +121,14 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Controller not ready", 503)
 		return
 	}
+	// Queue the issue and return immediately — processing happens in background
 	database.AddPending(req.Repo, req.IssueNumber, "")
-	if err := s.reproduce(req.Repo, req.IssueNumber); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
+	s.hub.Broadcast(WSEvent{
+		Type: "job_queued",
+		Data: map[string]any{"repo": req.Repo, "issue": req.IssueNumber},
+	})
 	json.NewEncoder(w).Encode(map[string]any{
-		"status":       "triggered",
+		"status":       "queued",
 		"repo":         req.Repo,
 		"issue_number": req.IssueNumber,
 	})
