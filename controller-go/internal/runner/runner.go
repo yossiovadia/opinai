@@ -188,7 +188,8 @@ func Run() {
 	}
 	agentRepoCtx := richCtx + stateCtx
 
-	slog.Info("starting agent investigation")
+	hasRich := strings.Contains(richCtx, "## Project Analysis:")
+	slog.Info("starting agent investigation", "has_rich_context", hasRich, "context_bytes", len(agentRepoCtx))
 	agentResult := agent.Investigate(title, body, serverURL, "/tmp/opinai-repo", agentRepoCtx, 10)
 
 	var vr ai.VerdictResult

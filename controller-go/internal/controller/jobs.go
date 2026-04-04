@@ -819,10 +819,10 @@ func buildRepoContext(repo string) string {
 	if mem, _ := database.GetRepoMemory(repo, nil); len(mem) > 0 {
 		parts = append(parts, "## What OpinAI knows about this project:")
 		for k, v := range mem {
-			// Truncate large values (e.g. rich_analysis JSON) to keep
-			// the env var within K8s limits while preserving key context.
-			if len(v) > 4096 {
-				v = v[:4096]
+			// Truncate very large values to keep the env var within K8s limits.
+			// rich_analysis needs ~8KB to stay valid JSON, other values are small.
+			if len(v) > 16384 {
+				v = v[:16384]
 			}
 			parts = append(parts, fmt.Sprintf("- %s: %s", k, v))
 		}
