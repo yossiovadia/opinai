@@ -644,59 +644,42 @@ func (m *Manager) runBuild(ns, repo, name, dockerfile string) (string, error) {
 		return "", fmt.Errorf("create BuildConfig: %w", err)
 	}
 
-	// Start a build
-	build := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "build.openshift.io/v1",
-		"kind":       "Build",
-		"metadata": map[string]any{
-			"name":      name + "-1",
-			"namespace": ns,
-			"labels":    map[string]any{"buildconfig": name},
-		},
-		"spec": map[string]any{
-			"source": map[string]any{
-				"type": "Git",
-				"git":  map[string]any{"uri": gitURI},
-			},
-			"strategy": map[string]any{
-				"type": "Docker",
-				"dockerStrategy": map[string]any{
-					"dockerfilePath": dockerfile,
-				},
-			},
-			"output": map[string]any{
-				"to": map[string]any{
-					"kind": "ImageStreamTag",
-					"name": name + ":latest",
-				},
-			},
-		},
-	}}
-	buildGVR := schema.GroupVersionResource{Group: "build.openshift.io", Version: "v1", Resource: "builds"}
-	_, err = m.dynClient.Resource(buildGVR).Namespace(ns).Create(ctx, build, metav1.CreateOptions{})
+	// Start a build using oc start-build (more reliable than creating Build resources directly)
+	startCmd := exec.Command("oc", "start-build", name, "-n", ns)
+	startOut, err := startCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("start build: %w", err)
+		return "", fmt.Errorf("start build: %s — %s", err, string(startOut))
+	}
+	slog.Info("build started", "output", strings.TrimSpace(string(startOut)))
+
+	// Extract build name from output (e.g. "build.build.openshift.io/payload-processing-1 started")
+	buildName := name + "-1"
+	if parts := strings.Fields(string(startOut)); len(parts) > 0 {
+		if bn := strings.TrimPrefix(parts[0], "build.build.openshift.io/"); bn != parts[0] {
+			buildName = bn
+		}
 	}
 
-	// Wait for build to complete (up to 10 minutes)
-	slog.Info("waiting for build to complete", "build", name+"-1", "namespace", ns)
-	deadline := time.Now().Add(10 * time.Minute)
+	// Wait for build to complete (up to 30 minutes — Go builds on single-node clusters can be slow)
+	slog.Info("waiting for build to complete", "build", buildName, "namespace", ns)
+	buildGVR := schema.GroupVersionResource{Group: "build.openshift.io", Version: "v1", Resource: "builds"}
+	deadline := time.Now().Add(30 * time.Minute)
 	for time.Now().Before(deadline) {
-		obj, err := m.dynClient.Resource(buildGVR).Namespace(ns).Get(ctx, name+"-1", metav1.GetOptions{})
+		obj, err := m.dynClient.Resource(buildGVR).Namespace(ns).Get(ctx, buildName, metav1.GetOptions{})
 		if err == nil {
 			phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
 			switch phase {
 			case "Complete":
-				slog.Info("build completed", "build", name+"-1", "image", imageRef)
+				slog.Info("build completed", "build", buildName, "image", imageRef)
 				return imageRef, nil
 			case "Failed", "Error", "Cancelled":
 				msg, _, _ := unstructured.NestedString(obj.Object, "status", "message")
-				return "", fmt.Errorf("build %s failed: %s — %s", name+"-1", phase, msg)
+				return "", fmt.Errorf("build %s failed: %s — %s", buildName, phase, msg)
 			}
 		}
 		time.Sleep(10 * time.Second)
 	}
-	return "", fmt.Errorf("build %s timed out after 10 minutes", name+"-1")
+	return "", fmt.Errorf("build %s timed out after 30 minutes", buildName)
 }
 
 // --- manifest helpers ---
