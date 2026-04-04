@@ -538,6 +538,8 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		database.SetRepoMemory(repo, fmt.Sprintf("deploy_option_%s_error", opt.ID), errMsg)
 		slog.Warn("deployment option failed", "option", opt.Name, "error", errMsg)
 		jm.sandbox.TeardownSandbox(sandboxNS)
+		// Clean up /tmp deploy clones between attempts
+		sandbox.CleanDeployClones(repo)
 		// Wait for namespace deletion before trying next option
 		time.Sleep(5 * time.Second)
 	}

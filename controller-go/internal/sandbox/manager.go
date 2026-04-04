@@ -250,6 +250,7 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 		"endpoints":       map[string]string{},
 	}
 
+	lastStepWasManifest := false
 	for i, step := range steps {
 		stepType, _ := step["type"].(string)
 		content, _ := step["content"].(string)
@@ -266,6 +267,7 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 		switch stepType {
 		case "manifest":
 			stepErr = applyManifests(m.client, m.dynClient, m.disco, ns, content)
+			lastStepWasManifest = true
 		case "wait":
 			timeout := 120
 			if t, ok := step["timeout_seconds"].(float64); ok {
@@ -274,11 +276,19 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 			if !waitForReady(m.client, ns, content, timeout) {
 				stepErr = fmt.Errorf("timeout waiting for %s", content)
 			}
+			lastStepWasManifest = false
 		case "shell", "command":
+			// Allow K8s API to propagate resources from prior manifest steps
+			if lastStepWasManifest {
+				time.Sleep(2 * time.Second)
+				lastStepWasManifest = false
+			}
 			if !cloneOK {
 				slog.Warn("skipping command step — repo clone failed", "step", i+1, "desc", desc)
 				break
 			}
+			// Clean up any stale /tmp clones from AI-generated git commands in prior attempts
+			cleanTmpClones(repo)
 			slog.Info("executing command step", "step", i+1, "desc", desc)
 			cmdStr, workDir := stripCdPrefix(content, cloneDir)
 			// Auto-run helm dependency build before helm install/upgrade
@@ -712,6 +722,39 @@ func cloneRepoForDeploy(repo string) (string, bool) {
 	}
 	slog.Info("repo cloned for deployment", "dir", cloneDir)
 	return cloneDir, true
+}
+
+// CleanDeployClones removes /tmp/opinai-deploy-* directories left from prior attempts.
+func CleanDeployClones(repo string) {
+	entries, err := filepath.Glob(filepath.Join(os.TempDir(), "opinai-deploy-*"))
+	if err == nil {
+		for _, e := range entries {
+			os.RemoveAll(e)
+		}
+	}
+	cleanTmpClones(repo)
+}
+
+// cleanTmpClones removes stale repo clones from /tmp that AI-generated command steps
+// may have created (e.g. "git clone ... /tmp/<repo-name>").
+func cleanTmpClones(repo string) {
+	if repo == "" {
+		return
+	}
+	repoShort := repo
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		repoShort = repo[idx+1:]
+	}
+	// Clean common clone targets AI might use
+	for _, pattern := range []string{
+		filepath.Join(os.TempDir(), repoShort),
+		filepath.Join(os.TempDir(), strings.ToLower(repoShort)),
+	} {
+		if info, err := os.Stat(pattern); err == nil && info.IsDir() {
+			os.RemoveAll(pattern)
+			slog.Info("cleaned stale tmp clone", "path", pattern)
+		}
+	}
 }
 
 // commandEnv builds the environment for command step execution.
