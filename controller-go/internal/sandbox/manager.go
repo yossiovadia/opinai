@@ -251,6 +251,11 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 			desc = fmt.Sprintf("Step %d", i+1)
 		}
 
+		// Replace namespace placeholders in step content
+		content = strings.ReplaceAll(content, "NAMESPACE_PLACEHOLDER", ns)
+		content = strings.ReplaceAll(content, "${NAMESPACE}", ns)
+		content = strings.ReplaceAll(content, "$NAMESPACE", ns)
+
 		var stepErr error
 		switch stepType {
 		case "build":

@@ -29,6 +29,10 @@ For deployment steps you MUST:
   - Example: build step with name "api-server", then a Deployment manifest with image: IMAGE_PLACEHOLDER
 - For helm charts: use "helm install" or "helm upgrade --install" commands (helm is available)
 - For kustomize: use "kubectl apply -k" commands (kubectl is available)
+- When you need the sandbox namespace in manifests or commands, use NAMESPACE_PLACEHOLDER — it will be auto-replaced with the actual sandbox namespace at deploy time
+  - In inline YAML: "namespace: NAMESPACE_PLACEHOLDER"
+  - In commands: "kubectl rollout status -n NAMESPACE_PLACEHOLDER deployment/my-app"
+  - Do NOT use $NAMESPACE, ${NAMESPACE}, or hardcoded namespace names — always use NAMESPACE_PLACEHOLDER
 
 Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with an "options" array. Each option: id, name, description, estimated_time, best_for, steps (array of {type, content, required, description}), requirements, risks, recommended (bool), test_endpoint, all_endpoints.
 
