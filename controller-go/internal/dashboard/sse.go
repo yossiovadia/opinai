@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	k8sRest "k8s.io/client-go/rest"
 	k8sClientcmd "k8s.io/client-go/tools/clientcmd"
 
+	"github.com/yossiovadia/opinai/controller-go/internal/agent"
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
@@ -49,22 +51,119 @@ func (s *Server) handleAnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	}
 	sseHeaders(w)
 
-	// Stage 1: Reading repo
+	// Stage 1: Clone repo for deep analysis
 	writeSSE(w, "progress", map[string]string{
-		"stage": "reading_repo", "message": "Reading repository files...",
+		"stage": "cloning", "message": "Cloning repository for deep analysis...",
+	})
+
+	cloneDir, err := cloneRepoForAnalysis(repo)
+	if err != nil {
+		slog.Warn("agent analysis: clone failed, falling back to shallow analysis", "error", err)
+		s.handleAnalyzeStreamFallback(w, r, repo)
+		return
+	}
+	defer os.RemoveAll(cloneDir)
+
+	// Stage 2: Agent-based deep analysis
+	writeSSE(w, "progress", map[string]string{
+		"stage": "analyzing", "message": "AI agent reading code and building project understanding...",
+	})
+
+	type analyzeResult struct {
+		analysis agent.RepoAnalysis
+		err      error
+	}
+	done := make(chan analyzeResult, 1)
+	go func() {
+		a, err := agent.AnalyzeRepo(cloneDir, repo, 15)
+		done <- analyzeResult{a, err}
+	}()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	start := time.Now()
+	var analysis agent.RepoAnalysis
+
+waitLoop:
+	for {
+		select {
+		case res := <-done:
+			analysis, err = res.analysis, res.err
+			break waitLoop
+		case <-ticker.C:
+			elapsed := int(time.Since(start).Seconds())
+			writeSSE(w, "progress", map[string]string{
+				"stage":   "analyzing",
+				"message": fmt.Sprintf("AI agent analyzing code... (%ds elapsed, reading files)", elapsed),
+			})
+		case <-r.Context().Done():
+			return
+		}
+	}
+
+	if err != nil {
+		slog.Warn("agent analysis failed, falling back to shallow analysis", "error", err)
+		s.handleAnalyzeStreamFallback(w, r, repo)
+		return
+	}
+
+	// Stage 3: Save to repo_memory
+	writeSSE(w, "progress", map[string]string{
+		"stage": "saving", "message": "Saving analysis results...",
+	})
+
+	flatMap := analysis.ToFlatMap()
+	for k, v := range flatMap {
+		if v != "" {
+			database.SetRepoMemory(repo, k, v)
+		}
+	}
+
+	// Also run the deployment plan analysis for backward compat
+	writeSSE(w, "progress", map[string]string{
+		"stage": "deployment_plan", "message": "Generating deployment options...",
+	})
+
+	files := fetchRepoDeployFiles(repo)
+	readme := fetchRepoReadme(repo)
+	clusterState := readClusterState()
+	profile := loadProfile(repo)
+	profileJSON, _ := json.Marshal(profile)
+
+	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON))
+	if planErr == nil && planData != nil {
+		planBytes, _ := json.Marshal(planData)
+		database.SaveDeploymentPlan(repo, string(planBytes))
+		autoUpdateProfileFromPlan(repo, planData)
+	}
+
+	opts := 0
+	if planData != nil {
+		if o, ok := planData["options"].([]any); ok {
+			opts = len(o)
+		}
+	}
+
+	writeSSE(w, "done", map[string]string{
+		"message": fmt.Sprintf("Deep analysis complete — %d endpoints found, %d deployment options, %d tool calls",
+			len(analysis.APISurface.Endpoints), opts, analysis.ToolCalls),
+	})
+}
+
+// handleAnalyzeStreamFallback is the original shallow analysis (README + deps only).
+func (s *Server) handleAnalyzeStreamFallback(w http.ResponseWriter, r *http.Request, repo string) {
+	writeSSE(w, "progress", map[string]string{
+		"stage": "reading_repo", "message": "Reading repository files (fallback)...",
 	})
 
 	files := fetchRepoDeployFiles(repo)
 	readme := fetchRepoReadme(repo)
 
-	// Stage 2: Reading cluster
 	writeSSE(w, "progress", map[string]string{
 		"stage": "reading_cluster", "message": "Scanning cluster operators and CRDs...",
 	})
-
 	clusterState := readClusterState()
 
-	// Stage 3: Calling AI (with keepalive ticker)
 	writeSSE(w, "progress", map[string]string{
 		"stage": "calling_ai", "message": "AI analyzing deployment options...",
 	})
@@ -88,12 +187,12 @@ func (s *Server) handleAnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	var planData map[string]any
 	var err error
 
-waitLoop:
+fallbackWait:
 	for {
 		select {
 		case res := <-aiDone:
 			planData, err = res.data, res.err
-			break waitLoop
+			break fallbackWait
 		case <-ticker.C:
 			elapsed := int(time.Since(aiStart).Seconds())
 			writeSSE(w, "progress", map[string]string{
@@ -110,7 +209,6 @@ waitLoop:
 		return
 	}
 
-	// Stage 4: Saving
 	writeSSE(w, "progress", map[string]string{
 		"stage": "saving", "message": "Saving deployment plan...",
 	})
@@ -123,6 +221,29 @@ waitLoop:
 	writeSSE(w, "done", map[string]string{
 		"message": fmt.Sprintf("Analysis complete — %d options generated", len(opts)),
 	})
+}
+
+// cloneRepoForAnalysis clones a repo to a temp directory for agent analysis.
+func cloneRepoForAnalysis(repo string) (string, error) {
+	dir, err := os.MkdirTemp("", "opinai-analyze-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
+
+	cloneURL := "https://github.com/" + repo + ".git"
+	token := os.Getenv("GITHUB_TOKEN")
+	if token != "" {
+		cloneURL = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
+	}
+
+	cmd := exec.Command("git", "clone", "--depth=1", cloneURL, dir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("git clone: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	return dir, nil
 }
 
 // --- GET /api/reproduce-stream?repo=X&issue=N ---

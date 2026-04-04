@@ -178,6 +178,7 @@ func Run() {
 
 	// Step 4-5: Agent investigation (with fallback to legacy flow)
 	repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+	richCtx := formatRichRepoContext(repoCtx)
 	var stateCtx string
 	if issueState == "closed" {
 		stateCtx = "\n\nThis issue is CLOSED (presumably fixed). Analyze whether the fix is correct. " +
@@ -185,7 +186,7 @@ func Run() {
 	} else {
 		stateCtx = "\n\nThis is an OPEN issue. Reproduce the bug and confirm or deny it.\n"
 	}
-	agentRepoCtx := repoCtx + stateCtx
+	agentRepoCtx := richCtx + stateCtx
 
 	slog.Info("starting agent investigation")
 	agentResult := agent.Investigate(title, body, serverURL, "/tmp/opinai-repo", agentRepoCtx, 10)
@@ -1034,6 +1035,29 @@ func isK8sProject() bool {
 		return b
 	}
 	return false
+}
+
+// formatRichRepoContext enhances the raw repo context with structured information
+// from the rich_analysis key if available, falling back to the raw context.
+func formatRichRepoContext(rawCtx string) string {
+	richJSON := extractMemoryValue(rawCtx, "rich_analysis")
+	if richJSON == "" {
+		return rawCtx
+	}
+
+	var analysis agent.RepoAnalysis
+	if err := json.Unmarshal([]byte(richJSON), &analysis); err != nil {
+		return rawCtx
+	}
+
+	formatted := analysis.FormatContext()
+	if formatted == "" {
+		return rawCtx
+	}
+
+	// Prepend rich context, then include the raw context for any keys
+	// not covered by the structured analysis (e.g. working_install_command)
+	return "## Project Analysis:\n" + formatted + "\n## Additional context:\n" + rawCtx
 }
 
 func deployFromPlan(issueTitle, issueBody, planJSON string) string {
