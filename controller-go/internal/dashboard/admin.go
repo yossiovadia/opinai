@@ -341,7 +341,7 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call AI
-	planData, err := ai.AnalyzeDeployment(req.Repo, readme, files, clusterState, string(profileJSON), richAnalysis)
+	planData, err := ai.AnalyzeDeployment(req.Repo, readme, files, clusterState, string(profileJSON), richAnalysis, "")
 	if err != nil {
 		jsonError(w, "Analysis failed: "+err.Error(), 500)
 		return

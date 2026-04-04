@@ -19,6 +19,19 @@ The following was discovered by an AI agent that read the source code:
 {{.RichAnalysis}}
 Use this to understand what RBAC, CRDs, endpoints, and resources the application needs at runtime.
 {{end}}
+{{if .RenderedManifests}}
+## Project's Own K8s Manifests (rendered from Helm/Kustomize)
+The following are the project's actual deployment manifests. Use these as the SOURCE OF TRUTH for:
+- ServiceAccounts, ClusterRoles, ClusterRoleBindings (copy exactly, do NOT guess RBAC)
+- Resource limits and requests (use the project's own values)
+- Container ports and probe definitions
+- Any CRDs or custom resources the app creates
+- Environment variables the containers expect
+
+```yaml
+{{.RenderedManifests}}
+```
+{{end}}
 
 SANDBOX ENVIRONMENT CONSTRAINTS — READ CAREFULLY:
 Steps execute inside a controller pod that has ONLY these tools: kubectl, helm, curl, jq, git, bash, python3, openssl.

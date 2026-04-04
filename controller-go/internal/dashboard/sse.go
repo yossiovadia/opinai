@@ -138,7 +138,7 @@ waitLoop:
 		richAnalysis = mem["rich_analysis"]
 	}
 
-	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), richAnalysis)
+	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), richAnalysis, cloneDir)
 	if planErr == nil && planData != nil {
 		planBytes, _ := json.Marshal(planData)
 		database.SaveDeploymentPlan(repo, string(planBytes))
@@ -190,7 +190,7 @@ func (s *Server) handleAnalyzeStreamFallback(w http.ResponseWriter, r *http.Requ
 		if mem, _ := database.GetRepoMemory(repo, &raKey2); len(mem) > 0 {
 			ra = mem["rich_analysis"]
 		}
-		data, err := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), ra)
+		data, err := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), ra, "")
 		aiDone <- aiResult{data, err}
 	}()
 

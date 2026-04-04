@@ -3,6 +3,10 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
@@ -10,7 +14,8 @@ import (
 
 // AnalyzeDeployment generates deployment options for a repo.
 // richAnalysis is optional context from the agent's deep code analysis.
-func AnalyzeDeployment(repo, readme string, files map[string]string, clusterState map[string][]string, profileJSON, richAnalysis string) (map[string]any, error) {
+// cloneDir is optional path to a local clone for rendering Helm/kustomize manifests.
+func AnalyzeDeployment(repo, readme string, files map[string]string, clusterState map[string][]string, profileJSON, richAnalysis, cloneDir string) (map[string]any, error) {
 	cfg := LoadConfig()
 	if !cfg.Available() {
 		return nil, fmt.Errorf("no AI provider configured")
@@ -35,11 +40,14 @@ func AnalyzeDeployment(repo, readme string, files map[string]string, clusterStat
 	}
 	namespaces := strings.Join(clusterState["namespaces"], ", ")
 
+	// Try to render actual K8s manifests from the cloned repo
+	renderedManifests := renderProjectManifests(cloneDir)
+
 	prompt := prompts.Render("analyze_deployment.txt", map[string]string{
 		"Repo": repo, "ProfileJSON": profileJSON,
 		"Readme": readme, "FilesSummary": filesSummary,
 		"CRDs": crds, "Operators": operators, "Namespaces": namespaces,
-		"RichAnalysis": richAnalysis,
+		"RichAnalysis": richAnalysis, "RenderedManifests": renderedManifests,
 	})
 
 	content, err := callWithConfig(cfg, prompt, 8192)
@@ -98,6 +106,101 @@ func ParseAIJSON(raw string) (map[string]any, error) {
 		"options":  options,
 		"_warning": fmt.Sprintf("AI response could not be fully parsed. Extracted %d option(s).", len(options)),
 	}, nil
+}
+
+// renderProjectManifests tries to render K8s manifests from a cloned repo.
+// Tries Helm template, then kustomize, then raw YAML files. Returns empty if nothing found.
+func renderProjectManifests(cloneDir string) string {
+	if cloneDir == "" {
+		return ""
+	}
+
+	// Try Helm chart
+	helmDirs := []string{"deploy", "chart", "charts", "helm", "deploy/helm", "."}
+	for _, dir := range helmDirs {
+		chartFile := filepath.Join(cloneDir, dir, "Chart.yaml")
+		if _, err := os.Stat(chartFile); err == nil {
+			chartDir := filepath.Join(cloneDir, dir)
+			// Run helm dependency build first (best-effort)
+			depCmd := exec.Command("helm", "dependency", "build", chartDir)
+			depCmd.Dir = cloneDir
+			depCmd.CombinedOutput()
+
+			cmd := exec.Command("helm", "template", "opinai-render", chartDir)
+			cmd.Dir = cloneDir
+			out, err := cmd.CombinedOutput()
+			if err == nil && len(out) > 0 {
+				slog.Info("rendered Helm chart for deployment analysis", "dir", dir, "bytes", len(out))
+				return truncateManifests(string(out))
+			}
+			slog.Warn("helm template failed", "dir", dir, "error", err, "output", truncate(string(out), 200))
+		}
+	}
+
+	// Try kustomize
+	kustomizeDirs := []string{"config/default", "config/manager", "deploy", "kustomize", "."}
+	for _, dir := range kustomizeDirs {
+		kFile := filepath.Join(cloneDir, dir, "kustomization.yaml")
+		if _, err := os.Stat(kFile); err != nil {
+			kFile = filepath.Join(cloneDir, dir, "kustomization.yml")
+			if _, err := os.Stat(kFile); err != nil {
+				continue
+			}
+		}
+		cmd := exec.Command("kubectl", "kustomize", filepath.Join(cloneDir, dir))
+		out, err := cmd.CombinedOutput()
+		if err == nil && len(out) > 0 {
+			slog.Info("rendered kustomize manifests for deployment analysis", "dir", dir, "bytes", len(out))
+			return truncateManifests(string(out))
+		}
+		slog.Warn("kubectl kustomize failed", "dir", dir, "error", err)
+	}
+
+	// Fall back to raw YAML files
+	rawDirs := []string{"deploy", "manifests", "k8s", "config"}
+	var collected strings.Builder
+	for _, dir := range rawDirs {
+		dirPath := filepath.Join(cloneDir, dir)
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".yml") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dirPath, name))
+			if err != nil {
+				continue
+			}
+			collected.WriteString(fmt.Sprintf("--- %s/%s ---\n", dir, name))
+			collected.Write(data)
+			collected.WriteString("\n")
+			if collected.Len() > 8192 {
+				break
+			}
+		}
+		if collected.Len() > 8192 {
+			break
+		}
+	}
+	if collected.Len() > 0 {
+		slog.Info("collected raw YAML manifests for deployment analysis", "bytes", collected.Len())
+		return truncateManifests(collected.String())
+	}
+	return ""
+}
+
+func truncateManifests(s string) string {
+	const maxLen = 8192
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "\n... (truncated)"
 }
 
 func extractOptionBlocks(text string) []map[string]any {
