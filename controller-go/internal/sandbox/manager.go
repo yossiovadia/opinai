@@ -287,8 +287,7 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 				slog.Warn("skipping command step — repo clone failed", "step", i+1, "desc", desc)
 				break
 			}
-			// Clean up any stale /tmp clones from AI-generated git commands in prior attempts
-			cleanTmpClones(repo)
+			// Note: /tmp clones are cleaned between options by CleanDeployClones, not per-step
 			slog.Info("executing command step", "step", i+1, "desc", desc)
 			cmdStr, workDir := stripCdPrefix(content, cloneDir)
 			// Auto-run helm dependency build before helm install/upgrade
@@ -810,15 +809,35 @@ func injectNamespace(cmd, ns string) string {
 	// Check if command uses oc or kubectl
 	for _, prefix := range []string{"oc ", "kubectl "} {
 		if strings.Contains(cmd, prefix) {
-			// Skip if -n or --namespace already specified
-			if strings.Contains(cmd, " -n ") || strings.Contains(cmd, " --namespace") {
-				return cmd
+			// Replace any existing -n <namespace> or --namespace <namespace> with sandbox NS
+			// This prevents AI-hardcoded namespaces from bypassing sandbox isolation
+			cmd = replaceExistingNamespace(cmd, ns)
+			if !strings.Contains(cmd, " -n ") && !strings.Contains(cmd, " --namespace") {
+				// Insert -n after the first oc/kubectl subcommand
+				cmd = strings.Replace(cmd, prefix, prefix+"-n "+ns+" ", 1)
 			}
-			// Insert -n after the first oc/kubectl subcommand
-			return strings.Replace(cmd, prefix, prefix+"-n "+ns+" ", 1)
+			return cmd
 		}
 	}
 	return cmd
+}
+
+// replaceExistingNamespace replaces -n <ns> or --namespace <ns> or --namespace=<ns> with the sandbox NS.
+func replaceExistingNamespace(cmd, ns string) string {
+	// Handle -n <value>
+	parts := strings.Fields(cmd)
+	var result []string
+	for i := 0; i < len(parts); i++ {
+		if (parts[i] == "-n" || parts[i] == "--namespace") && i+1 < len(parts) {
+			result = append(result, parts[i], ns)
+			i++ // skip original namespace value
+		} else if strings.HasPrefix(parts[i], "--namespace=") {
+			result = append(result, "--namespace="+ns)
+		} else {
+			result = append(result, parts[i])
+		}
+	}
+	return strings.Join(result, " ")
 }
 
 // --- Helm helpers ---

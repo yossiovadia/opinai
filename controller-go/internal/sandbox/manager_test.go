@@ -82,10 +82,10 @@ func TestInjectNamespace(t *testing.T) {
 		t.Errorf("oc inject: %q", result)
 	}
 
-	// kubectl with existing -n
+	// kubectl with existing -n — should REPLACE with sandbox namespace
 	result = injectNamespace("kubectl -n prod apply -f .", "test-ns")
-	if result != "kubectl -n prod apply -f ." {
-		t.Errorf("should not inject when -n exists: %q", result)
+	if result != "kubectl -n test-ns apply -f ." {
+		t.Errorf("should replace existing namespace: %q", result)
 	}
 
 	// Non-k8s command
