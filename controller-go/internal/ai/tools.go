@@ -187,12 +187,23 @@ func parseToolResponse(body []byte) (string, []ToolCall, string, error) {
 	return text, calls, resp.StopReason, nil
 }
 
+// IterationHook is called at each iteration with (iteration, maxIterations).
+// If it returns a non-empty string, that string is injected as an additional
+// user message before the next AI call (useful for budget warnings).
+type IterationHook func(iteration, maxIterations int) string
+
 // RunAgentLoop runs a multi-turn conversation with tool use until the AI stops
 // calling tools or maxIterations is reached.
 // The toolHandler function receives a ToolCall and returns the result string.
-func RunAgentLoop(cfg Config, system string, userMessage string, tools []ToolDef, toolHandler func(ToolCall) (string, bool), maxIterations int, maxTokens int) (string, int, int, error) {
+// An optional iterationHook can inject messages at specific iterations.
+func RunAgentLoop(cfg Config, system string, userMessage string, tools []ToolDef, toolHandler func(ToolCall) (string, bool), maxIterations int, maxTokens int, hooks ...IterationHook) (string, int, int, error) {
 	if !cfg.Available() {
 		return "", 0, 0, fmt.Errorf("no AI provider configured")
+	}
+
+	var hook IterationHook
+	if len(hooks) > 0 {
+		hook = hooks[0]
 	}
 
 	messages := []MultiMessage{
@@ -250,6 +261,14 @@ func RunAgentLoop(cfg Config, system string, userMessage string, tools []ToolDef
 			toolResults = append(toolResults, entry)
 		}
 		messages = append(messages, MultiMessage{Role: "user", Content: toolResults})
+
+		// Check iteration hook for warning injection
+		if hook != nil {
+			if warning := hook(i+1, maxIterations); warning != "" {
+				slog.Info("agent loop: injecting iteration hook message", "iteration", i+1)
+				messages = append(messages, MultiMessage{Role: "user", Content: warning})
+			}
+		}
 	}
 
 	slog.Warn("agent loop hit max iterations", "max", maxIterations, "tool_calls", totalToolCalls)

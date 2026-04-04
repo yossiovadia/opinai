@@ -99,7 +99,7 @@ type BugHintsInfo struct {
 
 // AnalyzeRepo runs the agent loop to deeply understand a repository.
 // repoDir is the path to the cloned repository.
-// maxIter caps the number of AI round-trips (default 15).
+// maxIter caps the number of AI round-trips (default 20).
 func AnalyzeRepo(repoDir string, repoName string, maxIter int) (RepoAnalysis, error) {
 	cfg := ai.LoadConfig()
 	if !cfg.Available() {
@@ -107,7 +107,7 @@ func AnalyzeRepo(repoDir string, repoName string, maxIter int) (RepoAnalysis, er
 	}
 
 	if maxIter <= 0 {
-		maxIter = 15
+		maxIter = 20
 	}
 
 	systemPrompt := prompts.Render("agent_analyze.txt", map[string]string{
@@ -180,8 +180,17 @@ func AnalyzeRepo(repoDir string, repoName string, maxIter int) (RepoAnalysis, er
 		return state.HandleTool(call)
 	}
 
+	// Warn the AI when it's running low on iterations so it outputs JSON
+	budgetWarning := func(iteration, maxIterations int) string {
+		remaining := maxIterations - iteration
+		if remaining == 3 {
+			return "WARNING: You have 3 iterations remaining. Output your JSON analysis NOW with what you have learned so far. Do NOT make any more tool calls — write the final JSON object immediately."
+		}
+		return ""
+	}
+
 	finalText, iterations, toolCalls, err := ai.RunAgentLoop(
-		cfg, systemPrompt, userMsg, tools, handler, maxIter, 8192,
+		cfg, systemPrompt, userMsg, tools, handler, maxIter, 8192, budgetWarning,
 	)
 	if err != nil {
 		slog.Error("agent: analysis loop error", "error", err)

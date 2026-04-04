@@ -16,6 +16,7 @@ RULES:
 - Use grep to find patterns (e.g. "func.*Handler", "app.get", "@app.route", "endpoint")
 - Be thorough but efficient — you have limited tool calls
 - Don't read every file — focus on understanding the structure
+- You MUST output the JSON analysis before your tool call budget runs out. After reading 5-8 key files, stop exploring and write the JSON. Do NOT use all your iterations reading files.
 
 Output a JSON analysis (no markdown fences, just raw JSON):
 {
