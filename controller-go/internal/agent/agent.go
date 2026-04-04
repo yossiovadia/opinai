@@ -32,7 +32,7 @@ func Investigate(title, body, serverURL, repoDir, repoContext string, maxIter in
 	}
 
 	if maxIter <= 0 {
-		maxIter = 10
+		maxIter = 200
 	}
 
 	// Build system prompt

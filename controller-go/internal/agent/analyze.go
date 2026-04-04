@@ -107,7 +107,7 @@ func AnalyzeRepo(repoDir string, repoName string, maxIter int) (RepoAnalysis, er
 	}
 
 	if maxIter <= 0 {
-		maxIter = 20
+		maxIter = 200
 	}
 
 	systemPrompt := prompts.Render("agent_analyze.txt", map[string]string{
