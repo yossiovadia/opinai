@@ -131,7 +131,14 @@ waitLoop:
 	profile := config.LoadRepoProfile(repo)
 	profileJSON, _ := json.Marshal(profile)
 
-	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON))
+	// Feed rich_analysis from the agent to the deployment planner
+	richAnalysis := ""
+	raKey := "rich_analysis"
+	if mem, _ := database.GetRepoMemory(repo, &raKey); len(mem) > 0 {
+		richAnalysis = mem["rich_analysis"]
+	}
+
+	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), richAnalysis)
 	if planErr == nil && planData != nil {
 		planBytes, _ := json.Marshal(planData)
 		database.SaveDeploymentPlan(repo, string(planBytes))
@@ -178,7 +185,12 @@ func (s *Server) handleAnalyzeStreamFallback(w http.ResponseWriter, r *http.Requ
 	}
 	aiDone := make(chan aiResult, 1)
 	go func() {
-		data, err := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON))
+		raKey2 := "rich_analysis"
+		ra := ""
+		if mem, _ := database.GetRepoMemory(repo, &raKey2); len(mem) > 0 {
+			ra = mem["rich_analysis"]
+		}
+		data, err := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), ra)
 		aiDone <- aiResult{data, err}
 	}()
 

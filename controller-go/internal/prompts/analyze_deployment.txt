@@ -13,6 +13,12 @@ Cluster state:
 - CRDs: {{.CRDs}}
 - Operators: {{.Operators}}
 - Namespaces: {{.Namespaces}}
+{{if .RichAnalysis}}
+## Deep Analysis Context
+The following was discovered by an AI agent that read the source code:
+{{.RichAnalysis}}
+Use this to understand what RBAC, CRDs, endpoints, and resources the application needs at runtime.
+{{end}}
 
 SANDBOX ENVIRONMENT CONSTRAINTS — READ CAREFULLY:
 Steps execute inside a controller pod that has ONLY these tools: kubectl, helm, curl, jq, git, bash, python3, openssl.

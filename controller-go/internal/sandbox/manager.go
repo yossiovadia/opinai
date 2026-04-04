@@ -410,6 +410,8 @@ func (m *Manager) TeardownSandbox(ns string) bool {
 
 	// Clean up cluster-scoped RBAC resources created for this sandbox
 	m.cleanupClusterRBAC(ctx, ns)
+	// Also clean up Helm-managed cluster RBAC (Helm uses annotations, not our labels)
+	m.cleanupHelmClusterRBAC(ctx, ns)
 
 	slog.Info("torn down sandbox", "namespace", ns)
 	return true
@@ -432,6 +434,32 @@ func (m *Manager) cleanupClusterRBAC(ctx context.Context, ns string) {
 		for _, cr := range crs.Items {
 			m.client.RbacV1().ClusterRoles().Delete(ctx, cr.Name, metav1.DeleteOptions{})
 			slog.Info("deleted sandbox ClusterRole", "name", cr.Name)
+		}
+	}
+}
+
+// cleanupHelmClusterRBAC deletes ClusterRoles and ClusterRoleBindings owned by
+// Helm releases in the given namespace (identified by meta.helm.sh/release-namespace annotation).
+func (m *Manager) cleanupHelmClusterRBAC(ctx context.Context, ns string) {
+	// ClusterRoleBindings
+	crbs, err := m.client.RbacV1().ClusterRoleBindings().List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, crb := range crbs.Items {
+			if crb.Annotations["meta.helm.sh/release-namespace"] == ns {
+				m.client.RbacV1().ClusterRoleBindings().Delete(ctx, crb.Name, metav1.DeleteOptions{})
+				slog.Info("deleted Helm-managed ClusterRoleBinding", "name", crb.Name, "namespace", ns)
+			}
+		}
+	}
+
+	// ClusterRoles
+	crs, err := m.client.RbacV1().ClusterRoles().List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, cr := range crs.Items {
+			if cr.Annotations["meta.helm.sh/release-namespace"] == ns {
+				m.client.RbacV1().ClusterRoles().Delete(ctx, cr.Name, metav1.DeleteOptions{})
+				slog.Info("deleted Helm-managed ClusterRole", "name", cr.Name, "namespace", ns)
+			}
 		}
 	}
 }

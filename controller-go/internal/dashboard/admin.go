@@ -333,8 +333,15 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 	// Read cluster state
 	clusterState := readClusterState()
 
+	// Load rich_analysis for deployment context
+	richAnalysis := ""
+	raKey := "rich_analysis"
+	if mem, _ := database.GetRepoMemory(req.Repo, &raKey); len(mem) > 0 {
+		richAnalysis = mem["rich_analysis"]
+	}
+
 	// Call AI
-	planData, err := ai.AnalyzeDeployment(req.Repo, readme, files, clusterState, string(profileJSON))
+	planData, err := ai.AnalyzeDeployment(req.Repo, readme, files, clusterState, string(profileJSON), richAnalysis)
 	if err != nil {
 		jsonError(w, "Analysis failed: "+err.Error(), 500)
 		return

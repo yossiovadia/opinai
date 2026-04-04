@@ -9,7 +9,8 @@ import (
 )
 
 // AnalyzeDeployment generates deployment options for a repo.
-func AnalyzeDeployment(repo, readme string, files map[string]string, clusterState map[string][]string, profileJSON string) (map[string]any, error) {
+// richAnalysis is optional context from the agent's deep code analysis.
+func AnalyzeDeployment(repo, readme string, files map[string]string, clusterState map[string][]string, profileJSON, richAnalysis string) (map[string]any, error) {
 	cfg := LoadConfig()
 	if !cfg.Available() {
 		return nil, fmt.Errorf("no AI provider configured")
@@ -38,6 +39,7 @@ func AnalyzeDeployment(repo, readme string, files map[string]string, clusterStat
 		"Repo": repo, "ProfileJSON": profileJSON,
 		"Readme": readme, "FilesSummary": filesSummary,
 		"CRDs": crds, "Operators": operators, "Namespaces": namespaces,
+		"RichAnalysis": richAnalysis,
 	})
 
 	content, err := callWithConfig(cfg, prompt, 8192)
