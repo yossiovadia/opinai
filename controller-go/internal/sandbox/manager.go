@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	appsv1 "k8s.io/api/apps/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -47,7 +48,12 @@ var AllowedKinds = map[string]bool{
 
 // SkippedKinds are silently skipped (cluster-scoped or already handled).
 var SkippedKinds = map[string]bool{
-	"Namespace": true, "ClusterRole": true, "ClusterRoleBinding": true,
+	"Namespace": true,
+}
+
+// ClusterScopedRBACKinds are created at cluster scope with sandbox-prefixed names.
+var ClusterScopedRBACKinds = map[string]bool{
+	"ClusterRole": true, "ClusterRoleBinding": true,
 }
 
 // Manager handles sandbox namespace lifecycle.
@@ -401,8 +407,33 @@ func (m *Manager) TeardownSandbox(ns string) bool {
 		slog.Error("failed to delete namespace", "namespace", ns, "error", err)
 		return false
 	}
+
+	// Clean up cluster-scoped RBAC resources created for this sandbox
+	m.cleanupClusterRBAC(ctx, ns)
+
 	slog.Info("torn down sandbox", "namespace", ns)
 	return true
+}
+
+// cleanupClusterRBAC deletes ClusterRoles and ClusterRoleBindings labeled for a sandbox namespace.
+func (m *Manager) cleanupClusterRBAC(ctx context.Context, ns string) {
+	selector := "opinai.dev/sandbox-namespace=" + ns
+
+	crbs, err := m.client.RbacV1().ClusterRoleBindings().List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err == nil {
+		for _, crb := range crbs.Items {
+			m.client.RbacV1().ClusterRoleBindings().Delete(ctx, crb.Name, metav1.DeleteOptions{})
+			slog.Info("deleted sandbox ClusterRoleBinding", "name", crb.Name)
+		}
+	}
+
+	crs, err := m.client.RbacV1().ClusterRoles().List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err == nil {
+		for _, cr := range crs.Items {
+			m.client.RbacV1().ClusterRoles().Delete(ctx, cr.Name, metav1.DeleteOptions{})
+			slog.Info("deleted sandbox ClusterRole", "name", cr.Name)
+		}
+	}
 }
 
 // SandboxInfo describes an active sandbox.
@@ -769,6 +800,9 @@ func applySingleManifest(client kubernetes.Interface, dynClient dynamic.Interfac
 		slog.Info("skipping resource — cluster-scoped or already exists", "kind", kind)
 		return nil
 	}
+	if ClusterScopedRBACKinds[kind] {
+		return applyClusterScopedRBAC(client, ns, doc, kind)
+	}
 	if !AllowedKinds[kind] {
 		if dynClient == nil || disco == nil {
 			slog.Warn("skipping CRD resource — dynamic client not available", "kind", kind)
@@ -839,6 +873,79 @@ func applySingleManifest(client kubernetes.Interface, dynClient dynamic.Interfac
 	default:
 		return fmt.Errorf("kind %q not yet supported for apply", kind)
 	}
+}
+
+// applyClusterScopedRBAC creates ClusterRole or ClusterRoleBinding resources
+// with sandbox-prefixed names and labels for cleanup.
+func applyClusterScopedRBAC(client kubernetes.Interface, sandboxNS string, doc map[string]any, kind string) error {
+	meta, _ := doc["metadata"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+		doc["metadata"] = meta
+	}
+	originalName, _ := meta["name"].(string)
+	if originalName == "" {
+		return fmt.Errorf("ClusterRole/ClusterRoleBinding missing name")
+	}
+
+	// Prefix name with sandbox namespace to avoid collisions
+	prefixedName := sandboxNS + "-" + originalName
+	if len(prefixedName) > 253 {
+		prefixedName = prefixedName[:253]
+	}
+	meta["name"] = prefixedName
+
+	// Add labels for cleanup
+	labels, _ := meta["labels"].(map[string]any)
+	if labels == nil {
+		labels = map[string]any{}
+		meta["labels"] = labels
+	}
+	labels[ManagedLabelKey] = "true"
+	labels["opinai.dev/sandbox-namespace"] = sandboxNS
+
+	// Remove any namespace field (cluster-scoped)
+	delete(meta, "namespace")
+
+	data, _ := json.Marshal(doc)
+	ctx := context.Background()
+
+	switch kind {
+	case "ClusterRole":
+		var cr rbacv1.ClusterRole
+		if err := json.Unmarshal(data, &cr); err != nil {
+			return fmt.Errorf("parse ClusterRole: %w", err)
+		}
+		_, err := client.RbacV1().ClusterRoles().Create(ctx, &cr, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create ClusterRole %s: %w", prefixedName, err)
+		}
+		slog.Info("created sandbox ClusterRole", "name", prefixedName, "original", originalName)
+		return nil
+
+	case "ClusterRoleBinding":
+		var crb rbacv1.ClusterRoleBinding
+		if err := json.Unmarshal(data, &crb); err != nil {
+			return fmt.Errorf("parse ClusterRoleBinding: %w", err)
+		}
+		// Rewrite roleRef name if it matches the original (unprefixed) ClusterRole
+		if crb.RoleRef.Kind == "ClusterRole" {
+			crb.RoleRef.Name = sandboxNS + "-" + crb.RoleRef.Name
+		}
+		// Rewrite subject namespaces to sandbox namespace
+		for i := range crb.Subjects {
+			if crb.Subjects[i].Namespace == "" || crb.Subjects[i].Namespace != sandboxNS {
+				crb.Subjects[i].Namespace = sandboxNS
+			}
+		}
+		_, err := client.RbacV1().ClusterRoleBindings().Create(ctx, &crb, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("create ClusterRoleBinding %s: %w", prefixedName, err)
+		}
+		slog.Info("created sandbox ClusterRoleBinding", "name", prefixedName, "original", originalName)
+		return nil
+	}
+	return nil
 }
 
 // cloneRepoForDeploy clones the target repo into a temp directory for command steps.

@@ -131,9 +131,15 @@ func TestAllowedKinds(t *testing.T) {
 			t.Errorf("%s should be allowed", kind)
 		}
 	}
-	for _, kind := range []string{"Namespace", "ClusterRole", "ClusterRoleBinding"} {
-		if !SkippedKinds[kind] {
-			t.Errorf("%s should be skipped", kind)
+	if !SkippedKinds["Namespace"] {
+		t.Error("Namespace should be skipped")
+	}
+	for _, kind := range []string{"ClusterRole", "ClusterRoleBinding"} {
+		if !ClusterScopedRBACKinds[kind] {
+			t.Errorf("%s should be in ClusterScopedRBACKinds", kind)
+		}
+		if SkippedKinds[kind] {
+			t.Errorf("%s should NOT be in SkippedKinds (handled as cluster-scoped RBAC)", kind)
 		}
 	}
 	if AllowedKinds["Namespace"] {
