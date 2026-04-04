@@ -10,6 +10,12 @@ Here are the test results:
 
 Give a brief verdict. {{.VerdictOptions}}
 
+IMPORTANT distinctions:
+- "Test crashed" (infrastructure failure) is NOT the same as "test ran and showed no bug"
+- If the test script crashed, errored out, or failed to connect to the server, use INCONCLUSIVE with LOW confidence
+- Only use NOT_REPRODUCIBLE if the tests actually RAN and the expected bug behavior did not occur
+- Only use BUG_CONFIRMED if the tests clearly demonstrate the reported buggy behavior
+
 Include this exact line:
 Verdict: <YOUR_VERDICT>
 

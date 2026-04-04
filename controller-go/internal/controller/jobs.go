@@ -733,7 +733,7 @@ func parseMarker(logs, prefix, fallback string) string {
 }
 
 func parseVerdictMarker(logs, category string) string {
-	verdicts := []string{"BUG_CONFIRMED", "NOT_A_BUG", "NOT_REPRODUCIBLE", "FEATURE_REQUEST", "ERROR", "BUG_FIXED", "BUG_REGRESSION"}
+	verdicts := []string{"BUG_CONFIRMED", "NOT_A_BUG", "NOT_REPRODUCIBLE", "FEATURE_REQUEST", "ERROR", "INCONCLUSIVE", "BUG_FIXED", "BUG_REGRESSION"}
 	for _, line := range strings.Split(logs, "\n") {
 		if strings.Contains(line, "--- OPINAI VERDICT:") {
 			upper := strings.ToUpper(line)
@@ -763,6 +763,9 @@ func parseVerdictMarker(logs, category string) string {
 	}
 	if strings.Contains(lower, "not reproducible") || strings.Contains(lower, "not_reproducible") {
 		return "NOT_REPRODUCIBLE"
+	}
+	if strings.Contains(lower, "inconclusive") {
+		return "INCONCLUSIVE"
 	}
 	return "ERROR"
 }

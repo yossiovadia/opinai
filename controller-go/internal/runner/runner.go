@@ -250,10 +250,53 @@ func Run() {
 	}
 	slog.Info("test script generated", "bytes", len(script))
 
-	// Step 5: Run tests
+	// Step 4b: Self-critique — have AI review the script before running
+	critiqued, err := ai.CritiqueTest(script, title, body)
+	if err != nil {
+		slog.Warn("critique failed, using original script", "error", err)
+	} else if critiqued != script {
+		slog.Info("AI critique returned corrected script", "bytes", len(critiqued))
+		script = critiqued
+	} else {
+		slog.Info("AI approved test script")
+	}
+
+	// Step 5: Run tests with crash retry (max 2 retries, 3 total attempts)
 	slog.Info("running tests...")
 	testOutput := runTests(script)
-	slog.Info("tests completed", "output_bytes", len(testOutput))
+	retryCount := 0
+	const maxRetries = 2
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		resultsTable := parseResultsTable(testOutput)
+		hasResults := !strings.Contains(resultsTable, "(no structured results)")
+		// Only retry if the script crashed (no structured results AND error exit)
+		if hasResults || !strings.Contains(testOutput, "[script exited with error:") {
+			break
+		}
+		slog.Warn("test script crashed, requesting AI fix", "attempt", attempt+1)
+		fixedScript, err := ai.RegenerateTest(title, body, script, truncStr(testOutput, 3000))
+		if err != nil || fixedScript == "" {
+			slog.Warn("AI could not fix crashed script", "error", err)
+			break
+		}
+		script = fixedScript
+		testOutput = runTests(script)
+		retryCount++
+	}
+
+	slog.Info("tests completed", "output_bytes", len(testOutput), "retries", retryCount)
+
+	// Save the final test script into repro_details
+	reproDetails["test_script"] = script
+	if retryCount > 0 {
+		reproDetails["test_retries"] = retryCount
+	}
+	reproJSON, _ = json.Marshal(reproDetails)
+	// Re-emit updated repro details
+	fmt.Println("--- OPINAI REPRODUCTION_DETAILS ---")
+	fmt.Println(string(reproJSON))
+	fmt.Println("--- END REPRODUCTION_DETAILS ---")
 
 	// Check if test output has structured results — if not, warn the verdict AI
 	resultsTable := parseResultsTable(testOutput)
@@ -288,6 +331,9 @@ func Run() {
 	retryInfo := ""
 	if setupRetryInfo != "" {
 		retryInfo = fmt.Sprintf("**Setup:** %s\n", setupRetryInfo)
+	}
+	if retryCount > 0 {
+		retryInfo += fmt.Sprintf("**Test retries:** %d (script crashed and was regenerated)\n", retryCount)
 	}
 	verdictText := vr.Text
 	if verdictText == "" {
@@ -535,19 +581,11 @@ func startServer() (*os.Process, string) {
 }
 
 func runTests(script string) string {
-	tmpFile := "/tmp/opinai_test.sh"
-	// Use set -uo pipefail (no -e) so the script continues after individual test failures
-	// and can still emit structured JSON results. Add a trap to catch unexpected exits.
-	preamble := `#!/usr/bin/env bash
-set -uo pipefail
-trap 'echo "{\"test\": \"script_execution\", \"status\": \"fail\", \"details\": \"script crashed at line $LINENO with exit code $?\"}"' ERR
-
-`
-	content := preamble + script
-	os.WriteFile(tmpFile, []byte(content), 0o755)
+	tmpFile := "/tmp/opinai_test.py"
+	os.WriteFile(tmpFile, []byte(script), 0o644)
 	defer os.Remove(tmpFile)
 
-	cmd := exec.Command("/bin/bash", tmpFile)
+	cmd := exec.Command("python3", tmpFile)
 	if containerEnv != nil {
 		cmd.Env = containerEnv
 	} else {

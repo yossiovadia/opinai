@@ -16,7 +16,7 @@ type VerdictResult struct {
 // All valid verdict strings.
 var AllVerdicts = []string{
 	"BUG_CONFIRMED", "NOT_A_BUG", "NOT_REPRODUCIBLE",
-	"FEATURE_REQUEST", "ERROR", "BUG_FIXED", "BUG_REGRESSION",
+	"FEATURE_REQUEST", "ERROR", "INCONCLUSIVE", "BUG_FIXED", "BUG_REGRESSION",
 }
 
 // GetVerdict asks the AI to summarize test results with verdict and confidence.
@@ -32,12 +32,14 @@ func GetVerdict(title, body, testOutput, issueState string) VerdictResult {
 		verdictOptions = "Use EXACTLY one of these verdicts:\n" +
 			"- BUG_FIXED — the issue was closed and the fix appears correct (tests pass)\n" +
 			"- BUG_REGRESSION — the issue was closed but the bug STILL exists (tests fail)\n" +
-			"- NOT_REPRODUCIBLE — tests ran but could not trigger the bug either way\n"
+			"- NOT_REPRODUCIBLE — tests ran but could not trigger the bug either way\n" +
+			"- INCONCLUSIVE — test infrastructure failed (script crashed, server unreachable, etc.)\n"
 	} else {
 		verdictOptions = "Use EXACTLY one of these verdicts:\n" +
 			"- BUG_CONFIRMED — tests prove the bug exists\n" +
 			"- NOT_A_BUG — tests prove behavior is correct\n" +
-			"- NOT_REPRODUCIBLE — tests ran but could not trigger the bug\n"
+			"- NOT_REPRODUCIBLE — tests ran but could not trigger the bug\n" +
+			"- INCONCLUSIVE — test infrastructure failed (script crashed, server unreachable, etc.)\n"
 	}
 
 	var stateCtx string
@@ -84,7 +86,9 @@ func GetVerdict(title, body, testOutput, issueState string) VerdictResult {
 
 	// Fallback: scan for keywords
 	if result.Verdict == "NOT_REPRODUCIBLE" {
-		if strings.Contains(upper, "BUG_REGRESSION") || strings.Contains(upper, "BUG REGRESSION") {
+		if strings.Contains(upper, "INCONCLUSIVE") {
+			result.Verdict = "INCONCLUSIVE"
+		} else if strings.Contains(upper, "BUG_REGRESSION") || strings.Contains(upper, "BUG REGRESSION") {
 			result.Verdict = "BUG_REGRESSION"
 		} else if strings.Contains(upper, "BUG_FIXED") || strings.Contains(upper, "BUG FIXED") {
 			result.Verdict = "BUG_FIXED"
