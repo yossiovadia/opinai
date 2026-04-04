@@ -296,7 +296,7 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 			stepErr = applyManifests(m.client, m.dynClient, m.disco, ns, content)
 			lastStepWasManifest = true
 		case "wait":
-			timeout := 120
+			timeout := 300 // 5 min — K8s operators need time for controller-runtime init
 			if t, ok := step["timeout_seconds"].(float64); ok {
 				timeout = int(t)
 			}
