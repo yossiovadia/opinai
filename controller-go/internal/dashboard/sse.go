@@ -76,7 +76,7 @@ func (s *Server) handleAnalyzeStream(w http.ResponseWriter, r *http.Request) {
 	}
 	done := make(chan analyzeResult, 1)
 	go func() {
-		a, err := agent.AnalyzeRepo(cloneDir, repo, 15)
+		a, err := agent.AnalyzeRepo(cloneDir, repo, 0) // 0 = use default (200)
 		done <- analyzeResult{a, err}
 	}()
 
