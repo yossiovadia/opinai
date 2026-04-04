@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/config"
@@ -53,6 +54,13 @@ func NewJobManager(client kubernetes.Interface, namespace, image string) *JobMan
 		image:     image,
 		recorded:  make(map[string]bool),
 		sandbox:   sandbox.NewManager(client, namespace),
+	}
+}
+
+// SetSandboxDynamicClient sets the dynamic K8s client on the sandbox manager for CRD/BuildConfig support.
+func (jm *JobManager) SetSandboxDynamicClient(dc dynamic.Interface) {
+	if jm.sandbox != nil {
+		jm.sandbox.SetDynamicClient(dc)
 	}
 }
 

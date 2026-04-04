@@ -120,6 +120,9 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		if k8sConfig, cfgErr := getK8sConfig(); cfgErr == nil {
 			if dynClient, dynErr := dynamic.NewForConfig(k8sConfig); dynErr == nil {
 				sbMgr.SetDynamicClient(dynClient)
+				if jobMgr != nil {
+					jobMgr.SetSandboxDynamicClient(dynClient)
+				}
 				slog.Info("dynamic K8s client available for CRD deployment")
 			}
 		}
