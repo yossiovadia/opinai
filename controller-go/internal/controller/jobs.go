@@ -475,6 +475,14 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		}
 	}
 
+	// Also check repo_memory for needs_cluster (set by agent rich_analysis)
+	if !isK8s {
+		if mem, _ := database.GetRepoMemory(repo, strPtr("needs_cluster")); mem["needs_cluster"] == "true" {
+			isK8s = true
+			slog.Info("repo needs K8s (detected from repo_memory)", "repo", repo)
+		}
+	}
+
 	plan, err := database.GetDeploymentPlan(repo)
 	if err != nil || plan == nil {
 		if isK8s {
