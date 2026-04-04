@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -110,6 +111,57 @@ func TestInjectNamespace(t *testing.T) {
 	result = injectNamespace("make build", "test-ns")
 	if result != "make build" {
 		t.Errorf("non-k8s should be unchanged: %q", result)
+	}
+}
+
+func TestExpandHelmImageSets(t *testing.T) {
+	img := "image-registry.openshift-image-registry.svc:5000/opinai-sandbox-bbr-42-abc123/payload-processing:latest"
+
+	// Structured image key (ends with .image) — should split into registry/repository/tag
+	cmd := "helm upgrade --install bbr ./chart -n sandbox --set upstreamBbr.bbr.image=IMAGE_PLACEHOLDER"
+	result := expandHelmImageSets(cmd, img)
+	if strings.Contains(result, "IMAGE_PLACEHOLDER") {
+		t.Errorf("should not contain IMAGE_PLACEHOLDER: %s", result)
+	}
+	if !strings.Contains(result, "upstreamBbr.bbr.image.registry=image-registry.openshift-image-registry.svc:5000") {
+		t.Errorf("should contain registry: %s", result)
+	}
+	if !strings.Contains(result, "upstreamBbr.bbr.image.repository=opinai-sandbox-bbr-42-abc123/payload-processing") {
+		t.Errorf("should contain repository: %s", result)
+	}
+	if !strings.Contains(result, "upstreamBbr.bbr.image.tag=latest") {
+		t.Errorf("should contain tag: %s", result)
+	}
+
+	// Non-structured key — plain replacement
+	cmd2 := "helm install x ./chart --set container.img=IMAGE_PLACEHOLDER"
+	result2 := expandHelmImageSets(cmd2, img)
+	if !strings.Contains(result2, "container.img="+img) {
+		t.Errorf("non-structured should do plain replace: %s", result2)
+	}
+
+	// No placeholder — unchanged
+	cmd3 := "helm install x ./chart"
+	result3 := expandHelmImageSets(cmd3, img)
+	if result3 != cmd3 {
+		t.Errorf("no placeholder should be unchanged: %s", result3)
+	}
+}
+
+func TestParseImageURL(t *testing.T) {
+	reg, repo, tag := parseImageURL("image-registry.openshift-image-registry.svc:5000/myns/myapp:v1")
+	if reg != "image-registry.openshift-image-registry.svc:5000" || repo != "myns/myapp" || tag != "v1" {
+		t.Errorf("got reg=%q repo=%q tag=%q", reg, repo, tag)
+	}
+
+	reg, repo, tag = parseImageURL("ghcr.io/org/app:latest")
+	if reg != "ghcr.io" || repo != "org/app" || tag != "latest" {
+		t.Errorf("got reg=%q repo=%q tag=%q", reg, repo, tag)
+	}
+
+	reg, repo, tag = parseImageURL("nginx:1.25")
+	if repo != "nginx" || tag != "1.25" {
+		t.Errorf("got reg=%q repo=%q tag=%q", reg, repo, tag)
 	}
 }
 

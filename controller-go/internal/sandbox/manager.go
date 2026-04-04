@@ -314,6 +314,12 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 				slog.Warn("skipping command step — repo clone failed", "step", i+1, "desc", desc)
 				break
 			}
+			// Replace image placeholders in command content
+			if builtImages, ok := result["built_images"].(map[string]string); ok && len(builtImages) > 0 {
+				for _, img := range builtImages {
+					content = expandHelmImageSets(content, img)
+				}
+			}
 			// Note: /tmp clones are cleaned between options by CleanDeployClones, not per-step
 			slog.Info("executing command step", "step", i+1, "desc", desc)
 			cmdStr, workDir := stripCdPrefix(content, cloneDir)
@@ -1123,6 +1129,79 @@ func replaceExistingNamespace(cmd, ns string) string {
 }
 
 // --- Helm helpers ---
+
+// expandHelmImageSets replaces IMAGE_PLACEHOLDER in a command string.
+// For Helm --set flags where the key ends with ".image", splits the image URL
+// into .image.registry, .image.repository, .image.tag for structured Helm values.
+// For all other occurrences, does a plain string replacement.
+func expandHelmImageSets(cmd, imageURL string) string {
+	if !strings.Contains(cmd, "IMAGE_PLACEHOLDER") {
+		return cmd
+	}
+
+	// Parse image URL: registry/repo:tag
+	registry, repository, tag := parseImageURL(imageURL)
+
+	// Find and expand --set key.image=IMAGE_PLACEHOLDER patterns
+	// Match: --set <key>.image=IMAGE_PLACEHOLDER or --set <key>=IMAGE_PLACEHOLDER
+	parts := strings.Fields(cmd)
+	var result []string
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "--set" && i+1 < len(parts) {
+			kv := parts[i+1]
+			if strings.HasSuffix(kv, "=IMAGE_PLACEHOLDER") {
+				key := strings.TrimSuffix(kv, "=IMAGE_PLACEHOLDER")
+				if strings.HasSuffix(key, ".image") {
+					// Structured image: split into registry/repository/tag
+					result = append(result,
+						"--set", key+".registry="+registry,
+						"--set", key+".repository="+repository,
+						"--set", key+".tag="+tag,
+						"--set", key+".pullPolicy=Always",
+					)
+					i++ // skip the original kv
+					continue
+				}
+				// Non-structured: just replace the value
+				result = append(result, "--set", key+"="+imageURL)
+				i++
+				continue
+			}
+		}
+		result = append(result, parts[i])
+	}
+
+	expanded := strings.Join(result, " ")
+	// Replace any remaining IMAGE_PLACEHOLDER (e.g. in non --set contexts)
+	expanded = strings.ReplaceAll(expanded, "IMAGE_PLACEHOLDER", imageURL)
+	return expanded
+}
+
+// parseImageURL splits "registry:port/repo/name:tag" into (registry, repository, tag).
+func parseImageURL(imageURL string) (string, string, string) {
+	tag := "latest"
+	repo := imageURL
+
+	// Split tag
+	if idx := strings.LastIndex(repo, ":"); idx > 0 {
+		// Avoid splitting on registry port (e.g. registry:5000/ns/name:tag)
+		afterColon := repo[idx+1:]
+		if !strings.Contains(afterColon, "/") {
+			tag = afterColon
+			repo = repo[:idx]
+		}
+	}
+
+	// Split registry from repository
+	// Registry is the part before the first "/" that contains a "." or ":"
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) == 2 && (strings.Contains(parts[0], ".") || strings.Contains(parts[0], ":")) {
+		return parts[0], parts[1], tag
+	}
+
+	// No obvious registry — treat the whole thing as repository
+	return "", repo, tag
+}
 
 func isHelmCommand(cmd string) bool {
 	return strings.Contains(cmd, "helm install") || strings.Contains(cmd, "helm upgrade")

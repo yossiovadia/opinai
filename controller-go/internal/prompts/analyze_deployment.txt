@@ -46,6 +46,7 @@ Step types you can use:
 - "build": Build a container image via OpenShift BuildConfig from the repo's Dockerfile
   - "type": "build", "name": "app-name", "content": "Dockerfile" (path to Dockerfile)
   - After build, use IMAGE_PLACEHOLDER in subsequent steps — auto-replaced with the built image URL
+  - For Helm --set flags: use "--set path.to.image=IMAGE_PLACEHOLDER" and the system will auto-split it into .image.registry, .image.repository, .image.tag for Helm charts that use structured image values
 - "command": Run kubectl, helm, oc, or curl commands
   - NEVER use docker build, go build, npm install, make, or language-specific tools
 - "manifest": Apply raw K8s YAML via the API (for inline manifests)
@@ -60,7 +61,7 @@ Generate exactly 2 deployment options as JSON (no markdown fences). Return ONLY 
 Option 1: "install-from-docs" — Follow the project's own install instructions:
 1. If the project has a Dockerfile, start with a "build" step
 2. Then run the EXACT install commands from the project's docs/Makefile/README (adapted for sandbox)
-3. For Helm charts: "helm upgrade --install <release> <chart-path> -n NAMESPACE_PLACEHOLDER --set image.repository=IMAGE_PLACEHOLDER"
+3. For Helm charts: "helm upgrade --install <release> <chart-path> -n NAMESPACE_PLACEHOLDER --set app.image=IMAGE_PLACEHOLDER" (the system auto-splits .image into .image.registry/.repository/.tag)
 4. For kustomize: "kubectl apply -k <path> -n NAMESPACE_PLACEHOLDER"
 5. For raw manifests: "kubectl apply -f <path> -n NAMESPACE_PLACEHOLDER"
 6. Add "wait" steps for deployments/statefulsets
