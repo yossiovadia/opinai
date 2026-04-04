@@ -1035,14 +1035,14 @@ tr:hover td {
 
 /* Plain-language summary */
 .opinai-summary {
-  background: #f8f5e6;
+  background: rgba(196, 163, 90, 0.08);
   border-left: 4px solid #c4a35a;
   padding: 20px 24px;
   margin: 16px 0;
   border-radius: 0 8px 8px 0;
   font-style: italic;
   font-size: 1.05em;
-  color: #3a3520;
+  color: var(--text);
   line-height: 1.7;
 }
 .opinai-summary .summary-header {
@@ -1050,5 +1050,5 @@ tr:hover td {
   font-weight: bold;
   font-size: 1.1em;
   margin-bottom: 12px;
-  color: #2a2510;
+  color: #c4a35a;
 }

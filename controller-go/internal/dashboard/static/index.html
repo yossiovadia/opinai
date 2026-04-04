@@ -981,10 +981,20 @@ function renderSummary(r) {
   try {
     var d = JSON.parse(r.repro_details);
     if (!d.summary) return '';
-    var paragraphs = d.summary.split('\n').filter(function(p) { return p.trim(); });
+    var paragraphs = d.summary.split('\n').filter(function(p) {
+      var t = p.trim();
+      // Skip markdown headers like ## Investigation Summary
+      if (t.match(/^#+\s/)) return false;
+      return t.length > 0;
+    });
     var html = '<div class="opinai-summary">' +
       '<div class="summary-header">&#x1F3B3; The Dude\'s Take</div>' +
-      paragraphs.map(function(p) { return '<p style="margin:0 0 12px 0">' + escapeHtml(p) + '</p>'; }).join('') +
+      paragraphs.map(function(p) {
+        // Render inline backticks as <code>
+        var escaped = escapeHtml(p.trim());
+        escaped = escaped.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.1);padding:2px 6px;border-radius:3px;font-style:normal">$1</code>');
+        return '<p style="margin:0 0 14px 0">' + escaped + '</p>';
+      }).join('') +
       '</div>';
     return html;
   } catch(e) { return ''; }
