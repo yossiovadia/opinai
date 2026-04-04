@@ -14,6 +14,19 @@ Cluster state:
 - Operators: {{.Operators}}
 - Namespaces: {{.Namespaces}}
 
+SANDBOX ENVIRONMENT CONSTRAINTS — READ CAREFULLY:
+Steps execute inside a controller pod that has ONLY these tools: kubectl, helm, curl, jq, git, bash, python3, openssl.
+It does NOT have: docker, podman, go, node, npm, cargo, java, make, gcc, or any language-specific build toolchain.
+
+For deployment steps you MUST:
+- Use "manifest" type steps (raw K8s YAML) for Deployments, Services, ConfigMaps, etc. — these are applied via the K8s API directly
+- Use "command" type steps ONLY for kubectl, helm, curl, or git commands
+- NEVER use "docker build", "go build", "npm install", "make", or any build commands — they will fail
+- For container images: reference pre-built images from public registries (ghcr.io, docker.io, quay.io)
+- If the project needs a custom image built, use an OpenShift BuildConfig manifest (type: "manifest") that builds inside the cluster, NOT a local docker build
+- For helm charts: use "helm install" or "helm upgrade --install" commands (helm is available)
+- For kustomize: use "kubectl apply -k" commands (kubectl is available)
+
 Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with an "options" array. Each option: id, name, description, estimated_time, best_for, steps (array of {type, content, required, description}), requirements, risks, recommended (bool), test_endpoint, all_endpoints.
 
 test_endpoint identifies which service the automated tester should send HTTP requests to:

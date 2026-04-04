@@ -3,6 +3,8 @@ package sandbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -110,9 +112,12 @@ func (m *Manager) CreateSandbox(repo string, issue int, quotas ...SandboxQuotas)
 		repoShort = repoShort[:20]
 	}
 	repoShort = strings.ToLower(strings.ReplaceAll(repoShort, ".", "-"))
-	ts := fmt.Sprintf("%d", time.Now().Unix()%1000000)
+	// Use random suffix for uniqueness even within the same second
+	randBytes := make([]byte, 3)
+	rand.Read(randBytes)
+	suffix := hex.EncodeToString(randBytes)
 
-	ns := fmt.Sprintf("%s%s-%d-%s", SandboxPrefix, repoShort, issue, ts)
+	ns := fmt.Sprintf("%s%s-%d-%s", SandboxPrefix, repoShort, issue, suffix)
 	if len(ns) > 63 {
 		ns = ns[:63]
 	}
@@ -162,10 +167,12 @@ func (m *Manager) CreateSandbox(repo string, issue int, quotas ...SandboxQuotas)
 		slog.Warn("failed to create resource quota", "namespace", ns, "error", err)
 	}
 
-	// NetworkPolicy
-	protocol := corev1.ProtocolUDP
+	// NetworkPolicy — ingress is restricted, egress allows DNS + HTTP/HTTPS + intra-namespace
+	protocolUDP := corev1.ProtocolUDP
 	protocolTCP := corev1.ProtocolTCP
 	port53 := intstr.FromInt(53)
+	port80 := intstr.FromInt(80)
+	port443 := intstr.FromInt(443)
 	_, err = m.client.NetworkingV1().NetworkPolicies(ns).Create(ctx, &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "opinai-sandbox-policy",
@@ -186,10 +193,17 @@ func (m *Manager) CreateSandbox(repo string, issue int, quotas ...SandboxQuotas)
 				},
 			}},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
+				// Intra-namespace traffic
 				{To: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}},
+				// DNS
 				{Ports: []networkingv1.NetworkPolicyPort{
-					{Port: &port53, Protocol: &protocol},
+					{Port: &port53, Protocol: &protocolUDP},
 					{Port: &port53, Protocol: &protocolTCP},
+				}},
+				// HTTP/HTTPS egress (for pulling images, helm charts, external registries)
+				{Ports: []networkingv1.NetworkPolicyPort{
+					{Port: &port80, Protocol: &protocolTCP},
+					{Port: &port443, Protocol: &protocolTCP},
 				}},
 			},
 		},
