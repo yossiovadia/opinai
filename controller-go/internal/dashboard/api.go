@@ -66,6 +66,20 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(runs)
 }
 
+// --- /api/jobs ---
+
+func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
+	if s.listJobs == nil {
+		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+	jobs := s.listJobs()
+	if jobs == nil {
+		jobs = []JobInfo{}
+	}
+	json.NewEncoder(w).Encode(jobs)
+}
+
 // --- /api/check-now ---
 
 func (s *Server) handleCheckNow(w http.ResponseWriter, r *http.Request) {

@@ -81,6 +81,78 @@ func (jm *JobManager) broadcast(eventType string, data any) {
 	jm.ws.Broadcast(BroadcastEvent{Type: eventType, Data: data})
 }
 
+// JobInfo describes an active K8s reproduction job for the dashboard.
+type JobInfo struct {
+	Repo      string `json:"repo"`
+	Issue     int    `json:"issue"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	PodName   string `json:"pod_name"`
+}
+
+// ListJobs returns all opinai-runner jobs with their current status.
+func (jm *JobManager) ListJobs() []JobInfo {
+	ctx := context.Background()
+	jobs, err := jm.client.BatchV1().Jobs(jm.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=opinai-runner",
+	})
+	if err != nil {
+		slog.Warn("failed to list jobs for dashboard", "error", err)
+		return nil
+	}
+
+	var result []JobInfo
+	for _, job := range jobs.Items {
+		annotations := job.Annotations
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		labels := job.Labels
+		if labels == nil {
+			labels = map[string]string{}
+		}
+
+		repo := annotations["opinai/repo-full"]
+		if repo == "" {
+			repo = labels["opinai/repo"]
+		}
+		issue := 0
+		fmt.Sscanf(labels["opinai/issue"], "%d", &issue)
+
+		status := "Pending"
+		if job.Status.Active > 0 {
+			status = "Running"
+		} else if job.Status.Succeeded > 0 {
+			status = "Complete"
+		} else if job.Status.Failed > 0 {
+			status = "Failed"
+		}
+
+		createdAt := ""
+		if job.CreationTimestamp.Time.Year() > 2000 {
+			createdAt = job.CreationTimestamp.Format("2006-01-02T15:04:05Z")
+		}
+
+		// Find pod name
+		podName := ""
+		pods, err := jm.client.CoreV1().Pods(jm.namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "job-name=" + job.Name,
+		})
+		if err == nil && len(pods.Items) > 0 {
+			podName = pods.Items[0].Name
+		}
+
+		result = append(result, JobInfo{
+			Repo:      repo,
+			Issue:     issue,
+			Status:    status,
+			CreatedAt: createdAt,
+			PodName:   podName,
+		})
+	}
+	return result
+}
+
 // MaxConcurrentJobs is the total number of reproduction Jobs that can run simultaneously.
 var MaxConcurrentJobs = 3
 

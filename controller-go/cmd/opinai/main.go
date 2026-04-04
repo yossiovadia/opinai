@@ -129,8 +129,19 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		srv.SetSandboxManager(&sandboxAdapter{mgr: sbMgr})
 	}
 
-	// Wire reproduce callback
+	// Wire callbacks
 	if jobMgr != nil {
+		srv.SetListJobsCallback(func() []dashboard.JobInfo {
+			jobs := jobMgr.ListJobs()
+			result := make([]dashboard.JobInfo, len(jobs))
+			for i, j := range jobs {
+				result[i] = dashboard.JobInfo{
+					Repo: j.Repo, Issue: j.Issue, Status: j.Status,
+					CreatedAt: j.CreatedAt, PodName: j.PodName,
+				}
+			}
+			return result
+		})
 		srv.SetReproduceCallback(func(repo string, issue int) error {
 			details, err := controller.FetchIssueDetails(repo, issue)
 			if err != nil {

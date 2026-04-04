@@ -161,6 +161,18 @@ type MarkRecordedFunc func(repo string, issue int)
 // RetryPendingFunc triggers a check for pending issues in a repo after a job completes.
 type RetryPendingFunc func(repo string)
 
+// JobInfo describes an active K8s reproduction job.
+type JobInfo struct {
+	Repo      string `json:"repo"`
+	Issue     int    `json:"issue"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	PodName   string `json:"pod_name"`
+}
+
+// ListJobsFunc returns active reproduction jobs.
+type ListJobsFunc func() []JobInfo
+
 // SandboxManagerIface abstracts sandbox operations for the dashboard.
 type SandboxManagerIface interface {
 	ListSandboxes() []SandboxInfo
@@ -189,6 +201,7 @@ type Server struct {
 	clearRecorded ClearRecordedFunc
 	markRecorded  MarkRecordedFunc
 	retryPending  RetryPendingFunc
+	listJobs      ListJobsFunc
 	sandbox       SandboxManagerIface
 }
 
@@ -230,6 +243,11 @@ func (s *Server) SetMarkRecordedCallback(fn MarkRecordedFunc) {
 // SetRetryPendingCallback sets the function to retry pending issues for a repo.
 func (s *Server) SetRetryPendingCallback(fn RetryPendingFunc) {
 	s.retryPending = fn
+}
+
+// SetListJobsCallback sets the function called for /api/jobs.
+func (s *Server) SetListJobsCallback(fn ListJobsFunc) {
+	s.listJobs = fn
 }
 
 // SetSandboxManager sets the sandbox manager for admin endpoints.
@@ -299,6 +317,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/status", s.handleStatus)
 		r.Get("/repos", s.handleRepos)
 		r.Get("/runs", s.handleRuns)
+		r.Get("/jobs", s.handleJobs)
 		r.Get("/report/{id}", s.handleReport)
 		r.Get("/run-history", s.handleRunHistory)
 
