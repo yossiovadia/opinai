@@ -549,7 +549,9 @@ func cloneRepoForDeploy(repo string) (string, bool) {
 	os.RemoveAll(cloneDir)
 
 	slog.Info("cloning repo for deployment steps", "repo", repo, "dir", cloneDir)
-	cmd := exec.Command("git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
+	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cloneCancel()
+	cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		slog.Warn("repo clone failed — command steps will be skipped", "repo", repo, "error", err, "output", truncLog(string(out), 200))

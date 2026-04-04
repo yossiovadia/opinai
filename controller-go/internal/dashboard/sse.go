@@ -3,7 +3,6 @@ package dashboard
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	k8sCorev1 "k8s.io/api/core/v1"
@@ -236,7 +236,9 @@ func cloneRepoForAnalysis(repo string) (string, error) {
 		cloneURL = "https://x-access-token:" + token + "@github.com/" + repo + ".git"
 	}
 
-	cmd := exec.Command("git", "clone", "--depth=1", cloneURL, dir)
+	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cloneCancel()
+	cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", cloneURL, dir)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		os.RemoveAll(dir)
@@ -395,8 +397,6 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	if repo != "" && issue > 0 && fullReply.Len() > 0 {
 		database.AddChatMessage(repo, issue, "ai", ai.Sanitize(fullReply.String()))
 	}
-
-	writeSSE(w, "done", map[string]string{"message": ""})
 }
 
 // --- GET /api/check-now-stream ---
@@ -563,26 +563,26 @@ func (s *Server) handleJobLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // lazy K8s client for SSE handlers
-var _sseK8sClient k8sKubernetes.Interface
+var (
+	_sseK8sClient k8sKubernetes.Interface
+	_sseK8sOnce   sync.Once
+	_sseK8sErr    error
+)
 
 func getK8sClient() (k8sKubernetes.Interface, error) {
-	if _sseK8sClient != nil {
-		return _sseK8sClient, nil
-	}
-	config, err := k8sRest.InClusterConfig()
-	if err != nil {
-		home, _ := os.UserHomeDir()
-		config, err = k8sClientcmd.BuildConfigFromFlags("", home+"/.kube/config")
+	_sseK8sOnce.Do(func() {
+		config, err := k8sRest.InClusterConfig()
 		if err != nil {
-			return nil, err
+			home, _ := os.UserHomeDir()
+			config, err = k8sClientcmd.BuildConfigFromFlags("", home+"/.kube/config")
+			if err != nil {
+				_sseK8sErr = err
+				return
+			}
 		}
-	}
-	client, err := k8sKubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	_sseK8sClient = client
-	return client, nil
+		_sseK8sClient, _sseK8sErr = k8sKubernetes.NewForConfig(config)
+	})
+	return _sseK8sClient, _sseK8sErr
 }
 
 // --- streaming AI helpers ---
@@ -675,8 +675,3 @@ func extractStreamText(cfg ai.Config, data string) string {
 	return ""
 }
 
-// Suppress unused import warnings
-func init() {
-	_ = base64.StdEncoding
-	_ = slog.Default()
-}

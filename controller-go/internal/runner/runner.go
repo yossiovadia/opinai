@@ -2,6 +2,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -419,7 +420,9 @@ func startServer() (*os.Process, string) {
 
 	// ALWAYS clone the repo — needed for analysis, building, and code review
 	slog.Info("cloning repo", "repo", repo)
-	cmd := exec.Command("git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
+	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cloneCancel()
+	cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -1025,17 +1028,6 @@ func generateInstallCommand(cloneDir string) string {
 		}
 	}
 	return ""
-}
-
-func isK8sProject() bool {
-	profile := loadProfile()
-	if profile == nil {
-		return false
-	}
-	if b, ok := profile["k8s"].(bool); ok {
-		return b
-	}
-	return false
 }
 
 // formatRichRepoContext enhances the raw repo context with structured information

@@ -190,7 +190,8 @@ func (s *Server) handlePostComment(w http.ResponseWriter, r *http.Request) {
 	req2.Header.Set("Authorization", "Bearer "+ghToken)
 	req2.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req2)
+	ghClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := ghClient.Do(req2)
 	if err != nil {
 		jsonError(w, "GitHub API error: "+err.Error(), 500)
 		return
@@ -415,7 +416,3 @@ func ghGet(path string) ([]byte, int, error) {
 	return body, resp.StatusCode, nil
 }
 
-func init() {
-	// Suppress unused import warnings for slog
-	_ = slog.Default()
-}

@@ -124,7 +124,9 @@ func cleanBuckets(store *rateLimiterStore) {
 	}
 }
 
-func (s *rateLimiterStore) getBucket(ip string, rate, capacity float64) *rateBucket {
+// allow checks the rate limit for the given IP, creating a bucket if needed.
+// The check is done under the store lock to prevent races on the bucket's fields.
+func (s *rateLimiterStore) allow(ip string, rate, capacity float64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, ok := s.buckets[ip]
@@ -132,7 +134,7 @@ func (s *rateLimiterStore) getBucket(ip string, rate, capacity float64) *rateBuc
 		b = &rateBucket{tokens: capacity, lastFill: time.Now(), rate: rate, capacity: capacity}
 		s.buckets[ip] = b
 	}
-	return b
+	return b.allow()
 }
 
 // AI paths get stricter rate limiting
@@ -162,12 +164,10 @@ func rateLimitMiddleware(next http.Handler) http.Handler {
 		var allowed bool
 		if isAIPath(r.URL.Path) {
 			// 30 requests/minute = 0.5/sec, burst 5
-			b := aiLimiter.getBucket(ip, 0.5, 5)
-			allowed = b.allow()
+			allowed = aiLimiter.allow(ip, 0.5, 5)
 		} else {
 			// 120 requests/minute = 2/sec, burst 20
-			b := defaultLimiter.getBucket(ip, 2.0, 20)
-			allowed = b.allow()
+			allowed = defaultLimiter.allow(ip, 2.0, 20)
 		}
 
 		if !allowed {

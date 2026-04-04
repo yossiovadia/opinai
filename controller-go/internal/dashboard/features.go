@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -31,7 +32,7 @@ func (s *Server) handleRerunAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear all processed entries for this repo
-	database.DB().Exec("DELETE FROM processed_issues WHERE repo = ?", repo)
+	database.DeleteProcessedForRepo(repo)
 
 	// Get all runs for this repo, trigger re-run for each unique issue
 	runs, _ := database.GetRuns(repo, 100)
@@ -83,10 +84,10 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 pre{background:#161b22;padding:16px;border-radius:8px;overflow-x:auto;}
 table{border-collapse:collapse;width:100%%;}th,td{border:1px solid #30363d;padding:8px;text-align:left;}</style>
 </head><body>`, run.Repo, run.Issue)
-		fmt.Fprintf(w, "<h1>OpinAI Report: %s#%d</h1>", run.Repo, run.Issue)
+		fmt.Fprintf(w, "<h1>OpinAI Report: %s#%d</h1>", html.EscapeString(run.Repo), run.Issue)
 		fmt.Fprintf(w, "<p><strong>Verdict:</strong> %s | <strong>Confidence:</strong> %s | <strong>Category:</strong> %s</p>",
-			run.Verdict, run.Confidence, run.Category)
-		fmt.Fprintf(w, "<div>%s</div>", run.Report) // Report is markdown but we serve raw for now
+			html.EscapeString(run.Verdict), html.EscapeString(run.Confidence), html.EscapeString(run.Category))
+		fmt.Fprintf(w, "<pre>%s</pre>", html.EscapeString(run.Report))
 		fmt.Fprintf(w, `<hr><p><em>"That's just, like, your opinion, man." — OpinAI</em></p></body></html>`)
 		return
 	}
@@ -180,7 +181,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	rerunCount := 0
 	for _, run := range runs {
 		if run.Verdict == "BUG_CONFIRMED" && s.reproduce != nil {
-			database.DB().Exec("DELETE FROM processed_issues WHERE repo = ? AND issue = ?", repo, run.Issue)
+			database.DeleteProcessedIssue(repo, run.Issue)
 			if err := s.reproduce(repo, run.Issue); err == nil {
 				rerunCount++
 			}

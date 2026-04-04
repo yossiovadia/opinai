@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -36,6 +37,7 @@ type JobManager struct {
 	client     kubernetes.Interface
 	namespace  string
 	image      string
+	mu         sync.Mutex // protects recorded map
 	recorded   map[string]bool
 	sandbox    *sandbox.Manager
 	ws         Broadcaster
@@ -100,8 +102,7 @@ func JobName(repo string, issue int) string {
 	return fmt.Sprintf("opinai-%s-%d", safe, issue)
 }
 
-// CreateReproductionJob creates a K8s Job to reproduce an issue.
-func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueTitle string) error {
+func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string, verifyFix bool) error {
 	name := JobName(repo, issueNumber)
 	ctx := context.Background()
 
@@ -157,7 +158,7 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 		{Name: "REPO", Value: repo},
 		{Name: "ISSUE_NUMBER", Value: fmt.Sprintf("%d", issueNumber)},
 		{Name: "OPINAI_AUTO_POST", Value: "false"},
-		{Name: "OPINAI_VERIFY_FIX", Value: os.Getenv("_OPINAI_VERIFY_FIX_PENDING")},
+		{Name: "OPINAI_VERIFY_FIX", Value: fmt.Sprintf("%t", verifyFix)},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
 		{Name: "OPINAI_HAS_KNOWLEDGE", Value: hasKnowledge},
 		{Name: "OPINAI_INSTALL_COMMAND", Value: planRes.InstallCommand},
@@ -290,13 +291,12 @@ func (jm *JobManager) CreateVerifyFixJob(repo string, issueNumber int, issueTitl
 	// Wait briefly for deletion
 	time.Sleep(2 * time.Second)
 
-	// Override the OPINAI_AUTO_POST env to include verify flag
-	// We reuse CreateReproductionJob but need to inject the extra env var
-	// The simplest approach: set a temp env var that CreateReproductionJob picks up
-	os.Setenv("_OPINAI_VERIFY_FIX_PENDING", "true")
-	defer os.Unsetenv("_OPINAI_VERIFY_FIX_PENDING")
+	return jm.createJob(repo, issueNumber, issueTitle, true)
+}
 
-	return jm.CreateReproductionJob(repo, issueNumber, issueTitle)
+// CreateReproductionJob creates a K8s Job to reproduce an issue.
+func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueTitle string) error {
+	return jm.createJob(repo, issueNumber, issueTitle, false)
 }
 
 // StartWatcher watches K8s Jobs for real-time result harvesting.
@@ -329,7 +329,10 @@ func (jm *JobManager) runWatch() {
 		if !finished {
 			continue
 		}
-		if jm.recorded[job.Name] {
+		jm.mu.Lock()
+		already := jm.recorded[job.Name]
+		jm.mu.Unlock()
+		if already {
 			slog.Debug("skipping already-recorded job", "job", job.Name)
 			continue
 		}
@@ -339,12 +342,11 @@ func (jm *JobManager) runWatch() {
 }
 
 // ClearRecorded removes a job from the recorded map so it can be re-harvested.
-// Call this when triggering a rerun for an issue.
-// ClearRecorded removes a job from the recorded map so it can be re-harvested.
-// Call this when triggering a rerun for an issue.
 func (jm *JobManager) ClearRecorded(repo string, issue int) {
 	name := JobName(repo, issue)
+	jm.mu.Lock()
 	delete(jm.recorded, name)
+	jm.mu.Unlock()
 	slog.Info("cleared recorded entry for rerun", "job", name)
 }
 
@@ -352,14 +354,19 @@ func (jm *JobManager) ClearRecorded(repo string, issue int) {
 // Call this when the runner has already posted results via the callback API.
 func (jm *JobManager) MarkRecorded(repo string, issue int) {
 	name := JobName(repo, issue)
+	jm.mu.Lock()
 	jm.recorded[name] = true
+	jm.mu.Unlock()
 	slog.Debug("marked job as recorded via callback", "job", name)
 }
 
 // harvestSingleJob extracts results from a single completed job.
 func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	name := job.Name
-	if jm.recorded[name] {
+	jm.mu.Lock()
+	already := jm.recorded[name]
+	jm.mu.Unlock()
+	if already {
 		slog.Debug("skipping already-recorded job", "job", name)
 		return
 	}
@@ -433,7 +440,9 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 		slog.Error("failed to store run in DB — will retry on next harvest", "job", name, "error", dbErr)
 		return
 	}
+	jm.mu.Lock()
 	jm.recorded[name] = true
+	jm.mu.Unlock()
 	database.RemovePending(repo, issue)
 	jm.broadcast("job_completed", map[string]any{"repo": repo, "issue": issue, "verdict": verdict})
 

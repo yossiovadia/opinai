@@ -295,6 +295,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/jobs", s.handleJobs)
 		r.Post("/check-now", s.handleCheckNow)
 		r.Post("/reproduce", s.handleReproduce)
+		r.Post("/verify-fix", s.handleVerifyFix)
 		r.Post("/chat", s.handleChatFull)
 		r.Get("/chat-history", s.handleChatHistory)
 		r.Post("/chat-history/clear", s.handleClearChatHistory)

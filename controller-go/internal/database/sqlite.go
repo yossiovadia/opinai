@@ -307,9 +307,27 @@ func MarkProcessed(repo string, issue int, jobName string) error {
 func DeleteIssueRuns(repo string, issue int) error {
 	mu.Lock()
 	defer mu.Unlock()
-	db.Exec("DELETE FROM runs WHERE repo = ? AND issue = ?", repo, issue)
-	db.Exec("DELETE FROM processed_issues WHERE repo = ? AND issue = ?", repo, issue)
-	return nil
+	if _, err := db.Exec("DELETE FROM runs WHERE repo = ? AND issue = ?", repo, issue); err != nil {
+		return err
+	}
+	_, err := db.Exec("DELETE FROM processed_issues WHERE repo = ? AND issue = ?", repo, issue)
+	return err
+}
+
+// DeleteProcessedForRepo removes all processed_issues entries for a repo.
+func DeleteProcessedForRepo(repo string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM processed_issues WHERE repo = ?", repo)
+	return err
+}
+
+// DeleteProcessedIssue removes a single processed_issues entry.
+func DeleteProcessedIssue(repo string, issue int) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM processed_issues WHERE repo = ? AND issue = ?", repo, issue)
+	return err
 }
 
 // --- Pending Reproductions ---
