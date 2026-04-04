@@ -538,6 +538,8 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		database.SetRepoMemory(repo, fmt.Sprintf("deploy_option_%s_error", opt.ID), errMsg)
 		slog.Warn("deployment option failed", "option", opt.Name, "error", errMsg)
 		jm.sandbox.TeardownSandbox(sandboxNS)
+		// Wait for namespace deletion before trying next option
+		time.Sleep(5 * time.Second)
 	}
 
 	slog.Warn("all deployment options failed — falling back to code analysis", "repo", repo)
