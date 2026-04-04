@@ -92,10 +92,10 @@ type SandboxQuotas struct {
 	TimeoutMinutes int    // sandbox max age, default 30
 }
 
-func (q SandboxQuotas) cpuReq() string { if q.CPUReq != "" { return q.CPUReq }; return "1" }
-func (q SandboxQuotas) memReq() string { if q.MemReq != "" { return q.MemReq }; return "1Gi" }
-func (q SandboxQuotas) cpuLim() string { if q.CPULim != "" { return q.CPULim }; return "2" }
-func (q SandboxQuotas) memLim() string { if q.MemLim != "" { return q.MemLim }; return "2Gi" }
+func (q SandboxQuotas) cpuReq() string { if q.CPUReq != "" { return q.CPUReq }; return "4" }
+func (q SandboxQuotas) memReq() string { if q.MemReq != "" { return q.MemReq }; return "8Gi" }
+func (q SandboxQuotas) cpuLim() string { if q.CPULim != "" { return q.CPULim }; return "8" }
+func (q SandboxQuotas) memLim() string { if q.MemLim != "" { return q.MemLim }; return "16Gi" }
 func (q SandboxQuotas) pods() string          { if q.Pods > 0 { return fmt.Sprintf("%d", q.Pods) }; return "10" }
 func (q SandboxQuotas) timeoutMinutes() int   { if q.TimeoutMinutes > 0 { return q.TimeoutMinutes }; return 30 }
 
