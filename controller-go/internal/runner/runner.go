@@ -435,17 +435,14 @@ func Run() {
 			"%s"+
 			"%s"+
 			"**Analysis:** AI-powered (model: %s)\n\n"+
-			"### Results\n\n"+
-			"| Test | Status | Details |\n"+
-			"|------|--------|---------|\n"+
-			"%s\n"+
+			"%s"+
 			"### Verdict\n\n"+
 			"%s\n\n"+
 			"<details><summary>Raw test output</summary>\n\n"+
 			"```\n%s\n```\n\n"+
 			"</details>",
 		issueNumber, category, vr.Verdict, vr.Confidence, serverInfo, retryInfo,
-		os.Getenv("AI_MODEL"), resultsTable, verdictText, truncStr(testOutput, 5000),
+		os.Getenv("AI_MODEL"), formatResultsSection(resultsTable), verdictText, truncStr(testOutput, 5000),
 	)
 
 	postComment(repo, atoi(issueNumber), comment)
@@ -1210,4 +1207,14 @@ func selectDeploymentOption(title, body string, options []struct {
 		return n
 	}
 	return -1
+}
+
+func formatResultsSection(resultsTable string) string {
+	if strings.Contains(resultsTable, "(no structured results)") || strings.TrimSpace(resultsTable) == "" {
+		return "" // Skip the section entirely for agent-mode investigations
+	}
+	return "### Results\n\n" +
+		"| Test | Status | Details |\n" +
+		"|------|--------|---------|\n" +
+		resultsTable + "\n"
 }
