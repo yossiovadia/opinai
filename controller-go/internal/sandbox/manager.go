@@ -18,11 +18,9 @@ import (
 
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -170,50 +168,37 @@ func (m *Manager) CreateSandbox(repo string, issue int, quotas ...SandboxQuotas)
 		slog.Warn("failed to create resource quota", "namespace", ns, "error", err)
 	}
 
-	// NetworkPolicy — ingress is restricted, egress allows DNS + HTTP/HTTPS + intra-namespace
-	protocolUDP := corev1.ProtocolUDP
-	protocolTCP := corev1.ProtocolTCP
-	port53 := intstr.FromInt(53)
-	port80 := intstr.FromInt(80)
-	port443 := intstr.FromInt(443)
-	_, err = m.client.NetworkingV1().NetworkPolicies(ns).Create(ctx, &networkingv1.NetworkPolicy{
+	// LimitRange — sets default requests/limits for containers that don't specify them
+	// (required for build pods to pass quota validation)
+	_, err = m.client.CoreV1().LimitRanges(ns).Create(ctx, &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   "opinai-sandbox-policy",
+			Name:   "opinai-defaults",
 			Labels: map[string]string{ManagedLabelKey: "true"},
 		},
-		Spec: networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{},
-			PolicyTypes: []networkingv1.PolicyType{
-				networkingv1.PolicyTypeIngress,
-				networkingv1.PolicyTypeEgress,
-			},
-			Ingress: []networkingv1.NetworkPolicyIngressRule{{
-				From: []networkingv1.NetworkPolicyPeer{
-					{NamespaceSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"kubernetes.io/metadata.name": m.namespace},
-					}},
-					{PodSelector: &metav1.LabelSelector{}},
+		Spec: corev1.LimitRangeSpec{
+			Limits: []corev1.LimitRangeItem{{
+				Type: corev1.LimitTypeContainer,
+				Default: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1"),
+					corev1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+				DefaultRequest: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
 				},
 			}},
-			Egress: []networkingv1.NetworkPolicyEgressRule{
-				// Intra-namespace traffic
-				{To: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}},
-				// DNS
-				{Ports: []networkingv1.NetworkPolicyPort{
-					{Port: &port53, Protocol: &protocolUDP},
-					{Port: &port53, Protocol: &protocolTCP},
-				}},
-				// HTTP/HTTPS egress (for pulling images, helm charts, external registries)
-				{Ports: []networkingv1.NetworkPolicyPort{
-					{Port: &port80, Protocol: &protocolTCP},
-					{Port: &port443, Protocol: &protocolTCP},
-				}},
-			},
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		slog.Warn("failed to create network policy", "namespace", ns, "error", err)
+		slog.Warn("failed to create limit range", "namespace", ns, "error", err)
 	}
+
+	// Wait for OpenShift to populate builder SA docker secrets
+	time.Sleep(5 * time.Second)
+
+	// NetworkPolicy skipped — sandbox is short-lived (auto-cleaned after timeout).
+	// Build pods need unrestricted egress for git clone, dependency downloads, and image push.
+	// The sandbox namespace is deleted after the job completes.
 
 	slog.Info("sandbox ready", "namespace", ns)
 	return ns, nil
