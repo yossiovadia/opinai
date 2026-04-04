@@ -466,7 +466,7 @@ function renderIssues() {
     if (isActive) {
       expandInner = '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x23F3; Starting reproduction...</span></div>';
     } else {
-      expandInner = renderReproDetails(r) + renderMarkdown(expandContent);
+      expandInner = renderSummary(r) + renderReproDetails(r) + renderMarkdown(expandContent);
     }
 
     html += '<tr class="expandable" onclick="toggleExpand(\'' + rowId + '\')">' +
@@ -974,6 +974,20 @@ function loadDynamicSuggestions(repo, issue) {
 function sendSuggestion(text) {
   document.getElementById('chatInput').value = text;
   sendChat();
+}
+
+function renderSummary(r) {
+  if (!r.repro_details) return '';
+  try {
+    var d = JSON.parse(r.repro_details);
+    if (!d.summary) return '';
+    var paragraphs = d.summary.split('\n').filter(function(p) { return p.trim(); });
+    var html = '<div class="opinai-summary">' +
+      '<div class="summary-header">&#x1F3B3; The Dude\'s Take</div>' +
+      paragraphs.map(function(p) { return '<p style="margin:0 0 12px 0">' + escapeHtml(p) + '</p>'; }).join('') +
+      '</div>';
+    return html;
+  } catch(e) { return ''; }
 }
 
 // Markdown renderer — handles headings, bold, code, tables, details, lists

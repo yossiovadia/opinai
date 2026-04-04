@@ -385,6 +385,13 @@ func Run() {
 	if retryCount > 0 {
 		reproDetails["test_retries"] = retryCount
 	}
+
+	// Generate plain-language summary
+	summary := generateSummary(title, body, vr.Verdict, vr.Confidence, vr.Text)
+	if summary != "" {
+		reproDetails["summary"] = summary
+	}
+
 	reproJSON, _ = json.Marshal(reproDetails)
 	fmt.Println("--- OPINAI REPRODUCTION_DETAILS ---")
 	fmt.Println(string(reproJSON))
@@ -1012,6 +1019,37 @@ func generateSuggestedQuestions(title, body, verdictText string) string {
 		return ""
 	}
 	return reply
+}
+
+// generateSummary creates a plain-language summary of the investigation for non-technical readers.
+func generateSummary(title, body, verdict, confidence, report string) string {
+	cfg := ai.LoadConfig()
+	if !cfg.Available() {
+		return ""
+	}
+	prompt := fmt.Sprintf(`You are OpinAI. Summarize your investigation in 3-5 paragraphs of plain language.
+Explain what you did, what you found, and why you reached this verdict.
+Write as if briefing a senior engineer who hasn't read the code.
+Be specific about files, functions, and evidence.
+No code blocks, no JSON, no curl commands — just clear narrative.
+
+Issue Title: %s
+
+Issue Description:
+%s
+
+Verdict: %s (Confidence: %s)
+
+Investigation Report:
+%s`, title, truncStr(body, 1000), verdict, confidence, truncStr(report, 3000))
+
+	reply, err := ai.Call(prompt, 1024)
+	if err != nil {
+		slog.Warn("failed to generate summary", "error", err)
+		return ""
+	}
+	slog.Info("generated plain-language summary", "bytes", len(reply))
+	return ai.Sanitize(reply)
 }
 
 // generateInstallCommand asks the AI to create an install command on-the-spot

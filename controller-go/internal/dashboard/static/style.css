@@ -1032,3 +1032,23 @@ tr:hover td {
   .reproduce-bar { flex-direction: column; }
   .reproduce-input { width: 100%; }
 }
+
+/* Plain-language summary */
+.opinai-summary {
+  background: #f8f5e6;
+  border-left: 4px solid #c4a35a;
+  padding: 20px 24px;
+  margin: 16px 0;
+  border-radius: 0 8px 8px 0;
+  font-style: italic;
+  font-size: 1.05em;
+  color: #3a3520;
+  line-height: 1.7;
+}
+.opinai-summary .summary-header {
+  font-style: normal;
+  font-weight: bold;
+  font-size: 1.1em;
+  margin-bottom: 12px;
+  color: #2a2510;
+}
