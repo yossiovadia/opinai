@@ -101,7 +101,7 @@ func ToolDefs() []ai.ToolDef {
 		},
 		{
 			Name:        "server_request",
-			Description: "Make an HTTP request to the running server. Only requests to the server URL are allowed.",
+			Description: "Make an HTTP request to the running server or a specific service in a sandbox deployment. By default targets the primary server URL. Use service_url to target a different service (e.g. a backend API or database admin UI in a multi-service sandbox).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -120,6 +120,10 @@ func ToolDefs() []ai.ToolDef {
 					"content_type": map[string]any{
 						"type":        "string",
 						"description": "Content-Type header (default: application/json)",
+					},
+					"service_url": map[string]any{
+						"type":        "string",
+						"description": "Full base URL of a specific service to target instead of the default server (e.g. 'http://backend-api.sandbox-ns.svc.cluster.local:3000'). Use when testing multi-service architectures.",
 					},
 				},
 				"required": []string{"method", "path"},
@@ -310,7 +314,13 @@ func (ts *ToolState) handleServerRequest(input map[string]any) (string, bool) {
 		return "method and path are required", true
 	}
 
-	url := ts.ServerURL + path
+	// Allow targeting a specific service in multi-service sandboxes
+	baseURL := ts.ServerURL
+	if svcURL, ok := input["service_url"].(string); ok && svcURL != "" {
+		baseURL = svcURL
+	}
+
+	url := baseURL + path
 
 	var bodyReader *strings.Reader
 	if body != "" {

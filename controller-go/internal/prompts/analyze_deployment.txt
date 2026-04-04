@@ -28,6 +28,16 @@ all_endpoints lists ALL services deployed by this option with their purpose:
 
 IMPORTANT: test_endpoint.service must be the user-facing entry point. For proxy setups (Envoy, nginx, HAProxy), use the proxy. For API+DB setups, use the API server, not the database.
 
+test_endpoint examples by project type:
+  API server (Flask/FastAPI/Express): test_endpoint = the API service on its HTTP port, health_path = /health or /api/health
+  K8s operator (controller-manager): test_endpoint = webhook service if it has one, otherwise omit (code-review strategy)
+  Proxy/gateway (Envoy, nginx): test_endpoint = the proxy service on its listener port, NOT the upstream/backend
+  Multi-tier (API + DB + worker): test_endpoint = the API service, DB and worker are internal only
+
+When to set needs_cluster (deployment.needs_cluster):
+  TRUE: project IS a K8s operator/controller, or requires CRDs/operators to function, or has kustomize/helm charts as the only deployment method
+  FALSE: project can run as a standalone process (pip install + python -m, go build + ./binary, npm start), even if it also has Docker/K8s deployment options
+
 Also include at the top level:
 - project_type: e.g. "api-server", "operator", "cli", "library"
 - description: 1-2 sentence summary of what this project does

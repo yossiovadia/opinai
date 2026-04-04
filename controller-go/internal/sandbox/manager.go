@@ -79,8 +79,29 @@ func ValidateName(ns string) bool {
 	return strings.HasPrefix(ns, SandboxPrefix)
 }
 
+// SandboxQuotas holds configurable resource quotas for a sandbox namespace.
+// Zero values mean "use default".
+type SandboxQuotas struct {
+	CPUReq string // e.g. "1"
+	MemReq string // e.g. "1Gi"
+	CPULim string // e.g. "2"
+	MemLim string // e.g. "2Gi"
+	Pods   int    // max pods, default 10
+}
+
+func (q SandboxQuotas) cpuReq() string { if q.CPUReq != "" { return q.CPUReq }; return "1" }
+func (q SandboxQuotas) memReq() string { if q.MemReq != "" { return q.MemReq }; return "1Gi" }
+func (q SandboxQuotas) cpuLim() string { if q.CPULim != "" { return q.CPULim }; return "2" }
+func (q SandboxQuotas) memLim() string { if q.MemLim != "" { return q.MemLim }; return "2Gi" }
+func (q SandboxQuotas) pods() string   { if q.Pods > 0 { return fmt.Sprintf("%d", q.Pods) }; return "10" }
+
 // CreateSandbox creates an isolated namespace with quotas and network policy.
-func (m *Manager) CreateSandbox(repo string, issue int) (string, error) {
+// Pass nil for quotas to use defaults.
+func (m *Manager) CreateSandbox(repo string, issue int, quotas ...SandboxQuotas) (string, error) {
+	var q SandboxQuotas
+	if len(quotas) > 0 {
+		q = quotas[0]
+	}
 	repoShort := repo
 	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
 		repoShort = repo[idx+1:]
@@ -127,11 +148,11 @@ func (m *Manager) CreateSandbox(repo string, issue int) (string, error) {
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
-				corev1.ResourceRequestsCPU:              resource.MustParse("1"),
-				corev1.ResourceRequestsMemory:           resource.MustParse("1Gi"),
-				corev1.ResourceLimitsCPU:                resource.MustParse("2"),
-				corev1.ResourceLimitsMemory:             resource.MustParse("2Gi"),
-				corev1.ResourcePods:                     resource.MustParse("10"),
+				corev1.ResourceRequestsCPU:              resource.MustParse(q.cpuReq()),
+				corev1.ResourceRequestsMemory:           resource.MustParse(q.memReq()),
+				corev1.ResourceLimitsCPU:                resource.MustParse(q.cpuLim()),
+				corev1.ResourceLimitsMemory:             resource.MustParse(q.memLim()),
+				corev1.ResourcePods:                     resource.MustParse(q.pods()),
 				corev1.ResourceServices:                 resource.MustParse("5"),
 				corev1.ResourcePersistentVolumeClaims:   resource.MustParse("3"),
 			},
@@ -282,6 +303,16 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 		slog.Info("deployment step complete", "step", i+1, "total", len(steps), "desc", desc)
 	}
 
+	// Wait for all workloads to become healthy before returning success
+	if result["success"] == true {
+		if !m.WaitForAllHealthy(ns, 120) {
+			errs := result["errors"].([]string)
+			errs = append(errs, "some workloads did not become healthy within timeout")
+			result["errors"] = errs
+			slog.Warn("sandbox: not all workloads healthy after deployment", "namespace", ns)
+		}
+	}
+
 	result["endpoints"] = m.GetEndpoints(ns)
 	return result, nil
 }
@@ -379,6 +410,94 @@ func (m *Manager) ListSandboxes() []SandboxInfo {
 		})
 	}
 	return result
+}
+
+// WaitForAllHealthy waits until all Deployments, StatefulSets, and Services in the
+// namespace are ready. Uses exponential backoff (1s, 2s, 4s, ..., max 15s).
+func (m *Manager) WaitForAllHealthy(ns string, timeout int) bool {
+	if !ValidateName(ns) {
+		return false
+	}
+	ctx := context.Background()
+	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	backoff := time.Second
+
+	for time.Now().Before(deadline) {
+		allReady := true
+
+		// Check Deployments
+		deps, err := m.client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+		if err == nil {
+			for _, dep := range deps.Items {
+				desired := int32(1)
+				if dep.Spec.Replicas != nil {
+					desired = *dep.Spec.Replicas
+				}
+				if dep.Status.ReadyReplicas < desired {
+					allReady = false
+					break
+				}
+			}
+		}
+
+		// Check StatefulSets
+		if allReady {
+			stsList, err := m.client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+			if err == nil {
+				for _, sts := range stsList.Items {
+					desired := int32(1)
+					if sts.Spec.Replicas != nil {
+						desired = *sts.Spec.Replicas
+					}
+					if sts.Status.ReadyReplicas < desired {
+						allReady = false
+						break
+					}
+				}
+			}
+		}
+
+		// Check Services have ready endpoints
+		if allReady {
+			svcs, err := m.client.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
+			if err == nil {
+				for _, svc := range svcs.Items {
+					// Skip headless/ExternalName services
+					if svc.Spec.ClusterIP == "None" || svc.Spec.Type == corev1.ServiceTypeExternalName {
+						continue
+					}
+					ep, err := m.client.CoreV1().Endpoints(ns).Get(ctx, svc.Name, metav1.GetOptions{})
+					if err != nil {
+						allReady = false
+						break
+					}
+					hasAddr := false
+					for _, subset := range ep.Subsets {
+						if len(subset.Addresses) > 0 {
+							hasAddr = true
+							break
+						}
+					}
+					if !hasAddr {
+						allReady = false
+						break
+					}
+				}
+			}
+		}
+
+		if allReady {
+			slog.Info("sandbox: all workloads healthy", "namespace", ns)
+			return true
+		}
+
+		time.Sleep(backoff)
+		backoff *= 2
+		if backoff > 15*time.Second {
+			backoff = 15 * time.Second
+		}
+	}
+	return false
 }
 
 // AutoCleanup deletes sandboxes older than maxAge seconds. Returns count deleted.

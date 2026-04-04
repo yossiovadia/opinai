@@ -502,7 +502,7 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 	for attempt, opt := range ordered {
 		slog.Info("trying deployment option", "repo", repo, "option", opt.Name, "attempt", attempt+1, "total", len(ordered))
 
-		sandboxNS, err := jm.sandbox.CreateSandbox(repo, issueNumber)
+		sandboxNS, err := jm.sandbox.CreateSandbox(repo, issueNumber, extractSandboxQuotas(planJSON))
 		if err != nil {
 			slog.Error("sandbox creation failed", "repo", repo, "error", err)
 			return "", "", planJSON, "", ""
@@ -611,6 +611,34 @@ func extractPlanResources(planJSON string) PlanResources {
 	return r
 }
 
+
+// extractSandboxQuotas reads sandbox_resource_requirements from the deployment plan.
+func extractSandboxQuotas(planJSON string) sandbox.SandboxQuotas {
+	if planJSON == "" {
+		return sandbox.SandboxQuotas{}
+	}
+	var plan struct {
+		SandboxResources map[string]string `json:"sandbox_resource_requirements"`
+		Resources        map[string]string `json:"resource_requirements"`
+	}
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		return sandbox.SandboxQuotas{}
+	}
+	// Prefer sandbox-specific resources, fall back to general resource_requirements
+	res := plan.SandboxResources
+	if res == nil {
+		res = plan.Resources
+	}
+	if res == nil {
+		return sandbox.SandboxQuotas{}
+	}
+	return sandbox.SandboxQuotas{
+		CPUReq: res["cpu"],
+		MemReq: res["memory"],
+		CPULim: res["cpu_limit"],
+		MemLim: res["memory_limit"],
+	}
+}
 
 func truncateStr(s string, n int) string {
 	if len(s) <= n {

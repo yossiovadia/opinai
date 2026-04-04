@@ -21,6 +21,13 @@ RULES:
 - Repo source: {{.RepoDir}}
 - Be thorough but efficient — don't read every file, use grep to find relevant code
 
+MULTI-SERVICE ARCHITECTURES:
+If "Sandbox services deployed for this project" appears in the context below, this project runs as multiple interconnected services in a Kubernetes sandbox. Key considerations:
+- The test_endpoint (your ServerURL) is the entry point for test traffic — use server_request to interact with it
+- Internal services (databases, workers, backends) are listed for understanding the architecture but should NOT be tested directly unless the bug specifically involves internal communication
+- You can use the service_url parameter in server_request to target a specific service if needed (e.g. to verify a backend API separately from a proxy)
+- For proxy setups (Envoy/nginx): bugs may manifest differently at the proxy layer vs the backend — test through the proxy first, then the backend if needed
+
 {{.RepoContext}}
 
 When ready to deliver your verdict, output EXACTLY this format at the end:
