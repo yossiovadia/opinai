@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -115,6 +116,13 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 	// Wire sandbox manager
 	if k8sClient != nil {
 		sbMgr := sandbox.NewManager(k8sClient, namespace)
+		// Set up dynamic client for CRD resource deployment
+		if k8sConfig, cfgErr := getK8sConfig(); cfgErr == nil {
+			if dynClient, dynErr := dynamic.NewForConfig(k8sConfig); dynErr == nil {
+				sbMgr.SetDynamicClient(dynClient)
+				slog.Info("dynamic K8s client available for CRD deployment")
+			}
+		}
 		srv.SetSandboxManager(&sandboxAdapter{mgr: sbMgr})
 	}
 
@@ -222,20 +230,21 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 	slog.Info("shutdown complete")
 }
 
-func initK8sClient() (kubernetes.Interface, error) {
-	// Try in-cluster config first
+func getK8sConfig() (*rest.Config, error) {
 	config, err := rest.InClusterConfig()
 	if err == nil {
-		return kubernetes.NewForConfig(config)
+		return config, nil
 	}
-
-	// Fall back to kubeconfig
 	kubeconfig := os.Getenv("KUBECONFIG")
 	if kubeconfig == "" {
 		home, _ := os.UserHomeDir()
 		kubeconfig = home + "/.kube/config"
 	}
-	config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+}
+
+func initK8sClient() (kubernetes.Interface, error) {
+	config, err := getK8sConfig()
 	if err != nil {
 		return nil, fmt.Errorf("no K8s config available: %w", err)
 	}

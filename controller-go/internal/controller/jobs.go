@@ -148,7 +148,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 	profileEnvs := collectProfileEnvVars()
 
 	// Check if repo needs K8s sandbox deployment
-	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
+	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON, testEndpointJSON, allEndpointsJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
 	// Extract install command, resources, and timeout from deployment plan
 	planRes := extractPlanResources(deploymentPlanJSON)
@@ -165,6 +165,8 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		{Name: "OPINAI_INSTALL_COMMAND", Value: planRes.InstallCommand},
 		{Name: "OPINAI_SANDBOX_NAMESPACE", Value: sandboxNS},
 		{Name: "OPINAI_SANDBOX_ENDPOINTS", Value: sandboxEndpointsJSON},
+		{Name: "OPINAI_TEST_ENDPOINT", Value: testEndpointJSON},
+		{Name: "OPINAI_ALL_ENDPOINTS", Value: allEndpointsJSON},
 		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 		{Name: "OPINAI_CONTROLLER_URL", Value: fmt.Sprintf("http://opinai-controller.%s.svc:8080", jm.namespace)},
@@ -459,10 +461,10 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 }
 
 // trySandboxDeploy checks if the repo needs K8s sandbox deployment and creates one if so.
-// Tries multiple deployment options if the first fails.
-func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle string) (string, string, string) {
+// Returns (sandboxNS, endpointsJSON, planJSON, testEndpointJSON, allEndpointsJSON).
+func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle string) (string, string, string, string, string) {
 	if jm.sandbox == nil {
-		return "", "", ""
+		return "", "", "", "", ""
 	}
 
 	profile := config.LoadRepoProfile(repo)
@@ -478,29 +480,23 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		if isK8s {
 			slog.Info("K8s repo has no deployment plan — job will do code analysis", "repo", repo)
 		}
-		return "", "", ""
+		return "", "", "", "", ""
 	}
 
 	planJSON := plan.PlanJSON
 	if !isK8s {
-		return "", "", planJSON
+		return "", "", planJSON, "", ""
 	}
 
 	var planData struct {
-		Options []struct {
-			ID          string           `json:"id"`
-			Name        string           `json:"name"`
-			Recommended bool             `json:"recommended"`
-			Steps       []map[string]any `json:"steps"`
-		} `json:"options"`
+		Options []deployOption `json:"options"`
 	}
 	if err := json.Unmarshal([]byte(planJSON), &planData); err != nil || len(planData.Options) == 0 {
 		slog.Warn("failed to parse deployment plan", "repo", repo, "error", err)
-		return "", "", planJSON
+		return "", "", planJSON, "", ""
 	}
 
-	// Order: previously working option first, then recommended, then rest
-	ordered := orderOptions(repo, planData.Options)
+	ordered := orderDeployOptions(repo, planData.Options)
 
 	// Multi-attempt: try each option until one succeeds
 	for attempt, opt := range ordered {
@@ -509,7 +505,7 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		sandboxNS, err := jm.sandbox.CreateSandbox(repo, issueNumber)
 		if err != nil {
 			slog.Error("sandbox creation failed", "repo", repo, "error", err)
-			return "", "", planJSON
+			return "", "", planJSON, "", ""
 		}
 
 		result, err := jm.sandbox.DeployInSandbox(sandboxNS, opt.Steps)
@@ -520,7 +516,7 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 				endpointsJSON, _ := json.Marshal(endpoints)
 				database.SetRepoMemory(repo, "working_deploy_option", opt.ID)
 				slog.Info("sandbox deployed successfully", "namespace", sandboxNS, "option", opt.Name)
-				return sandboxNS, string(endpointsJSON), planJSON
+				return sandboxNS, string(endpointsJSON), planJSON, string(opt.TestEndpoint), string(opt.AllEndpoints)
 			}
 		}
 
@@ -537,42 +533,29 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 	}
 
 	slog.Warn("all deployment options failed — falling back to code analysis", "repo", repo)
-	return "", "", planJSON
+	return "", "", planJSON, "", ""
 }
 
-func orderOptions(repo string, options []struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Recommended bool             `json:"recommended"`
-	Steps       []map[string]any `json:"steps"`
-}) []struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Recommended bool             `json:"recommended"`
-	Steps       []map[string]any `json:"steps"`
-} {
-	// Check if we have a previously working option
+type deployOption struct {
+	ID            string           `json:"id"`
+	Name          string           `json:"name"`
+	Recommended   bool             `json:"recommended"`
+	Steps         []map[string]any `json:"steps"`
+	TestEndpoint  json.RawMessage  `json:"test_endpoint"`
+	AllEndpoints  json.RawMessage  `json:"all_endpoints"`
+}
+
+func orderDeployOptions(repo string, options []deployOption) []deployOption {
 	mem, _ := database.GetRepoMemory(repo, strPtr("working_deploy_option"))
 	workingID := ""
 	if v, ok := mem["working_deploy_option"]; ok {
 		workingID = v
 	}
 
-	var first, rest []struct {
-		ID          string           `json:"id"`
-		Name        string           `json:"name"`
-		Recommended bool             `json:"recommended"`
-		Steps       []map[string]any `json:"steps"`
-	}
-
+	var first, rest []deployOption
 	for _, opt := range options {
 		if opt.ID == workingID {
-			first = append([]struct {
-				ID          string           `json:"id"`
-				Name        string           `json:"name"`
-				Recommended bool             `json:"recommended"`
-				Steps       []map[string]any `json:"steps"`
-			}{opt}, first...)
+			first = append([]deployOption{opt}, first...)
 		} else if opt.Recommended {
 			first = append(first, opt)
 		} else {
@@ -866,6 +849,17 @@ func secretEnvVar(name, secretName, key string) []corev1.EnvVar {
 			},
 		},
 	}}
+}
+
+// HasSandbox returns true if the sandbox manager is available.
+func (jm *JobManager) HasSandbox() bool { return jm.sandbox != nil }
+
+// CleanupSandboxes deletes sandboxes older than maxAge seconds.
+func (jm *JobManager) CleanupSandboxes(maxAge int) int {
+	if jm.sandbox == nil {
+		return 0
+	}
+	return jm.sandbox.AutoCleanup(maxAge)
 }
 
 func boolPtr(b bool) *bool { return &b }

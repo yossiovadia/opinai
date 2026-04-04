@@ -21,9 +21,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const (
@@ -49,12 +53,25 @@ var SkippedKinds = map[string]bool{
 // Manager handles sandbox namespace lifecycle.
 type Manager struct {
 	client    kubernetes.Interface
+	dynClient dynamic.Interface
+	disco     discovery.DiscoveryInterface
 	namespace string // controller namespace (for network policy)
 }
 
 // NewManager creates a sandbox manager.
 func NewManager(client kubernetes.Interface, controllerNS string) *Manager {
-	return &Manager{client: client, namespace: controllerNS}
+	m := &Manager{client: client, namespace: controllerNS}
+	// Initialize dynamic client from the typed client's REST config.
+	// If this fails, CRD deployment is unavailable but built-in kinds still work.
+	if restClient, ok := client.(*kubernetes.Clientset); ok {
+		m.disco = restClient.Discovery()
+	}
+	return m
+}
+
+// SetDynamicClient sets the dynamic K8s client for CRD resource deployment.
+func (m *Manager) SetDynamicClient(dc dynamic.Interface) {
+	m.dynClient = dc
 }
 
 // ValidateName returns true if the namespace starts with the sandbox prefix.
@@ -213,7 +230,7 @@ func (m *Manager) DeployInSandbox(ns string, steps []map[string]any) (map[string
 		var stepErr error
 		switch stepType {
 		case "manifest":
-			stepErr = applyManifests(m.client, ns, content)
+			stepErr = applyManifests(m.client, m.dynClient, m.disco, ns, content)
 		case "wait":
 			timeout := 120
 			if t, ok := step["timeout_seconds"].(float64); ok {
@@ -384,7 +401,7 @@ func (m *Manager) AutoCleanup(maxAge int) int {
 // --- manifest helpers ---
 
 // applyManifests handles multi-document YAML/JSON content.
-func applyManifests(client kubernetes.Interface, ns, content string) error {
+func applyManifests(client kubernetes.Interface, dynClient dynamic.Interface, disco discovery.DiscoveryInterface, ns, content string) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return fmt.Errorf("empty manifest content")
@@ -397,7 +414,7 @@ func applyManifests(client kubernetes.Interface, ns, content string) error {
 		if doc == "" || doc == "---" {
 			continue
 		}
-		if err := applySingleManifest(client, ns, doc); err != nil {
+		if err := applySingleManifest(client, dynClient, disco, ns, doc); err != nil {
 			return fmt.Errorf("document %d: %w", i+1, err)
 		}
 	}
@@ -435,7 +452,7 @@ func splitYAMLDocs(content string) []string {
 }
 
 // applySingleManifest parses a single YAML or JSON manifest and creates the resource.
-func applySingleManifest(client kubernetes.Interface, ns, content string) error {
+func applySingleManifest(client kubernetes.Interface, dynClient dynamic.Interface, disco discovery.DiscoveryInterface, ns, content string) error {
 	// Parse content — try JSON first, then YAML
 	var doc map[string]any
 	content = strings.TrimSpace(content)
@@ -464,8 +481,11 @@ func applySingleManifest(client kubernetes.Interface, ns, content string) error 
 		return nil
 	}
 	if !AllowedKinds[kind] {
-		slog.Warn("skipping unsupported resource kind", "kind", kind)
-		return nil
+		if dynClient == nil || disco == nil {
+			slog.Warn("skipping CRD resource — dynamic client not available", "kind", kind)
+			return nil
+		}
+		return applyDynamic(dynClient, disco, ns, doc, kind)
 	}
 
 	// RBAC pre-check for sensitive kinds
@@ -683,6 +703,66 @@ func checkCanCreate(client kubernetes.Interface, ns, kind string) bool {
 	return result.Status.Allowed
 }
 
+// applyDynamic uses the dynamic client to create a CRD-based resource in the sandbox namespace.
+func applyDynamic(dynClient dynamic.Interface, disco discovery.DiscoveryInterface, ns string, doc map[string]any, kind string) error {
+	apiVersion, _ := doc["apiVersion"].(string)
+	if apiVersion == "" {
+		return fmt.Errorf("CRD resource %s missing apiVersion", kind)
+	}
+
+	gvr, err := resolveGVR(disco, apiVersion, kind)
+	if err != nil {
+		slog.Warn("skipping CRD resource — cannot resolve GVR", "kind", kind, "apiVersion", apiVersion, "error", err)
+		return nil
+	}
+
+	data, _ := json.Marshal(doc)
+	obj := &unstructured.Unstructured{}
+	if err := json.Unmarshal(data, &obj.Object); err != nil {
+		return fmt.Errorf("parse CRD manifest: %w", err)
+	}
+
+	obj.SetNamespace(ns)
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[ManagedLabelKey] = "true"
+	obj.SetLabels(labels)
+
+	ctx := context.Background()
+	_, err = dynClient.Resource(gvr).Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create %s: %w", kind, err)
+	}
+	slog.Info("created CRD resource via dynamic client", "kind", kind, "name", obj.GetName(), "namespace", ns)
+	return nil
+}
+
+// resolveGVR finds the GroupVersionResource for a given apiVersion + kind using discovery.
+func resolveGVR(disco discovery.DiscoveryInterface, apiVersion, kind string) (schema.GroupVersionResource, error) {
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return schema.GroupVersionResource{}, fmt.Errorf("parse apiVersion %q: %w", apiVersion, err)
+	}
+
+	resources, err := disco.ServerResourcesForGroupVersion(apiVersion)
+	if err != nil {
+		return schema.GroupVersionResource{}, fmt.Errorf("discover resources for %s: %w", apiVersion, err)
+	}
+
+	for _, r := range resources.APIResources {
+		if r.Kind == kind {
+			return schema.GroupVersionResource{
+				Group:    gv.Group,
+				Version:  gv.Version,
+				Resource: r.Name,
+			}, nil
+		}
+	}
+	return schema.GroupVersionResource{}, fmt.Errorf("kind %q not found in %s", kind, apiVersion)
+}
+
 func truncLog(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -711,6 +791,31 @@ func waitForReady(client kubernetes.Interface, ns, resourceRef string, timeout i
 				if dep.Status.ReadyReplicas >= desired {
 					return true
 				}
+			}
+		case "statefulset":
+			sts, err := client.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
+			if err == nil {
+				desired := int32(1)
+				if sts.Spec.Replicas != nil {
+					desired = *sts.Spec.Replicas
+				}
+				if sts.Status.ReadyReplicas >= desired {
+					return true
+				}
+			}
+		case "service":
+			ep, err := client.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
+			if err == nil {
+				for _, subset := range ep.Subsets {
+					if len(subset.Addresses) > 0 {
+						return true
+					}
+				}
+			}
+		case "job":
+			j, err := client.BatchV1().Jobs(ns).Get(ctx, name, metav1.GetOptions{})
+			if err == nil && j.Status.Succeeded >= 1 {
+				return true
 			}
 		case "pod":
 			pod, err := client.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})

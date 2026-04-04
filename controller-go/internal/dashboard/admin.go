@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -504,12 +505,104 @@ func fetchRepoReadme(repo string) string {
 }
 
 func readClusterState() map[string][]string {
-	// Return empty for now — K8s cluster state reading done in Phase 7
-	return map[string][]string{
+	result := map[string][]string{
 		"crds":       {},
 		"operators":  {},
 		"namespaces": {},
 	}
+
+	// Try to read CRDs from the cluster via GitHub API-style K8s call
+	// We use the same ghGetDashboard pattern but targeting the K8s API.
+	// Since the dashboard doesn't hold a K8s client directly, we use the
+	// discovery API via a lightweight HTTP call to the in-cluster API server.
+	k8sHost := os.Getenv("KUBERNETES_SERVICE_HOST")
+	k8sPort := os.Getenv("KUBERNETES_SERVICE_PORT")
+	if k8sHost == "" {
+		return result // not running in-cluster
+	}
+
+	tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return result
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+	baseURL := fmt.Sprintf("https://%s:%s", k8sHost, k8sPort)
+
+	k8sGet := func(path string) ([]byte, error) {
+		req, _ := http.NewRequest("GET", baseURL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		// Skip TLS verify for in-cluster API (CA cert handling is complex)
+		client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		return io.ReadAll(resp.Body)
+	}
+
+	// List CRDs
+	if body, err := k8sGet("/apis/apiextensions.k8s.io/v1/customresourcedefinitions"); err == nil {
+		var crdList struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Spec struct {
+					Group string `json:"group"`
+					Names struct {
+						Kind string `json:"kind"`
+					} `json:"names"`
+				} `json:"spec"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(body, &crdList) == nil {
+			for _, crd := range crdList.Items {
+				result["crds"] = append(result["crds"], crd.Spec.Names.Kind+" ("+crd.Spec.Group+")")
+			}
+		}
+	}
+
+	// List OLM operator subscriptions (optional — only if OLM is installed)
+	if body, err := k8sGet("/apis/operators.coreos.com/v1alpha1/subscriptions"); err == nil {
+		var subList struct {
+			Items []struct {
+				Metadata struct {
+					Name      string `json:"name"`
+					Namespace string `json:"namespace"`
+				} `json:"metadata"`
+				Spec struct {
+					Name string `json:"name"`
+				} `json:"spec"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(body, &subList) == nil {
+			for _, sub := range subList.Items {
+				result["operators"] = append(result["operators"], sub.Spec.Name+" ("+sub.Metadata.Namespace+")")
+			}
+		}
+	}
+
+	// List namespaces
+	if body, err := k8sGet("/api/v1/namespaces"); err == nil {
+		var nsList struct {
+			Items []struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			} `json:"items"`
+		}
+		if json.Unmarshal(body, &nsList) == nil {
+			for _, ns := range nsList.Items {
+				result["namespaces"] = append(result["namespaces"], ns.Metadata.Name)
+			}
+		}
+	}
+
+	slog.Info("read cluster state", "crds", len(result["crds"]), "operators", len(result["operators"]), "namespaces", len(result["namespaces"]))
+	return result
 }
 
 func autoUpdateProfileFromPlan(repo string, planData map[string]any) {

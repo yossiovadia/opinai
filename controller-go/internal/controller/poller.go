@@ -84,6 +84,14 @@ func (p *Poller) Start() {
 		// Harvest completed jobs
 		p.jobs.HarvestCompletedJobs()
 
+		// Clean up orphaned sandboxes (older than 30 min)
+		if p.jobs.HasSandbox() {
+			cleaned := p.jobs.CleanupSandboxes(1800)
+			if cleaned > 0 {
+				slog.Info("auto-cleaned orphaned sandboxes", "count", cleaned)
+			}
+		}
+
 		// Check deployment plan freshness
 		checkPlanStaleness(repos)
 

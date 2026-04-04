@@ -14,7 +14,19 @@ Cluster state:
 - Operators: {{.Operators}}
 - Namespaces: {{.Namespaces}}
 
-Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with an "options" array. Each option: id, name, description, estimated_time, best_for, steps (array of {type, content, required, description}), requirements, risks, recommended (bool).
+Generate 3 deployment options as JSON (no markdown fences). Return ONLY valid JSON with an "options" array. Each option: id, name, description, estimated_time, best_for, steps (array of {type, content, required, description}), requirements, risks, recommended (bool), test_endpoint, all_endpoints.
+
+test_endpoint identifies which service the automated tester should send HTTP requests to:
+  "test_endpoint": {"service": "service-name", "port": 8080, "protocol": "http", "health_path": "/health"}
+
+all_endpoints lists ALL services deployed by this option with their purpose:
+  "all_endpoints": [
+    {"service": "envoy", "port": 8080, "purpose": "HTTP proxy entry point — test requests go here"},
+    {"service": "backend-api", "port": 3000, "purpose": "internal API (called by envoy, not directly)"},
+    {"service": "postgres", "port": 5432, "purpose": "database (internal only)"}
+  ]
+
+IMPORTANT: test_endpoint.service must be the user-facing entry point. For proxy setups (Envoy, nginx, HAProxy), use the proxy. For API+DB setups, use the API server, not the database.
 
 Also include at the top level:
 - project_type: e.g. "api-server", "operator", "cli", "library"

@@ -67,16 +67,63 @@ func Run() {
 		slog.Info("verify-fix mode — forcing full deployment and testing")
 	}
 
+	// All sandbox endpoints for agent context
+	var allEndpointsCtx string
+
 	if sandboxNS != "" {
 		// Sandbox already created by controller
 		slog.Info("using sandbox deployment", "namespace", sandboxNS)
-		if sandboxEndpoints != "" {
+
+		// Prefer test_endpoint from the deployment plan (specifies the right service to test)
+		testEndpointJSON := os.Getenv("OPINAI_TEST_ENDPOINT")
+		if testEndpointJSON != "" {
+			var te struct {
+				Service    string `json:"service"`
+				Port       int    `json:"port"`
+				Protocol   string `json:"protocol"`
+				HealthPath string `json:"health_path"`
+			}
+			if json.Unmarshal([]byte(testEndpointJSON), &te) == nil && te.Service != "" {
+				proto := te.Protocol
+				if proto == "" {
+					proto = "http"
+				}
+				port := te.Port
+				if port == 0 {
+					port = 80
+				}
+				serverURL = fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", proto, te.Service, sandboxNS, port)
+				os.Setenv("SERVER_URL", serverURL)
+				slog.Info("using test_endpoint from deployment plan", "url", serverURL, "health", te.HealthPath)
+			}
+		}
+
+		// Fallback: pick first endpoint from the service map
+		if serverURL == "" && sandboxEndpoints != "" {
 			var endpoints map[string]string
 			json.Unmarshal([]byte(sandboxEndpoints), &endpoints)
 			for _, fqdn := range endpoints {
 				serverURL = "http://" + fqdn
 				os.Setenv("SERVER_URL", serverURL)
 				break
+			}
+		}
+
+		// Build all_endpoints context for the agent
+		allEndpointsJSON := os.Getenv("OPINAI_ALL_ENDPOINTS")
+		if allEndpointsJSON != "" {
+			var eps []struct {
+				Service string `json:"service"`
+				Port    int    `json:"port"`
+				Purpose string `json:"purpose"`
+			}
+			if json.Unmarshal([]byte(allEndpointsJSON), &eps) == nil && len(eps) > 0 {
+				allEndpointsCtx = "\n\nSandbox services deployed for this project:\n"
+				for _, ep := range eps {
+					fqdn := fmt.Sprintf("%s.%s.svc.cluster.local:%d", ep.Service, sandboxNS, ep.Port)
+					allEndpointsCtx += fmt.Sprintf("- %s (%s) — %s\n", ep.Service, fqdn, ep.Purpose)
+				}
+				allEndpointsCtx += fmt.Sprintf("\nTest traffic should go to: %s\n", serverURL)
 			}
 		}
 	} else if deploymentPlan != "" {
@@ -187,7 +234,7 @@ func Run() {
 	} else {
 		stateCtx = "\n\nThis is an OPEN issue. Reproduce the bug and confirm or deny it.\n"
 	}
-	agentRepoCtx := richCtx + stateCtx
+	agentRepoCtx := richCtx + stateCtx + allEndpointsCtx
 
 	hasRich := strings.Contains(richCtx, "## Project Analysis:")
 	slog.Info("starting agent investigation", "has_rich_context", hasRich, "context_bytes", len(agentRepoCtx))
