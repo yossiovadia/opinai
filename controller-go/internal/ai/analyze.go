@@ -43,11 +43,15 @@ func AnalyzeDeployment(repo, readme string, files map[string]string, clusterStat
 	// Try to render actual K8s manifests from the cloned repo
 	renderedManifests := renderProjectManifests(cloneDir)
 
+	// Extract install/deploy instructions from project docs
+	installDocs := extractInstallDocs(cloneDir)
+
 	prompt := prompts.Render("analyze_deployment.txt", map[string]string{
 		"Repo": repo, "ProfileJSON": profileJSON,
 		"Readme": readme, "FilesSummary": filesSummary,
 		"CRDs": crds, "Operators": operators, "Namespaces": namespaces,
 		"RichAnalysis": richAnalysis, "RenderedManifests": renderedManifests,
+		"InstallDocs": installDocs,
 	})
 
 	content, err := callWithConfig(cfg, prompt, 8192)
@@ -201,6 +205,97 @@ func truncateManifests(s string) string {
 		return s
 	}
 	return s[:maxLen] + "\n... (truncated)"
+}
+
+// extractInstallDocs reads install/deploy instructions from project documentation
+// and Makefile targets. Returns concatenated text, truncated to 6KB.
+func extractInstallDocs(cloneDir string) string {
+	if cloneDir == "" {
+		return ""
+	}
+
+	var docs strings.Builder
+
+	// Read documentation files that commonly contain install instructions
+	docFiles := []string{
+		"CONTRIBUTING.md", "DEVELOPMENT.md", "INSTALL.md",
+		"deploy/README.md", "docs/install.md", "docs/deployment.md",
+		"docs/getting-started.md", "docs/development.md",
+	}
+	for _, f := range docFiles {
+		data, err := os.ReadFile(filepath.Join(cloneDir, f))
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		if len(content) > 3000 {
+			content = content[:3000]
+		}
+		docs.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", f, content))
+		if docs.Len() > 5000 {
+			break
+		}
+	}
+
+	// Extract deploy/install targets from Makefile
+	makefile, err := os.ReadFile(filepath.Join(cloneDir, "Makefile"))
+	if err == nil {
+		targets := extractMakeTargets(string(makefile), []string{
+			"deploy", "install", "undeploy", "run", "docker-build",
+			"manifests", "generate", "build",
+		})
+		if targets != "" {
+			docs.WriteString("--- Makefile targets ---\n")
+			docs.WriteString(targets)
+			docs.WriteString("\n")
+		}
+	}
+
+	if docs.Len() == 0 {
+		return ""
+	}
+
+	result := docs.String()
+	if len(result) > 6144 {
+		result = result[:6144] + "\n... (truncated)"
+	}
+	slog.Info("extracted install docs for deployment analysis", "bytes", len(result))
+	return result
+}
+
+// extractMakeTargets extracts specific target definitions from a Makefile.
+func extractMakeTargets(makefile string, targets []string) string {
+	targetSet := make(map[string]bool, len(targets))
+	for _, t := range targets {
+		targetSet[t] = true
+	}
+
+	var result strings.Builder
+	lines := strings.Split(makefile, "\n")
+	capturing := false
+	for _, line := range lines {
+		// Check if this line starts a target we want
+		if !strings.HasPrefix(line, "\t") && strings.Contains(line, ":") {
+			name := strings.TrimSpace(strings.Split(line, ":")[0])
+			// Strip .PHONY prefix or similar
+			name = strings.TrimPrefix(name, ".PHONY")
+			name = strings.TrimSpace(name)
+			if targetSet[name] {
+				capturing = true
+				result.WriteString(line)
+				result.WriteString("\n")
+				continue
+			}
+			capturing = false
+		}
+		if capturing && (strings.HasPrefix(line, "\t") || line == "") {
+			result.WriteString(line)
+			result.WriteString("\n")
+		} else {
+			capturing = false
+		}
+	}
+	return result.String()
 }
 
 func extractOptionBlocks(text string) []map[string]any {
