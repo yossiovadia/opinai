@@ -23,7 +23,10 @@ For deployment steps you MUST:
 - Use "command" type steps ONLY for kubectl, helm, curl, or git commands
 - NEVER use "docker build", "go build", "npm install", "make", or any build commands — they will fail
 - For container images: reference pre-built images from public registries (ghcr.io, docker.io, quay.io)
-- If the project needs a custom image built, use an OpenShift BuildConfig manifest (type: "manifest") that builds inside the cluster, NOT a local docker build
+- If the project needs a custom image built from its Dockerfile, use a "build" step type (NOT "docker build"). The build step creates an OpenShift BuildConfig that builds the image inside the cluster.
+  - "type": "build", "name": "my-app", "content": "Dockerfile" (path to Dockerfile, default "Dockerfile")
+  - After a build step, reference the built image in manifest steps as IMAGE_PLACEHOLDER — it will be auto-replaced with the actual registry URL
+  - Example: build step with name "api-server", then a Deployment manifest with image: IMAGE_PLACEHOLDER
 - For helm charts: use "helm install" or "helm upgrade --install" commands (helm is available)
 - For kustomize: use "kubectl apply -k" commands (kubectl is available)
 

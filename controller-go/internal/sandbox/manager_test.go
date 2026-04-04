@@ -88,6 +88,24 @@ func TestInjectNamespace(t *testing.T) {
 		t.Errorf("should replace existing namespace: %q", result)
 	}
 
+	// kubectl with env var namespace — should REPLACE with sandbox namespace
+	result = injectNamespace("kubectl -n $GATEWAY_NAMESPACE rollout status deploy/api", "test-ns")
+	if result != "kubectl -n test-ns rollout status deploy/api" {
+		t.Errorf("should replace env var namespace: %q", result)
+	}
+
+	// kubectl with --namespace=value
+	result = injectNamespace("kubectl --namespace=prod get pods", "test-ns")
+	if result != "kubectl --namespace=test-ns get pods" {
+		t.Errorf("should replace --namespace=value: %q", result)
+	}
+
+	// kubectl with --namespace=$VAR
+	result = injectNamespace("kubectl --namespace=$MY_NS get pods", "test-ns")
+	if result != "kubectl --namespace=test-ns get pods" {
+		t.Errorf("should replace --namespace=$VAR: %q", result)
+	}
+
 	// Non-k8s command
 	result = injectNamespace("make build", "test-ns")
 	if result != "make build" {

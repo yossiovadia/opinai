@@ -632,6 +632,7 @@ func extractSandboxQuotas(planJSON string) sandbox.SandboxQuotas {
 	var plan struct {
 		SandboxResources map[string]string `json:"sandbox_resource_requirements"`
 		Resources        map[string]string `json:"resource_requirements"`
+		TimeoutMinutes   int               `json:"job_timeout_minutes"`
 	}
 	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
 		return sandbox.SandboxQuotas{}
@@ -641,15 +642,16 @@ func extractSandboxQuotas(planJSON string) sandbox.SandboxQuotas {
 	if res == nil {
 		res = plan.Resources
 	}
-	if res == nil {
-		return sandbox.SandboxQuotas{}
+	q := sandbox.SandboxQuotas{
+		TimeoutMinutes: plan.TimeoutMinutes,
 	}
-	return sandbox.SandboxQuotas{
-		CPUReq: res["cpu"],
-		MemReq: res["memory"],
-		CPULim: res["cpu_limit"],
-		MemLim: res["memory_limit"],
+	if res != nil {
+		q.CPUReq = res["cpu"]
+		q.MemReq = res["memory"]
+		q.CPULim = res["cpu_limit"]
+		q.MemLim = res["memory_limit"]
 	}
+	return q
 }
 
 func truncateStr(s string, n int) string {
