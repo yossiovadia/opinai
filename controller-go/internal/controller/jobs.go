@@ -653,12 +653,10 @@ func extractSandboxQuotas(planJSON string) sandbox.SandboxQuotas {
 	q := sandbox.SandboxQuotas{
 		TimeoutMinutes: plan.TimeoutMinutes,
 	}
-	if res != nil {
-		q.CPUReq = res["cpu"]
-		q.MemReq = res["memory"]
-		q.CPULim = res["cpu_limit"]
-		q.MemLim = res["memory_limit"]
-	}
+	// Note: resource_requirements from the plan are PER-CONTAINER estimates,
+	// not total quota. We ignore them for quota and use generous defaults.
+	// The LimitRange handles per-container defaults.
+	_ = res
 	return q
 }
 
