@@ -182,9 +182,10 @@ func (p *Poller) StartPendingProcessor() {
 			}
 
 			slog.Info("pending processor: creating job", "repo", item.Repo, "issue", item.Issue)
+			// Remove from pending BEFORE creating job (prevents duplicate triggers during long builds)
+			database.RemovePending(item.Repo, item.Issue)
 			title := item.Title
 			if title == "" {
-				// Fetch title from GitHub if not stored
 				if details, err := FetchIssueDetails(item.Repo, item.Issue); err == nil {
 					title = details.Title
 				}
