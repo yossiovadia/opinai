@@ -352,6 +352,8 @@ function mergeIssues() {
   // Apply pending re-run overrides
   for (var pk in pendingReRuns) {
     var pr = pendingReRuns[pk];
+    // Auto-expire stale pending entries (>10 min)
+    if (Date.now() - pr.timestamp > 600000) { delete pendingReRuns[pk]; continue; }
     if (map[pk]) {
       // Check if a NEW run arrived (timestamp after the re-run was triggered)
       var entry = map[pk];
