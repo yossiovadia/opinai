@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -291,15 +290,15 @@ func Run() {
 		}
 	}
 
-	// Fetch linked PRs/issues referenced in the body + comments
-	linkedResources := fetchLinkedResources(issueBody)
-	if len(linkedResources) > 0 {
-		linkedJSON, _ := json.Marshal(linkedResources)
-		reproDetails["linked_resources"] = string(linkedJSON)
-		// Add to agent context
-		issueBody += "\n\n---\n\n## Linked Resources\n"
-		for url, content := range linkedResources {
-			issueBody += fmt.Sprintf("\n### %s\n%s\n", url, content)
+	// Include linked resources (fetched by controller) in agent context
+	if linkedJSON := os.Getenv("OPINAI_LINKED_RESOURCES"); linkedJSON != "" {
+		reproDetails["linked_resources"] = linkedJSON
+		var linked map[string]string
+		if json.Unmarshal([]byte(linkedJSON), &linked) == nil && len(linked) > 0 {
+			issueBody += "\n\n---\n\n## Linked Resources\n"
+			for url, content := range linked {
+				issueBody += fmt.Sprintf("\n### %s\n%s\n", url, content)
+			}
 		}
 	}
 
@@ -1097,86 +1096,6 @@ func generateSuggestedQuestions(title, body, verdictText string) string {
 		return ""
 	}
 	return reply
-}
-
-// ghLinkRe matches GitHub PR and issue URLs.
-var ghLinkRe = regexp.MustCompile(`https://github\.com/([^/]+/[^/]+)/(pull|issues)/(\d+)`)
-
-// fetchLinkedResources scans text for GitHub PR/issue links and fetches their content.
-// Returns map of URL → content. Max 5 links, 8KB total.
-func fetchLinkedResources(text string) map[string]string {
-	matches := ghLinkRe.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-
-	// Deduplicate
-	seen := make(map[string]bool)
-	type link struct{ repo, kind, number string }
-	var links []link
-	for _, m := range matches {
-		url := m[0]
-		if seen[url] {
-			continue
-		}
-		seen[url] = true
-		links = append(links, link{repo: m[1], kind: m[2], number: m[3]})
-		if len(links) >= 5 {
-			break
-		}
-	}
-
-	result := make(map[string]string)
-	totalSize := 0
-	const maxTotal = 8192
-
-	for _, l := range links {
-		if totalSize >= maxTotal {
-			break
-		}
-		url := fmt.Sprintf("https://github.com/%s/%s/%s", l.repo, l.kind, l.number)
-		var content string
-
-		if l.kind == "pull" {
-			// Fetch PR info
-			out, err := exec.Command("gh", "pr", "view", l.number, "-R", l.repo,
-				"--json", "title,body,files,additions,deletions").CombinedOutput()
-			if err == nil {
-				content = string(out)
-			}
-			// Also fetch diff summary (truncated)
-			diffOut, err := exec.Command("gh", "pr", "diff", l.number, "-R", l.repo).CombinedOutput()
-			if err == nil && len(diffOut) > 0 {
-				diff := string(diffOut)
-				if len(diff) > 4096 {
-					diff = diff[:4096] + "\n... (diff truncated)"
-				}
-				content += "\n\n--- PR Diff ---\n" + diff
-			}
-		} else {
-			// Fetch issue info
-			out, err := exec.Command("gh", "issue", "view", l.number, "-R", l.repo,
-				"--json", "title,body").CombinedOutput()
-			if err == nil {
-				content = string(out)
-			}
-		}
-
-		if content == "" {
-			continue
-		}
-		if totalSize+len(content) > maxTotal {
-			content = content[:maxTotal-totalSize] + "\n... (truncated)"
-		}
-		result[url] = content
-		totalSize += len(content)
-		slog.Info("fetched linked resource", "url", url, "bytes", len(content))
-	}
-
-	if len(result) == 0 {
-		return nil
-	}
-	return result
 }
 
 // classifyIssue makes a quick AI call to determine whether an issue needs runtime

@@ -238,6 +238,17 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		}
 	}
 
+	// Fetch linked PRs/issues referenced in the issue body
+	linkedJSON := ""
+	if details, err := FetchIssueDetails(repo, issueNumber); err == nil {
+		linked := FetchLinkedResources(details.Body + "\n" + commentsJSON)
+		if len(linked) > 0 {
+			if b, err := json.Marshal(linked); err == nil {
+				linkedJSON = string(b)
+			}
+		}
+	}
+
 	// Check if repo needs K8s sandbox deployment
 	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON, testEndpointJSON, allEndpointsJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
@@ -260,6 +271,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		{Name: "OPINAI_ALL_ENDPOINTS", Value: allEndpointsJSON},
 		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
 		{Name: "OPINAI_ISSUE_COMMENTS", Value: commentsJSON},
+		{Name: "OPINAI_LINKED_RESOURCES", Value: linkedJSON},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 		{Name: "OPINAI_CONTROLLER_URL", Value: fmt.Sprintf("http://opinai-controller.%s.svc:8080", jm.namespace)},
 	}

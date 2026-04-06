@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
+	"regexp"
 	"time"
 )
 
@@ -214,6 +217,81 @@ func GetRepoHeadSHA(repo string) (string, error) {
 		return "", fmt.Errorf("no commits found")
 	}
 	return commits[0].SHA, nil
+}
+
+var ghLinkRe = regexp.MustCompile(`https://github\.com/([^/]+/[^/]+)/(pull|issues)/(\d+)`)
+
+// FetchLinkedResources scans text for GitHub PR/issue URLs and fetches their content
+// using the gh CLI. Returns map of URL → content. Max 5 links, 8KB total.
+func FetchLinkedResources(text string) map[string]string {
+	matches := ghLinkRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	type link struct{ repo, kind, number string }
+	var links []link
+	for _, m := range matches {
+		url := m[0]
+		if seen[url] {
+			continue
+		}
+		seen[url] = true
+		links = append(links, link{repo: m[1], kind: m[2], number: m[3]})
+		if len(links) >= 5 {
+			break
+		}
+	}
+
+	result := make(map[string]string)
+	totalSize := 0
+	const maxTotal = 8192
+
+	for _, l := range links {
+		if totalSize >= maxTotal {
+			break
+		}
+		url := fmt.Sprintf("https://github.com/%s/%s/%s", l.repo, l.kind, l.number)
+		var content string
+
+		if l.kind == "pull" {
+			out, err := exec.Command("gh", "pr", "view", l.number, "-R", l.repo,
+				"--json", "title,body,files,additions,deletions").CombinedOutput()
+			if err == nil {
+				content = string(out)
+			}
+			diffOut, err := exec.Command("gh", "pr", "diff", l.number, "-R", l.repo).CombinedOutput()
+			if err == nil && len(diffOut) > 0 {
+				diff := string(diffOut)
+				if len(diff) > 4096 {
+					diff = diff[:4096] + "\n... (diff truncated)"
+				}
+				content += "\n\n--- PR Diff ---\n" + diff
+			}
+		} else {
+			out, err := exec.Command("gh", "issue", "view", l.number, "-R", l.repo,
+				"--json", "title,body").CombinedOutput()
+			if err == nil {
+				content = string(out)
+			}
+		}
+
+		if content == "" {
+			continue
+		}
+		if totalSize+len(content) > maxTotal {
+			content = content[:maxTotal-totalSize] + "\n... (truncated)"
+		}
+		result[url] = content
+		totalSize += len(content)
+		slog.Info("fetched linked resource", "url", url, "bytes", len(content))
+	}
+
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // RemoveLabel removes a label from an issue.
