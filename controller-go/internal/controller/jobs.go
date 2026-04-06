@@ -227,6 +227,17 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 	// Collect REPO_PROFILE_* env vars
 	profileEnvs := collectProfileEnvVars()
 
+	// Fetch issue comments for agent context
+	commentsJSON := ""
+	if comments, err := FetchIssueComments(repo, issueNumber); err == nil && len(comments) > 0 {
+		if b, err := json.Marshal(comments); err == nil {
+			commentsJSON = string(b)
+			if len(commentsJSON) > 4096 {
+				commentsJSON = commentsJSON[:4096]
+			}
+		}
+	}
+
 	// Check if repo needs K8s sandbox deployment
 	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON, testEndpointJSON, allEndpointsJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
@@ -248,6 +259,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		{Name: "OPINAI_TEST_ENDPOINT", Value: testEndpointJSON},
 		{Name: "OPINAI_ALL_ENDPOINTS", Value: allEndpointsJSON},
 		{Name: "OPINAI_DEPLOYMENT_PLAN", Value: truncateStr(deploymentPlanJSON, 30000)},
+		{Name: "OPINAI_ISSUE_COMMENTS", Value: commentsJSON},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 		{Name: "OPINAI_CONTROLLER_URL", Value: fmt.Sprintf("http://opinai-controller.%s.svc:8080", jm.namespace)},
 	}

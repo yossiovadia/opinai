@@ -131,6 +131,43 @@ func FetchIssueDetails(repo string, number int) (*Issue, error) {
 	return &issue, nil
 }
 
+// IssueComment represents a GitHub issue comment.
+type IssueComment struct {
+	Author    string `json:"author"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
+}
+
+// FetchIssueComments returns the first 10 comments on an issue.
+func FetchIssueComments(repo string, number int) ([]IssueComment, error) {
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=10", repo, number))
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	var raw []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	var comments []IssueComment
+	for _, c := range raw {
+		comments = append(comments, IssueComment{
+			Author:    c.User.Login,
+			Body:      c.Body,
+			CreatedAt: c.CreatedAt,
+		})
+	}
+	return comments, nil
+}
+
 // AddLabel adds a label to an issue.
 func AddLabel(repo string, number int, label string) error {
 	_, code, err := ghPost(

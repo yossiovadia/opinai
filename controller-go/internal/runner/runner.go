@@ -273,9 +273,24 @@ func Run() {
 	}
 	agentRepoCtx := richCtx + stateCtx + allEndpointsCtx
 
+	// Include issue comments in the body passed to the agent
+	issueBody := body
+	if commentsJSON := os.Getenv("OPINAI_ISSUE_COMMENTS"); commentsJSON != "" {
+		var comments []struct {
+			Author string `json:"author"`
+			Body   string `json:"body"`
+		}
+		if json.Unmarshal([]byte(commentsJSON), &comments) == nil && len(comments) > 0 {
+			issueBody += "\n\n---\n\n## Issue Comments\n"
+			for _, c := range comments {
+				issueBody += fmt.Sprintf("\n**@%s:**\n%s\n", c.Author, truncStr(c.Body, 500))
+			}
+		}
+	}
+
 	hasRich := strings.Contains(richCtx, "## Project Analysis:")
 	slog.Info("starting agent investigation", "has_rich_context", hasRich, "context_bytes", len(agentRepoCtx))
-	agentResult := agent.Investigate(title, body, serverURL, "/tmp/opinai-repo", agentRepoCtx, 0) // 0 = use default (200)
+	agentResult := agent.Investigate(title, issueBody, serverURL, "/tmp/opinai-repo", agentRepoCtx, 0) // 0 = use default (200)
 
 	var vr ai.VerdictResult
 	var script string

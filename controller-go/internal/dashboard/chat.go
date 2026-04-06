@@ -35,6 +35,32 @@ func buildChatContext(ctx map[string]any) string {
 				}
 				system += fmt.Sprintf("Previous reproduction result:\n%s\n\n", report)
 				if run.ReproDetails != "" {
+					// Extract key fields from repro_details for richer chat context
+					var details map[string]any
+					if json.Unmarshal([]byte(run.ReproDetails), &details) == nil {
+						if summary, ok := details["summary"].(string); ok && summary != "" {
+							s := summary
+							if len(s) > 1500 {
+								s = s[:1500]
+							}
+							system += fmt.Sprintf("Investigation summary:\n%s\n\n", s)
+						}
+						if files, ok := details["files_investigated"].([]any); ok && len(files) > 0 {
+							system += "Files investigated:"
+							for _, f := range files {
+								if fs, ok := f.(string); ok {
+									system += " " + fs
+								}
+							}
+							system += "\n\n"
+						}
+						if reason, ok := details["classification_reason"].(string); ok && reason != "" {
+							system += fmt.Sprintf("Classification: %s\n", reason)
+						}
+						if failReason, ok := details["deployment_failure_reason"].(string); ok && failReason != "" {
+							system += fmt.Sprintf("Deployment failure: %s\n", failReason)
+						}
+					}
 					system += fmt.Sprintf("Reproduction details: %s\n\n", run.ReproDetails)
 				}
 				break
