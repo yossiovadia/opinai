@@ -60,14 +60,15 @@ func Run() {
 
 	// Classify the issue — controls whether deployment is attempted
 	repoCtxForClassify := os.Getenv("OPINAI_REPO_CONTEXT")
-	needsDeployment, classificationReason := classifyIssue(title, body, repoCtxForClassify)
-	slog.Info("issue classified", "needs_deployment", needsDeployment, "reason", classificationReason)
+	needsDeployment, classificationReason, recommendedOption := classifyIssue(title, body, repoCtxForClassify)
+	slog.Info("issue classified", "needs_deployment", needsDeployment, "reason", classificationReason, "recommended_option", recommendedOption)
 
 	// Step 2: Start server, use sandbox, or deploy from plan
 	serverURL := ""
 	verifyFix := os.Getenv("OPINAI_VERIFY_FIX") == "true"
 	var serverProc *os.Process
 	var allEndpointsCtx string
+	var deploymentFailureReason string
 
 	// Skip deployment if classifier says code review is sufficient
 	// (unless verify-fix mode forces deployment)
@@ -148,13 +149,22 @@ func Run() {
 			if serverURL != "" {
 				os.Setenv("SERVER_URL", serverURL)
 				slog.Info("deployed from plan", "server_url", serverURL)
+			} else {
+				deploymentFailureReason = "Deployment from plan failed — no server URL obtained"
 			}
 		} else {
 			// Standard: start server in pod
 			serverProc, serverURL = startServer()
 			if serverURL != "" {
 				os.Setenv("SERVER_URL", serverURL)
+			} else {
+				deploymentFailureReason = "Server startup failed — could not build or run the project"
 			}
+		}
+
+		// Log deployment failure and fall back to code review
+		if needsDeployment && serverURL == "" && sandboxNS == "" {
+			slog.Warn("deployment requested but failed — falling back to code review", "reason", deploymentFailureReason)
 		}
 	}
 
@@ -173,6 +183,7 @@ func Run() {
 		"server_started": serverURL != "",
 		"issue_classification": func() string { if needsDeployment { return "runtime" }; return "code_review" }(),
 		"classification_reason": classificationReason,
+		"recommended_deploy_option": recommendedOption,
 		"server_url":     serverURL,
 	}
 	sandboxNSForDetails := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
@@ -191,6 +202,9 @@ func Run() {
 		reproDetails["method"] = "live-deploy"
 	} else {
 		reproDetails["method"] = "code-review"
+	}
+	if deploymentFailureReason != "" {
+		reproDetails["deployment_failure_reason"] = deploymentFailureReason
 	}
 	repoCtxForDetails := os.Getenv("OPINAI_REPO_CONTEXT")
 	if bc := extractMemoryValue(repoCtxForDetails, "working_install_command"); bc != "" {
@@ -1056,43 +1070,75 @@ func generateSuggestedQuestions(title, body, verdictText string) string {
 }
 
 // classifyIssue makes a quick AI call to determine whether an issue needs runtime
-// testing (running server) or code review only. Returns (needsDeployment, reason).
-func classifyIssue(title, body, repoContext string) (bool, string) {
+// testing or code review only. Returns (needsDeployment, reason, recommendedOption).
+func classifyIssue(title, body, repoContext string) (bool, string, string) {
 	cfg := ai.LoadConfig()
 	if !cfg.Available() {
-		return false, "no AI provider"
+		return false, "no AI provider", ""
 	}
 	ctx := ""
 	if repoContext != "" {
 		ctx = "\n\nProject context:\n" + truncStr(repoContext, 500)
 	}
+
+	// Extract deployment option names from the deployment plan if available
+	optionsCtx := ""
+	if planJSON := os.Getenv("OPINAI_DEPLOYMENT_PLAN"); planJSON != "" {
+		var plan struct {
+			Options []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"options"`
+		}
+		if json.Unmarshal([]byte(planJSON), &plan) == nil && len(plan.Options) > 0 {
+			optionsCtx = "\n\nAvailable deployment options:"
+			for _, opt := range plan.Options {
+				optionsCtx += fmt.Sprintf("\n- %s (%s)", opt.ID, opt.Name)
+			}
+		}
+	}
+
 	prompt := fmt.Sprintf(`Given this issue, classify whether reproducing the bug requires a RUNNING SERVER (API behavior, HTTP responses, timing, concurrency, runtime errors, integration failures) or CODE REVIEW ONLY (logic bugs, missing null checks, wrong conditions, config parsing, type errors, documentation).
 
 Reply with exactly one line:
-NEEDS_DEPLOYMENT: <brief reason>
+NEEDS_DEPLOYMENT [option-id]: <brief reason>
 or
 CODE_REVIEW: <brief reason>
+
+If deployment is needed and deployment options are listed below, include the best option id in brackets. If no options are listed, omit the brackets.%s
 
 Issue Title: %s
 
 Issue Description:
-%s%s`, title, truncStr(body, 800), ctx)
+%s%s`, optionsCtx, title, truncStr(body, 800), ctx)
 
 	reply, err := ai.Call(prompt, 128)
 	if err != nil {
 		slog.Warn("issue classification failed", "error", err)
-		return false, "classification unavailable"
+		return false, "classification unavailable", ""
 	}
 	reply = strings.TrimSpace(reply)
-	if strings.HasPrefix(strings.ToUpper(reply), "NEEDS_DEPLOYMENT:") {
-		reason := strings.TrimSpace(strings.TrimPrefix(reply, reply[:len("NEEDS_DEPLOYMENT:")]))
-		return true, reason
+	upper := strings.ToUpper(reply)
+	if strings.HasPrefix(upper, "NEEDS_DEPLOYMENT") {
+		rest := strings.TrimPrefix(reply, reply[:len("NEEDS_DEPLOYMENT")])
+		rest = strings.TrimSpace(rest)
+		// Parse optional [option-id]
+		recommendedOption := ""
+		if strings.HasPrefix(rest, "[") {
+			if end := strings.Index(rest, "]"); end > 0 {
+				recommendedOption = rest[1:end]
+				rest = strings.TrimSpace(rest[end+1:])
+			}
+		}
+		rest = strings.TrimPrefix(rest, ":")
+		reason := strings.TrimSpace(rest)
+		return true, reason, recommendedOption
 	}
-	if strings.HasPrefix(strings.ToUpper(reply), "CODE_REVIEW:") {
-		reason := strings.TrimSpace(strings.TrimPrefix(reply, reply[:len("CODE_REVIEW:")]))
-		return false, reason
+	if strings.HasPrefix(upper, "CODE_REVIEW:") {
+		reason := strings.TrimSpace(reply[len("CODE_REVIEW:"):])
+		return false, reason, ""
 	}
-	return false, reply
+	return false, reply, ""
 }
 
 // generateSummary creates a plain-language summary of the investigation for non-technical readers.

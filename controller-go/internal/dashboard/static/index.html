@@ -1021,6 +1021,7 @@ function renderReproDetails(r) {
       rows += '<tr><td style="color:var(--blue)">Investigation mode</td><td>' + modeIcon + '</td></tr>';
     }
     if (d.classification_reason) rows += '<tr><td style="color:var(--blue)">Reason</td><td>' + escapeHtml(d.classification_reason) + '</td></tr>';
+    if (d.deployment_failure_reason) rows += '<tr><td style="color:var(--yellow)">&#x26A0;&#xFE0F; Deployment failed</td><td style="color:var(--yellow)">' + escapeHtml(d.deployment_failure_reason) + '</td></tr>';
     if (d.method) rows += '<tr><td style="color:var(--blue)">Method</td><td>' + escapeHtml(d.method) + '</td></tr>';
     if (d.deployment_type) rows += '<tr><td style="color:var(--blue)">Deployment type</td><td>' + escapeHtml(d.deployment_type) + '</td></tr>';
     if (d.deployment_option) rows += '<tr><td style="color:var(--blue)">Deployment option</td><td>' + escapeHtml(d.deployment_option) + '</td></tr>';
