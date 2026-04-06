@@ -58,94 +58,103 @@ func Run() {
 	// Always clone the repo — needed for agent code review, even in sandbox mode
 	cloneRepo(repo)
 
-	// Classify the issue — informational only, does not change behavior
+	// Classify the issue — controls whether deployment is attempted
 	repoCtxForClassify := os.Getenv("OPINAI_REPO_CONTEXT")
 	needsDeployment, classificationReason := classifyIssue(title, body, repoCtxForClassify)
 	slog.Info("issue classified", "needs_deployment", needsDeployment, "reason", classificationReason)
 
 	// Step 2: Start server, use sandbox, or deploy from plan
-	serverURL := os.Getenv("SERVER_URL")
-	sandboxNS := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
-	sandboxEndpoints := os.Getenv("OPINAI_SANDBOX_ENDPOINTS")
-	deploymentPlan := os.Getenv("OPINAI_DEPLOYMENT_PLAN")
+	serverURL := ""
 	verifyFix := os.Getenv("OPINAI_VERIFY_FIX") == "true"
 	var serverProc *os.Process
-
-	if verifyFix {
-		slog.Info("verify-fix mode — forcing full deployment and testing")
-	}
-
-	// All sandbox endpoints for agent context
 	var allEndpointsCtx string
 
-	if sandboxNS != "" {
-		// Sandbox already created by controller
-		slog.Info("using sandbox deployment", "namespace", sandboxNS)
+	// Skip deployment if classifier says code review is sufficient
+	// (unless verify-fix mode forces deployment)
+	skipDeployment := !needsDeployment && !verifyFix
+	if skipDeployment {
+		slog.Info("skipping deployment — issue classified as code review only")
+	}
 
-		// Prefer test_endpoint from the deployment plan (specifies the right service to test)
-		testEndpointJSON := os.Getenv("OPINAI_TEST_ENDPOINT")
-		if testEndpointJSON != "" {
-			var te struct {
-				Service    string `json:"service"`
-				Port       int    `json:"port"`
-				Protocol   string `json:"protocol"`
-				HealthPath string `json:"health_path"`
+	if !skipDeployment {
+		serverURL = os.Getenv("SERVER_URL")
+		sandboxNS := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
+		sandboxEndpoints := os.Getenv("OPINAI_SANDBOX_ENDPOINTS")
+		deploymentPlan := os.Getenv("OPINAI_DEPLOYMENT_PLAN")
+
+		if verifyFix {
+			slog.Info("verify-fix mode — forcing full deployment and testing")
+		}
+
+		if sandboxNS != "" {
+			// Sandbox already created by controller
+			slog.Info("using sandbox deployment", "namespace", sandboxNS)
+
+			// Prefer test_endpoint from the deployment plan (specifies the right service to test)
+			testEndpointJSON := os.Getenv("OPINAI_TEST_ENDPOINT")
+			if testEndpointJSON != "" {
+				var te struct {
+					Service    string `json:"service"`
+					Port       int    `json:"port"`
+					Protocol   string `json:"protocol"`
+					HealthPath string `json:"health_path"`
+				}
+				if json.Unmarshal([]byte(testEndpointJSON), &te) == nil && te.Service != "" {
+					proto := te.Protocol
+					if proto == "" {
+						proto = "http"
+					}
+					port := te.Port
+					if port == 0 {
+						port = 80
+					}
+					serverURL = fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", proto, te.Service, sandboxNS, port)
+					os.Setenv("SERVER_URL", serverURL)
+					slog.Info("using test_endpoint from deployment plan", "url", serverURL, "health", te.HealthPath)
+				}
 			}
-			if json.Unmarshal([]byte(testEndpointJSON), &te) == nil && te.Service != "" {
-				proto := te.Protocol
-				if proto == "" {
-					proto = "http"
+
+			// Fallback: pick first endpoint from the service map
+			if serverURL == "" && sandboxEndpoints != "" {
+				var endpoints map[string]string
+				json.Unmarshal([]byte(sandboxEndpoints), &endpoints)
+				for _, fqdn := range endpoints {
+					serverURL = "http://" + fqdn
+					os.Setenv("SERVER_URL", serverURL)
+					break
 				}
-				port := te.Port
-				if port == 0 {
-					port = 80
+			}
+
+			// Build all_endpoints context for the agent
+			allEndpointsJSON := os.Getenv("OPINAI_ALL_ENDPOINTS")
+			if allEndpointsJSON != "" {
+				var eps []struct {
+					Service string `json:"service"`
+					Port    int    `json:"port"`
+					Purpose string `json:"purpose"`
 				}
-				serverURL = fmt.Sprintf("%s://%s.%s.svc.cluster.local:%d", proto, te.Service, sandboxNS, port)
+				if json.Unmarshal([]byte(allEndpointsJSON), &eps) == nil && len(eps) > 0 {
+					allEndpointsCtx = "\n\nSandbox services deployed for this project:\n"
+					for _, ep := range eps {
+						fqdn := fmt.Sprintf("%s.%s.svc.cluster.local:%d", ep.Service, sandboxNS, ep.Port)
+						allEndpointsCtx += fmt.Sprintf("- %s (%s) — %s\n", ep.Service, fqdn, ep.Purpose)
+					}
+					allEndpointsCtx += fmt.Sprintf("\nTest traffic should go to: %s\n", serverURL)
+				}
+			}
+		} else if deploymentPlan != "" {
+			// Deploy from plan — AI determines steps
+			serverURL = deployFromPlan(title, body, deploymentPlan)
+			if serverURL != "" {
 				os.Setenv("SERVER_URL", serverURL)
-				slog.Info("using test_endpoint from deployment plan", "url", serverURL, "health", te.HealthPath)
+				slog.Info("deployed from plan", "server_url", serverURL)
 			}
-		}
-
-		// Fallback: pick first endpoint from the service map
-		if serverURL == "" && sandboxEndpoints != "" {
-			var endpoints map[string]string
-			json.Unmarshal([]byte(sandboxEndpoints), &endpoints)
-			for _, fqdn := range endpoints {
-				serverURL = "http://" + fqdn
+		} else {
+			// Standard: start server in pod
+			serverProc, serverURL = startServer()
+			if serverURL != "" {
 				os.Setenv("SERVER_URL", serverURL)
-				break
 			}
-		}
-
-		// Build all_endpoints context for the agent
-		allEndpointsJSON := os.Getenv("OPINAI_ALL_ENDPOINTS")
-		if allEndpointsJSON != "" {
-			var eps []struct {
-				Service string `json:"service"`
-				Port    int    `json:"port"`
-				Purpose string `json:"purpose"`
-			}
-			if json.Unmarshal([]byte(allEndpointsJSON), &eps) == nil && len(eps) > 0 {
-				allEndpointsCtx = "\n\nSandbox services deployed for this project:\n"
-				for _, ep := range eps {
-					fqdn := fmt.Sprintf("%s.%s.svc.cluster.local:%d", ep.Service, sandboxNS, ep.Port)
-					allEndpointsCtx += fmt.Sprintf("- %s (%s) — %s\n", ep.Service, fqdn, ep.Purpose)
-				}
-				allEndpointsCtx += fmt.Sprintf("\nTest traffic should go to: %s\n", serverURL)
-			}
-		}
-	} else if deploymentPlan != "" {
-		// Deploy from plan — AI determines steps
-		serverURL = deployFromPlan(title, body, deploymentPlan)
-		if serverURL != "" {
-			os.Setenv("SERVER_URL", serverURL)
-			slog.Info("deployed from plan", "server_url", serverURL)
-		}
-	} else {
-		// Standard: start server in pod
-		serverProc, serverURL = startServer()
-		if serverURL != "" {
-			os.Setenv("SERVER_URL", serverURL)
 		}
 	}
 
@@ -166,10 +175,14 @@ func Run() {
 		"classification_reason": classificationReason,
 		"server_url":     serverURL,
 	}
-	if sandboxNS != "" {
+	sandboxNSForDetails := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
+	deploymentPlanForDetails := os.Getenv("OPINAI_DEPLOYMENT_PLAN")
+	if sandboxNSForDetails != "" {
 		reproDetails["method"] = "sandbox-deploy"
-		reproDetails["deployment_option"] = "Sandbox: " + sandboxNS
-	} else if deploymentPlan != "" {
+		reproDetails["deployment_option"] = "Sandbox: " + sandboxNSForDetails
+	} else if skipDeployment {
+		reproDetails["method"] = "code-review"
+	} else if deploymentPlanForDetails != "" {
 		reproDetails["method"] = "plan-deploy"
 		if selectedDeployOption != "" {
 			reproDetails["deployment_option"] = selectedDeployOption
