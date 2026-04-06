@@ -60,6 +60,20 @@ func buildChatContext(ctx map[string]any) string {
 						if failReason, ok := details["deployment_failure_reason"].(string); ok && failReason != "" {
 							system += fmt.Sprintf("Deployment failure: %s\n", failReason)
 						}
+						if linkedRaw, ok := details["linked_resources"].(string); ok && linkedRaw != "" {
+							var linked map[string]string
+							if json.Unmarshal([]byte(linkedRaw), &linked) == nil && len(linked) > 0 {
+								system += "\nLinked PRs/issues:\n"
+								for url, content := range linked {
+									c := content
+									if len(c) > 500 {
+										c = c[:500]
+									}
+									system += fmt.Sprintf("- %s: %s\n", url, c)
+								}
+								system += "\n"
+							}
+						}
 						if commentsRaw, ok := details["issue_comments"].(string); ok && commentsRaw != "" {
 							var comments []struct {
 								Author string `json:"author"`
