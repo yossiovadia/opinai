@@ -101,6 +101,7 @@
 
 <!-- Chat panel -->
 <div class="chat-panel" id="chatPanel">
+  <div class="chat-resize-handle" id="chatResizeHandle"></div>
   <div class="chat-panel-header">
     <div class="chat-header-top">
       <div class="chat-panel-title">&#x1F3B3; Ask OpinAI</div>
@@ -1322,6 +1323,33 @@ setInterval(function() {
     refreshAll();
   }
 }, 15000);
+
+// Chat panel resize
+(function() {
+  var handle = document.getElementById('chatResizeHandle');
+  var panel = document.getElementById('chatPanel');
+  var dragging = false;
+  handle.addEventListener('mousedown', function(e) {
+    dragging = true;
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var newWidth = window.innerWidth - e.clientX;
+    if (newWidth < 320) newWidth = 320;
+    if (newWidth > window.innerWidth * 0.8) newWidth = window.innerWidth * 0.8;
+    panel.style.width = newWidth + 'px';
+  });
+  document.addEventListener('mouseup', function() {
+    if (dragging) {
+      dragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
+})();
 </script>
 
 </body>

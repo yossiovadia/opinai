@@ -715,6 +715,8 @@ tr:hover td {
   top: 0;
   right: 0;
   width: 420px;
+  min-width: 320px;
+  max-width: 80vw;
   height: 100vh;
   background: var(--bg);
   border-left: 1px solid var(--border);
@@ -724,6 +726,21 @@ tr:hover td {
   flex-direction: column;
   transform: translateX(100%);
   transition: transform 0.3s ease;
+}
+
+.chat-resize-handle {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  width: 8px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 1002;
+}
+.chat-resize-handle:hover,
+.chat-resize-handle:active {
+  background: var(--blue);
+  opacity: 0.3;
 }
 
 .chat-panel.chat-open {
