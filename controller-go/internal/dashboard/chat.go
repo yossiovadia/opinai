@@ -60,6 +60,23 @@ func buildChatContext(ctx map[string]any) string {
 						if failReason, ok := details["deployment_failure_reason"].(string); ok && failReason != "" {
 							system += fmt.Sprintf("Deployment failure: %s\n", failReason)
 						}
+						if commentsRaw, ok := details["issue_comments"].(string); ok && commentsRaw != "" {
+							var comments []struct {
+								Author string `json:"author"`
+								Body   string `json:"body"`
+							}
+							if json.Unmarshal([]byte(commentsRaw), &comments) == nil && len(comments) > 0 {
+								system += "\nIssue comments:\n"
+								for _, c := range comments {
+									b := c.Body
+									if len(b) > 300 {
+										b = b[:300]
+									}
+									system += fmt.Sprintf("@%s: %s\n", c.Author, b)
+								}
+								system += "\n"
+							}
+						}
 					}
 					system += fmt.Sprintf("Reproduction details: %s\n\n", run.ReproDetails)
 				}

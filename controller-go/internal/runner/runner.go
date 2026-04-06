@@ -178,7 +178,9 @@ func Run() {
 	}()
 
 	// Emit reproduction details for dashboard display
+	issueComments := os.Getenv("OPINAI_ISSUE_COMMENTS")
 	reproDetails := map[string]any{
+		"issue_comments": issueComments,
 		"cloned":         true,
 		"server_started": serverURL != "",
 		"issue_classification": func() string { if needsDeployment { return "runtime" }; return "code_review" }(),
