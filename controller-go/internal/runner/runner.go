@@ -55,6 +55,9 @@ func Run() {
 	}
 	slog.Info("issue fetched", "title", title, "state", issueState)
 
+	// Always clone the repo — needed for agent code review, even in sandbox mode
+	cloneRepo(repo)
+
 	// Step 2: Start server, use sandbox, or deploy from plan
 	serverURL := os.Getenv("SERVER_URL")
 	sandboxNS := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
@@ -463,11 +466,14 @@ func Run() {
 
 // --- helpers ---
 
-func startServer() (*os.Process, string) {
-	repo := os.Getenv("REPO")
+// cloneRepo clones the repo to /tmp/opinai-repo. Safe to call multiple times
+// (skips if already cloned).
+func cloneRepo(repo string) bool {
 	cloneDir := "/tmp/opinai-repo"
-
-	// ALWAYS clone the repo — needed for analysis, building, and code review
+	if info, err := os.Stat(cloneDir); err == nil && info.IsDir() {
+		slog.Info("repo already cloned", "dir", cloneDir)
+		return true
+	}
 	slog.Info("cloning repo", "repo", repo)
 	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cloneCancel()
@@ -476,6 +482,17 @@ func startServer() (*os.Process, string) {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		slog.Warn("clone failed", "error", err)
+		return false
+	}
+	return true
+}
+
+func startServer() (*os.Process, string) {
+	repo := os.Getenv("REPO")
+	cloneDir := "/tmp/opinai-repo"
+
+	// Ensure repo is cloned (may already be done by Run)
+	if !cloneRepo(repo) {
 		return nil, ""
 	}
 
@@ -609,7 +626,7 @@ func startServer() (*os.Process, string) {
 
 	// Start server
 	slog.Info("starting server", "cmd", runCmd)
-	cmd = exec.Command("sh", "-c", runCmd)
+	cmd := exec.Command("sh", "-c", runCmd)
 	cmd.Dir = cloneDir
 	cmd.Env = containerEnv
 	if err := cmd.Start(); err != nil {
