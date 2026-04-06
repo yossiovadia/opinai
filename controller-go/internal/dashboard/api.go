@@ -44,6 +44,7 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 			"pending":     status.Pending,
 			"processed":   status.Processed,
 			"manual_only": status.ManualOnly,
+			"is_analyzing": false,
 			"last_check":  status.LastCheck,
 		})
 	}

@@ -247,7 +247,7 @@ async function loadRepos() {
     }
     container.innerHTML = repos.map(function(r) {
       var footerAction;
-      if (r.manual_only && !r.processed) {
+      if (r.is_analyzing) {
         footerAction = '<span class="verdict verdict-running" style="font-size:11px"><span class="spin">&#x1F504;</span> Analyzing...</span>';
       } else if (r.manual_only) {
         footerAction = '<span class="verdict verdict-warn" style="font-size:11px">&#x1F527; Manual</span>';
