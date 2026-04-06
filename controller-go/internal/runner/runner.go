@@ -58,6 +58,11 @@ func Run() {
 	// Always clone the repo — needed for agent code review, even in sandbox mode
 	cloneRepo(repo)
 
+	// Classify the issue — informational only, does not change behavior
+	repoCtxForClassify := os.Getenv("OPINAI_REPO_CONTEXT")
+	needsDeployment, classificationReason := classifyIssue(title, body, repoCtxForClassify)
+	slog.Info("issue classified", "needs_deployment", needsDeployment, "reason", classificationReason)
+
 	// Step 2: Start server, use sandbox, or deploy from plan
 	serverURL := os.Getenv("SERVER_URL")
 	sandboxNS := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
@@ -157,6 +162,8 @@ func Run() {
 	reproDetails := map[string]any{
 		"cloned":         true,
 		"server_started": serverURL != "",
+		"issue_classification": func() string { if needsDeployment { return "runtime" }; return "code_review" }(),
+		"classification_reason": classificationReason,
 		"server_url":     serverURL,
 	}
 	if sandboxNS != "" {
@@ -1033,6 +1040,46 @@ func generateSuggestedQuestions(title, body, verdictText string) string {
 		return ""
 	}
 	return reply
+}
+
+// classifyIssue makes a quick AI call to determine whether an issue needs runtime
+// testing (running server) or code review only. Returns (needsDeployment, reason).
+func classifyIssue(title, body, repoContext string) (bool, string) {
+	cfg := ai.LoadConfig()
+	if !cfg.Available() {
+		return false, "no AI provider"
+	}
+	ctx := ""
+	if repoContext != "" {
+		ctx = "\n\nProject context:\n" + truncStr(repoContext, 500)
+	}
+	prompt := fmt.Sprintf(`Given this issue, classify whether reproducing the bug requires a RUNNING SERVER (API behavior, HTTP responses, timing, concurrency, runtime errors, integration failures) or CODE REVIEW ONLY (logic bugs, missing null checks, wrong conditions, config parsing, type errors, documentation).
+
+Reply with exactly one line:
+NEEDS_DEPLOYMENT: <brief reason>
+or
+CODE_REVIEW: <brief reason>
+
+Issue Title: %s
+
+Issue Description:
+%s%s`, title, truncStr(body, 800), ctx)
+
+	reply, err := ai.Call(prompt, 128)
+	if err != nil {
+		slog.Warn("issue classification failed", "error", err)
+		return false, "classification unavailable"
+	}
+	reply = strings.TrimSpace(reply)
+	if strings.HasPrefix(strings.ToUpper(reply), "NEEDS_DEPLOYMENT:") {
+		reason := strings.TrimSpace(strings.TrimPrefix(reply, reply[:len("NEEDS_DEPLOYMENT:")]))
+		return true, reason
+	}
+	if strings.HasPrefix(strings.ToUpper(reply), "CODE_REVIEW:") {
+		reason := strings.TrimSpace(strings.TrimPrefix(reply, reply[:len("CODE_REVIEW:")]))
+		return false, reason
+	}
+	return false, reply
 }
 
 // generateSummary creates a plain-language summary of the investigation for non-technical readers.
