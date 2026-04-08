@@ -325,7 +325,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 						{
 							Name:            "runner",
 							Image:           jm.image,
-							ImagePullPolicy: corev1.PullAlways,
+							ImagePullPolicy: imagePullPolicy(jm.image),
 							Command:         []string{"/app/opinai-go", "--mode=runner"},
 							Env:             env,
 							EnvFrom: []corev1.EnvFromSource{
@@ -1020,4 +1020,13 @@ func mustParseQuantity(s string) resource.Quantity {
 		panic(err)
 	}
 	return q
+}
+
+// imagePullPolicy returns Never for images without a registry prefix (local/Kind),
+// Always for registry-hosted images.
+func imagePullPolicy(image string) corev1.PullPolicy {
+	if strings.Contains(image, "/") {
+		return corev1.PullAlways
+	}
+	return corev1.PullNever
 }
