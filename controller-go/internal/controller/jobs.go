@@ -273,7 +273,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		{Name: "OPINAI_ISSUE_COMMENTS", Value: commentsJSON},
 		{Name: "OPINAI_LINKED_RESOURCES", Value: linkedJSON},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
-		{Name: "OPINAI_CONTROLLER_URL", Value: fmt.Sprintf("http://opinai-controller.%s.svc:8080", jm.namespace)},
+		{Name: "OPINAI_CONTROLLER_URL", Value: controllerURL(jm.namespace)},
 	}
 	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)
 	env = append(env, secretEnvVar("AI_PROJECT", "opinai-credentials", "AI_PROJECT")...)
@@ -1029,4 +1029,14 @@ func imagePullPolicy(image string) corev1.PullPolicy {
 		return corev1.PullAlways
 	}
 	return corev1.PullNever
+}
+
+// controllerURL returns the URL for runner pods to reach the controller.
+// If OPINAI_CONTROLLER_URL is set, use that (for local/Kind deployments).
+// Otherwise, use the in-cluster service URL.
+func controllerURL(namespace string) string {
+	if url := os.Getenv("OPINAI_CONTROLLER_URL"); url != "" {
+		return url
+	}
+	return fmt.Sprintf("http://opinai-controller.%s.svc:8080", namespace)
 }
