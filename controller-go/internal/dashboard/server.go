@@ -183,6 +183,25 @@ type SandboxManagerIface interface {
 	AutoCleanup(maxAge int) int
 }
 
+// InfraManagerIface abstracts infra dependency operations for the dashboard.
+type InfraManagerIface interface {
+	EnsureRunning(dep string) (string, error)
+	Stop(dep string) error
+	Teardown(dep string) error
+	ListAll() ([]InfraDepInfo, error)
+}
+
+// InfraDepInfo describes an infra dependency for the dashboard.
+type InfraDepInfo struct {
+	Name        string  `json:"name"`
+	Namespace   string  `json:"namespace"`
+	Status      string  `json:"status"`
+	InstalledAt *string `json:"installed_at"`
+	LastUsedAt  *string `json:"last_used_at"`
+	Connection  string  `json:"connection"`
+	HelmRelease string  `json:"helm_release"`
+}
+
 // SandboxInfo matches sandbox.SandboxInfo.
 type SandboxInfo struct {
 	Namespace  string `json:"namespace"`
@@ -206,6 +225,7 @@ type Server struct {
 	retryPending  RetryPendingFunc
 	listJobs      ListJobsFunc
 	sandbox       SandboxManagerIface
+	infraMgr      InfraManagerIface
 	reviewPR      ReviewPRFunc
 }
 
@@ -257,6 +277,11 @@ func (s *Server) SetListJobsCallback(fn ListJobsFunc) {
 // SetSandboxManager sets the sandbox manager for admin endpoints.
 func (s *Server) SetSandboxManager(sm SandboxManagerIface) {
 	s.sandbox = sm
+}
+
+// SetInfraManager sets the infrastructure dependency manager for admin endpoints.
+func (s *Server) SetInfraManager(im InfraManagerIface) {
+	s.infraMgr = im
 }
 
 // SetReviewPRCallback sets the function called to create PR review jobs.
@@ -371,6 +396,10 @@ func (s *Server) buildRouter() chi.Router {
 				r.Get("/sandboxes", s.handleAdminSandboxes)
 				r.Delete("/sandboxes/*", s.handleAdminSandboxDelete)
 				r.Post("/sandboxes/cleanup", s.handleAdminSandboxCleanup)
+				r.Get("/infra", s.handleAdminInfraList)
+				r.Post("/infra/{dep}/start", s.handleAdminInfraStart)
+				r.Post("/infra/{dep}/stop", s.handleAdminInfraStop)
+				r.Delete("/infra/{dep}", s.handleAdminInfraTeardown)
 			})
 		})
 	})

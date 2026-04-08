@@ -138,6 +138,16 @@ func migrate() error {
 	)`)
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo ON pr_reviews(repo)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo_pr ON pr_reviews(repo, pr_number)")
+	db.Exec(`CREATE TABLE IF NOT EXISTS infra_deps (
+		name TEXT NOT NULL PRIMARY KEY,
+		namespace TEXT NOT NULL DEFAULT 'opinai-infra',
+		status TEXT NOT NULL DEFAULT 'not_installed',
+		installed_at TEXT,
+		last_used_at TEXT,
+		connection TEXT,
+		helm_release TEXT,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
 	return nil
 }
 
@@ -696,4 +706,83 @@ func scanPRReviews(rows *sql.Rows) ([]PRReview, error) {
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+// --- Infrastructure Dependencies ---
+
+type InfraDep struct {
+	Name        string  `json:"name"`
+	Namespace   string  `json:"namespace"`
+	Status      string  `json:"status"`
+	InstalledAt *string `json:"installed_at"`
+	LastUsedAt  *string `json:"last_used_at"`
+	Connection  string  `json:"connection"`
+	HelmRelease string  `json:"helm_release"`
+}
+
+func UpsertInfraDep(dep InfraDep) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec(
+		`INSERT INTO infra_deps (name, namespace, status, installed_at, last_used_at, connection, helm_release)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(name) DO UPDATE SET
+		   namespace = ?, status = ?, installed_at = ?, last_used_at = ?, connection = ?, helm_release = ?`,
+		dep.Name, dep.Namespace, dep.Status, dep.InstalledAt, dep.LastUsedAt, dep.Connection, dep.HelmRelease,
+		dep.Namespace, dep.Status, dep.InstalledAt, dep.LastUsedAt, dep.Connection, dep.HelmRelease,
+	)
+	return err
+}
+
+func GetInfraDep(name string) (*InfraDep, error) {
+	var d InfraDep
+	err := db.QueryRow(
+		"SELECT name, namespace, status, installed_at, last_used_at, connection, helm_release FROM infra_deps WHERE name = ?",
+		name,
+	).Scan(&d.Name, &d.Namespace, &d.Status, &d.InstalledAt, &d.LastUsedAt, &d.Connection, &d.HelmRelease)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func ListInfraDeps() ([]InfraDep, error) {
+	rows, err := db.Query("SELECT name, namespace, status, installed_at, last_used_at, connection, helm_release FROM infra_deps ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deps []InfraDep
+	for rows.Next() {
+		var d InfraDep
+		if err := rows.Scan(&d.Name, &d.Namespace, &d.Status, &d.InstalledAt, &d.LastUsedAt, &d.Connection, &d.HelmRelease); err != nil {
+			return nil, err
+		}
+		deps = append(deps, d)
+	}
+	return deps, rows.Err()
+}
+
+func UpdateInfraDepStatus(name, status string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("UPDATE infra_deps SET status = ? WHERE name = ?", status, name)
+	return err
+}
+
+func TouchInfraDepUsed(name string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("UPDATE infra_deps SET last_used_at = datetime('now') WHERE name = ?", name)
+	return err
+}
+
+func DeleteInfraDep(name string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM infra_deps WHERE name = ?", name)
+	return err
 }

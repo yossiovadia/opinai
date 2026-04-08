@@ -35,6 +35,11 @@ type Broadcaster interface {
 	Broadcast(event BroadcastEvent)
 }
 
+// InfraManagerIface abstracts infra dependency operations for the job manager.
+type InfraManagerIface interface {
+	EnsureAllRunning(deps []string) map[string]string
+}
+
 // JobManager handles K8s Job creation and result harvesting.
 type JobManager struct {
 	client      kubernetes.Interface
@@ -46,6 +51,7 @@ type JobManager struct {
 	ws          Broadcaster
 	onComplete  func(repo string) // called when a job completes, to retry pending issues
 	hostProfile *hostprofile.HostProfile
+	infraMgr    InfraManagerIface
 }
 
 // NewJobManager creates a new JobManager.
@@ -62,6 +68,11 @@ func NewJobManager(client kubernetes.Interface, namespace, image string) *JobMan
 // SetHostProfile sets the detected host profile for hardware-aware image selection.
 func (jm *JobManager) SetHostProfile(p *hostprofile.HostProfile) {
 	jm.hostProfile = p
+}
+
+// SetInfraManager sets the infrastructure dependency manager.
+func (jm *JobManager) SetInfraManager(im InfraManagerIface) {
+	jm.infraMgr = im
 }
 
 // SetSandboxDynamicClient sets the dynamic K8s client on the sandbox manager for CRD/BuildConfig support.
@@ -259,6 +270,9 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 	// Select runner image based on project requirements vs host capabilities
 	imgSel := jm.selectRunnerImage(repo)
 
+	// Ensure infrastructure dependencies are running (PostgreSQL, Redis, etc.)
+	infraConnections := jm.ensureInfraDeps(repo)
+
 	// Check if repo needs K8s sandbox deployment
 	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON, testEndpointJSON, allEndpointsJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
@@ -315,6 +329,20 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 	env = append(env, secretEnvVar("AI_REGION", "opinai-credentials", "AI_REGION")...)
 	env = append(env, secretEnvVar("AI_MODEL", "opinai-credentials", "AI_MODEL")...)
 	env = append(env, profileEnvs...)
+	// Add infra dependency connection info as env vars
+	for dep, connInfo := range infraConnections {
+		envName := "OPINAI_INFRA_" + strings.ToUpper(dep)
+		env = append(env, corev1.EnvVar{Name: envName, Value: connInfo})
+		// Also set standard env vars that projects commonly expect
+		switch dep {
+		case "postgresql":
+			env = append(env, corev1.EnvVar{Name: "DATABASE_URL", Value: connInfo})
+		case "redis":
+			env = append(env, corev1.EnvVar{Name: "REDIS_URL", Value: connInfo})
+		case "mongodb":
+			env = append(env, corev1.EnvVar{Name: "MONGODB_URL", Value: connInfo})
+		}
+	}
 
 	// Title truncated for annotation (max 253 chars)
 	titleTrunc := issueTitle
@@ -1186,6 +1214,22 @@ func (jm *JobManager) CleanupOrphanedJobs(monitoredRepos []string) {
 			slog.Info("deleted orphaned job", "job", job.Name, "repo", repo)
 		}
 	}
+}
+
+// ensureInfraDeps reads infra_deps from runtime_requirements and ensures they are running.
+// Returns a map of dep name -> connection string. Failures are logged but don't block job creation.
+func (jm *JobManager) ensureInfraDeps(repo string) map[string]string {
+	if jm.infraMgr == nil {
+		return nil
+	}
+	mem, _ := database.GetRepoMemory(repo, strPtr("runtime_requirements"))
+	reqJSON := mem["runtime_requirements"]
+	req := hostprofile.ParseRequirements(reqJSON)
+	if req == nil || len(req.InfraDeps) == 0 {
+		return nil
+	}
+	slog.Info("ensuring infrastructure dependencies", "repo", repo, "deps", req.InfraDeps)
+	return jm.infraMgr.EnsureAllRunning(req.InfraDeps)
 }
 
 // selectRunnerImage reads runtime_requirements from repo_memory and selects the best

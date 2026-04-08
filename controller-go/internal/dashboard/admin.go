@@ -719,6 +719,70 @@ func autoUpdateProfileFromPlan(repo string, planData map[string]any) {
 	slog.Info("stored AI knowledge from deployment analysis", "repo", repo, "fields", len(memFields))
 }
 
+// --- GET /api/admin/infra ---
+
+func (s *Server) handleAdminInfraList(w http.ResponseWriter, r *http.Request) {
+	if s.infraMgr == nil {
+		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+	deps, err := s.infraMgr.ListAll()
+	if err != nil {
+		jsonError(w, "failed to list infra deps: "+err.Error(), 500)
+		return
+	}
+	if deps == nil {
+		deps = []InfraDepInfo{}
+	}
+	json.NewEncoder(w).Encode(deps)
+}
+
+// --- POST /api/admin/infra/{dep}/start ---
+
+func (s *Server) handleAdminInfraStart(w http.ResponseWriter, r *http.Request) {
+	dep := chi.URLParam(r, "dep")
+	if s.infraMgr == nil {
+		jsonError(w, "infra manager not available", 503)
+		return
+	}
+	connInfo, err := s.infraMgr.EnsureRunning(dep)
+	if err != nil {
+		jsonError(w, "failed to start "+dep+": "+err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "running", "connection": connInfo})
+}
+
+// --- POST /api/admin/infra/{dep}/stop ---
+
+func (s *Server) handleAdminInfraStop(w http.ResponseWriter, r *http.Request) {
+	dep := chi.URLParam(r, "dep")
+	if s.infraMgr == nil {
+		jsonError(w, "infra manager not available", 503)
+		return
+	}
+	if err := s.infraMgr.Stop(dep); err != nil {
+		jsonError(w, "failed to stop "+dep+": "+err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+}
+
+// --- DELETE /api/admin/infra/{dep} ---
+
+func (s *Server) handleAdminInfraTeardown(w http.ResponseWriter, r *http.Request) {
+	dep := chi.URLParam(r, "dep")
+	if s.infraMgr == nil {
+		jsonError(w, "infra manager not available", 503)
+		return
+	}
+	if err := s.infraMgr.Teardown(dep); err != nil {
+		jsonError(w, "failed to teardown "+dep+": "+err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
 func ghGetDashboard(path string) ([]byte, int, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	req, _ := http.NewRequest("GET", "https://api.github.com"+path, nil)

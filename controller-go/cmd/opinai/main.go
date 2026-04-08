@@ -23,6 +23,7 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/dashboard"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 	"github.com/yossiovadia/opinai/controller-go/internal/hostprofile"
+	"github.com/yossiovadia/opinai/controller-go/internal/infra"
 	"github.com/yossiovadia/opinai/controller-go/internal/runner"
 	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
@@ -136,6 +137,16 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			}
 		}
 		srv.SetSandboxManager(&sandboxAdapter{mgr: sbMgr})
+	}
+
+	// Wire infrastructure dependency manager
+	if k8sClient != nil {
+		infraMgr := infra.NewManager(k8sClient)
+		if jobMgr != nil {
+			jobMgr.SetInfraManager(infraMgr)
+		}
+		srv.SetInfraManager(&infraAdapter{mgr: infraMgr})
+		slog.Info("infrastructure dependency manager initialized")
 	}
 
 	// Wire callbacks
@@ -304,6 +315,43 @@ func (a *sandboxAdapter) TeardownSandbox(ns string) bool {
 
 func (a *sandboxAdapter) AutoCleanup(maxAge int) int {
 	return a.mgr.AutoCleanup(maxAge)
+}
+
+// infraAdapter bridges infra.Manager to dashboard.InfraManagerIface.
+type infraAdapter struct {
+	mgr *infra.Manager
+}
+
+func (a *infraAdapter) EnsureRunning(dep string) (string, error) {
+	return a.mgr.EnsureRunning(dep)
+}
+
+func (a *infraAdapter) Stop(dep string) error {
+	return a.mgr.Stop(dep)
+}
+
+func (a *infraAdapter) Teardown(dep string) error {
+	return a.mgr.Teardown(dep)
+}
+
+func (a *infraAdapter) ListAll() ([]dashboard.InfraDepInfo, error) {
+	deps, err := a.mgr.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]dashboard.InfraDepInfo, len(deps))
+	for i, d := range deps {
+		result[i] = dashboard.InfraDepInfo{
+			Name:        d.Name,
+			Namespace:   d.Namespace,
+			Status:      d.Status,
+			InstalledAt: d.InstalledAt,
+			LastUsedAt:  d.LastUsedAt,
+			Connection:  d.Connection,
+			HelmRelease: d.HelmRelease,
+		}
+	}
+	return result, nil
 }
 
 // hubAdapter bridges dashboard.Hub to controller.Broadcaster interface.
