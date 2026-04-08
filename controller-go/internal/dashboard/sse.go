@@ -143,6 +143,13 @@ waitLoop:
 		planBytes, _ := json.Marshal(planData)
 		database.SaveDeploymentPlan(repo, string(planBytes))
 		autoUpdateProfileFromPlan(repo, planData)
+
+		// Extract and store runtime_requirements if present
+		if rr, ok := planData["runtime_requirements"]; ok {
+			rrBytes, _ := json.Marshal(rr)
+			database.SetRepoMemory(repo, "runtime_requirements", string(rrBytes))
+			slog.Info("stored runtime_requirements from analysis", "repo", repo)
+		}
 	}
 
 	opts := 0
