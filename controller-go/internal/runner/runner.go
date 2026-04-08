@@ -150,7 +150,15 @@ func Run() {
 				os.Setenv("SERVER_URL", serverURL)
 				slog.Info("deployed from plan", "server_url", serverURL)
 			} else {
-				deploymentFailureReason = "Deployment from plan failed — no server URL obtained"
+				// Plan-based deploy failed — fall back to startServer() for simple projects
+				slog.Warn("deployFromPlan failed, trying startServer fallback")
+				serverProc, serverURL = startServer()
+				if serverURL != "" {
+					os.Setenv("SERVER_URL", serverURL)
+					slog.Info("startServer fallback succeeded", "server_url", serverURL)
+				} else {
+					deploymentFailureReason = "Deployment from plan failed and startServer fallback also failed"
+				}
 			}
 		} else {
 			// Standard: start server in pod
