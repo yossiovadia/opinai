@@ -116,6 +116,11 @@ func migrate() error {
 		repo TEXT NOT NULL PRIMARY KEY,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS host_profiles (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		profile_json TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
 	return nil
 }
 
@@ -556,4 +561,26 @@ func GetMonitoredRepos() []string {
 
 func Now() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// --- Host Profile ---
+
+// SaveHostProfile stores the host profile JSON, replacing any previous entry.
+func SaveHostProfile(profileJSON string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	// Keep only the latest profile
+	db.Exec("DELETE FROM host_profiles")
+	_, err := db.Exec("INSERT INTO host_profiles (profile_json) VALUES (?)", profileJSON)
+	return err
+}
+
+// GetHostProfile returns the most recent host profile JSON, or empty string if none.
+func GetHostProfile() string {
+	var j string
+	err := db.QueryRow("SELECT profile_json FROM host_profiles ORDER BY created_at DESC LIMIT 1").Scan(&j)
+	if err != nil {
+		return ""
+	}
+	return j
 }

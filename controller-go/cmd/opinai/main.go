@@ -22,6 +22,7 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
 	"github.com/yossiovadia/opinai/controller-go/internal/dashboard"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/hostprofile"
 	"github.com/yossiovadia/opinai/controller-go/internal/runner"
 	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
@@ -64,6 +65,13 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		slog.Warn("K8s client not available — Job management disabled", "error", err)
 	}
 
+	// Detect host profile (K8s + local hardware)
+	profile := hostprofile.Detect(k8sClient)
+	hostprofile.LogSummary(profile)
+	if err := database.SaveHostProfile(profile.JSON()); err != nil {
+		slog.Warn("failed to save host profile to DB", "error", err)
+	}
+
 	namespace := dashboard.Env("NAMESPACE", "opinai")
 	image := dashboard.Env("OPINAI_IMAGE", fmt.Sprintf("image-registry.openshift-image-registry.svc:5000/%s/opinai-controller:latest", namespace))
 
@@ -102,6 +110,7 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 	var jobMgr *controller.JobManager
 	if k8sClient != nil {
 		jobMgr = controller.NewJobManager(k8sClient, namespace, image)
+		jobMgr.SetHostProfile(profile)
 		jobMgr.CleanupOrphanedJobs(repos)
 	}
 

@@ -58,10 +58,23 @@ func Run() {
 	// Always clone the repo — needed for agent code review, even in sandbox mode
 	cloneRepo(repo)
 
+	// Check hardware feasibility — controller may have flagged this as infeasible
+	feasibilityReason := os.Getenv("OPINAI_FEASIBILITY_REASON")
+	if feasibilityReason != "" {
+		slog.Warn("host cannot support full reproduction", "reason", feasibilityReason)
+	}
+
 	// Classify the issue — controls whether deployment is attempted
 	repoCtxForClassify := os.Getenv("OPINAI_REPO_CONTEXT")
 	needsDeployment, classificationReason, recommendedOption := classifyIssue(title, body, repoCtxForClassify)
 	slog.Info("issue classified", "needs_deployment", needsDeployment, "reason", classificationReason, "recommended_option", recommendedOption)
+
+	// If hardware is infeasible, force code review mode
+	if feasibilityReason != "" {
+		needsDeployment = false
+		classificationReason = feasibilityReason
+		slog.Info("forcing code review due to hardware limitations")
+	}
 
 	// Step 2: Start server, use sandbox, or deploy from plan
 	serverURL := ""
@@ -215,6 +228,12 @@ func Run() {
 	}
 	if deploymentFailureReason != "" {
 		reproDetails["deployment_failure_reason"] = deploymentFailureReason
+	}
+	if feasibilityReason != "" {
+		reproDetails["feasibility_reason"] = feasibilityReason
+	}
+	if runnerImage := os.Getenv("OPINAI_RUNNER_IMAGE"); runnerImage != "" {
+		reproDetails["runner_image"] = runnerImage
 	}
 	repoCtxForDetails := os.Getenv("OPINAI_REPO_CONTEXT")
 	if bc := extractMemoryValue(repoCtxForDetails, "working_install_command"); bc != "" {
@@ -939,7 +958,7 @@ func analyzeReadme(cloneDir string) map[string]string {
 		"Repo": os.Getenv("REPO"), "Readme": readme, "DepsInfo": depsInfo,
 		"Indicators": indicatorsStr, "DeployContents": deployFileContents,
 	})
-	content, err := ai.Call(prompt, 1500)
+	content, err := ai.Call(prompt, 2000)
 	if err != nil || content == "" {
 		return nil
 	}
@@ -954,8 +973,9 @@ func analyzeReadme(cloneDir string) map[string]string {
 	}
 	content = strings.Join(clean, "\n")
 
-	var result map[string]string
-	if json.Unmarshal([]byte(content), &result) == nil {
+	// Parse as map[string]any first (to handle nested runtime_requirements)
+	result := parseAnalysisJSON(content)
+	if result != nil {
 		emitRepoMemory(result)
 		slog.Info("emitted README knowledge", "keys", len(result))
 		if cmd, ok := result["install_command"]; ok && cmd != "" {
@@ -968,7 +988,8 @@ func analyzeReadme(cloneDir string) map[string]string {
 	if start := strings.Index(content, "{"); start >= 0 {
 		if end := strings.LastIndex(content, "}"); end > start {
 			candidate := content[start : end+1]
-			if json.Unmarshal([]byte(candidate), &result) == nil {
+			result = parseAnalysisJSON(candidate)
+			if result != nil {
 				emitRepoMemory(result)
 				slog.Info("emitted README knowledge (extracted from text)", "keys", len(result))
 				return result
@@ -979,6 +1000,33 @@ func analyzeReadme(cloneDir string) map[string]string {
 	slog.Warn("could not parse AI analysis as JSON, storing raw description only")
 	emitRepoMemory(map[string]string{"description": truncStr(content, 500)})
 	return nil
+}
+
+// parseAnalysisJSON parses AI analysis JSON into a flat map[string]string.
+// Nested objects (like runtime_requirements) are serialized as JSON strings.
+func parseAnalysisJSON(raw string) map[string]string {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil
+	}
+	result := make(map[string]string, len(parsed))
+	for k, v := range parsed {
+		switch val := v.(type) {
+		case string:
+			result[k] = val
+		case bool:
+			result[k] = fmt.Sprintf("%t", val)
+		case float64:
+			result[k] = fmt.Sprintf("%.0f", val)
+		default:
+			// Nested objects (runtime_requirements, etc.) -> JSON string
+			b, err := json.Marshal(val)
+			if err == nil {
+				result[k] = string(b)
+			}
+		}
+	}
+	return result
 }
 
 func parseResultsTable(output string) string {

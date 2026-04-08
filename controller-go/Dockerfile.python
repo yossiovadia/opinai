@@ -1,0 +1,23 @@
+FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache git
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /opinai-go ./cmd/opinai
+
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl jq git bash openssl \
+    && rm -rf /var/lib/apt/lists/*
+# pip, setuptools, wheel are pre-installed in python:3.12-slim
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# kubectl
+RUN curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/$(dpkg --print-architecture)/kubectl" \
+    && chmod +x kubectl && mv kubectl /usr/local/bin/
+# helm
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+COPY --from=builder /opinai-go /app/opinai
+RUN ln -s /app/opinai /app/opinai-go
+EXPOSE 8080 8443
+ENTRYPOINT ["/app/opinai"]

@@ -20,6 +20,7 @@ import (
 
 	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/hostprofile"
 	"github.com/yossiovadia/opinai/controller-go/internal/sandbox"
 )
 
@@ -36,14 +37,15 @@ type Broadcaster interface {
 
 // JobManager handles K8s Job creation and result harvesting.
 type JobManager struct {
-	client     kubernetes.Interface
-	namespace  string
-	image      string
-	mu         sync.Mutex // protects recorded map
-	recorded   map[string]bool
-	sandbox    *sandbox.Manager
-	ws         Broadcaster
-	onComplete func(repo string) // called when a job completes, to retry pending issues
+	client      kubernetes.Interface
+	namespace   string
+	image       string
+	mu          sync.Mutex // protects recorded map
+	recorded    map[string]bool
+	sandbox     *sandbox.Manager
+	ws          Broadcaster
+	onComplete  func(repo string) // called when a job completes, to retry pending issues
+	hostProfile *hostprofile.HostProfile
 }
 
 // NewJobManager creates a new JobManager.
@@ -55,6 +57,11 @@ func NewJobManager(client kubernetes.Interface, namespace, image string) *JobMan
 		recorded:  make(map[string]bool),
 		sandbox:   sandbox.NewManager(client, namespace),
 	}
+}
+
+// SetHostProfile sets the detected host profile for hardware-aware image selection.
+func (jm *JobManager) SetHostProfile(p *hostprofile.HostProfile) {
+	jm.hostProfile = p
 }
 
 // SetSandboxDynamicClient sets the dynamic K8s client on the sandbox manager for CRD/BuildConfig support.
@@ -249,12 +256,33 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		}
 	}
 
+	// Select runner image based on project requirements vs host capabilities
+	imgSel := jm.selectRunnerImage(repo)
+
 	// Check if repo needs K8s sandbox deployment
 	sandboxNS, sandboxEndpointsJSON, deploymentPlanJSON, testEndpointJSON, allEndpointsJSON := jm.trySandboxDeploy(repo, issueNumber, issueTitle)
 
 	// Extract install command, resources, and timeout from deployment plan
 	planRes := extractPlanResources(deploymentPlanJSON)
 	activeDeadline := int64(planRes.TimeoutMinutes * 60)
+
+	// Apply image selection (overrides default image, adjusts resources)
+	runnerImage := jm.image
+	if imgSel.Image != "" {
+		runnerImage = imgSel.Image
+	}
+	if imgSel.CPUReq != "" {
+		planRes.CPUReq = imgSel.CPUReq
+	}
+	if imgSel.CPULim != "" {
+		planRes.CPULim = imgSel.CPULim
+	}
+	if imgSel.MemReq != "" {
+		planRes.MemReq = imgSel.MemReq
+	}
+	if imgSel.MemLim != "" {
+		planRes.MemLim = imgSel.MemLim
+	}
 
 	// Build env vars list
 	env := []corev1.EnvVar{
@@ -274,6 +302,13 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		{Name: "OPINAI_LINKED_RESOURCES", Value: linkedJSON},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 		{Name: "OPINAI_CONTROLLER_URL", Value: controllerURL(jm.namespace)},
+		{Name: "OPINAI_RUNNER_IMAGE", Value: runnerImage},
+	}
+	if !imgSel.Feasible {
+		env = append(env, corev1.EnvVar{Name: "OPINAI_FEASIBILITY_REASON", Value: imgSel.Reason})
+		slog.Warn("project infeasible for full reproduction", "repo", repo, "reason", imgSel.Reason)
+	} else if imgSel.Image != jm.image {
+		slog.Info("selected runner image", "repo", repo, "image", runnerImage, "reason", imgSel.Reason)
 	}
 	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)
 	env = append(env, secretEnvVar("AI_PROJECT", "opinai-credentials", "AI_PROJECT")...)
@@ -324,8 +359,8 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 					Containers: []corev1.Container{
 						{
 							Name:            "runner",
-							Image:           jm.image,
-							ImagePullPolicy: imagePullPolicy(jm.image),
+							Image:           runnerImage,
+							ImagePullPolicy: imagePullPolicy(runnerImage),
 							Command:         []string{"/app/opinai-go", "--mode=runner"},
 							Env:             env,
 							EnvFrom: []corev1.EnvFromSource{
@@ -805,6 +840,15 @@ func (jm *JobManager) CleanupOrphanedJobs(monitoredRepos []string) {
 			slog.Info("deleted orphaned job", "job", job.Name, "repo", repo)
 		}
 	}
+}
+
+// selectRunnerImage reads runtime_requirements from repo_memory and selects the best
+// runner image based on host capabilities. Returns a default selection if no requirements found.
+func (jm *JobManager) selectRunnerImage(repo string) hostprofile.ImageSelection {
+	mem, _ := database.GetRepoMemory(repo, strPtr("runtime_requirements"))
+	reqJSON := mem["runtime_requirements"]
+	req := hostprofile.ParseRequirements(reqJSON)
+	return hostprofile.SelectImage(req, jm.hostProfile, jm.image)
 }
 
 // --- helpers ---
