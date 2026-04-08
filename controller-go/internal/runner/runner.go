@@ -169,6 +169,7 @@ func Run() {
 				if serverURL != "" {
 					os.Setenv("SERVER_URL", serverURL)
 					slog.Info("startServer fallback succeeded", "server_url", serverURL)
+					selectedDeployOption = "Local Server (startServer fallback)"
 				} else {
 					deploymentFailureReason = "Deployment from plan failed and startServer fallback also failed"
 				}
@@ -217,7 +218,11 @@ func Run() {
 	} else if skipDeployment {
 		reproDetails["method"] = "code-review"
 	} else if deploymentPlanForDetails != "" {
-		reproDetails["method"] = "plan-deploy"
+		if serverURL != "" {
+			reproDetails["method"] = "live-deploy"
+		} else {
+			reproDetails["method"] = "plan-deploy"
+		}
 		if selectedDeployOption != "" {
 			reproDetails["deployment_option"] = selectedDeployOption
 		}
