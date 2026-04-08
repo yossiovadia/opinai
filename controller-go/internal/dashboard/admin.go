@@ -354,6 +354,13 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 	// Auto-update profile from analysis
 	autoUpdateProfileFromPlan(req.Repo, planData)
 
+	// Store runtime_requirements if present
+	if rr, ok := planData["runtime_requirements"]; ok {
+		rrBytes, _ := json.Marshal(rr)
+		database.SetRepoMemory(req.Repo, "runtime_requirements", string(rrBytes))
+		slog.Info("stored runtime_requirements", "repo", req.Repo)
+	}
+
 	json.NewEncoder(w).Encode(planData)
 }
 
