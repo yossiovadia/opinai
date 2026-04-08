@@ -627,8 +627,11 @@ func startServer() (*os.Process, string) {
 	if v := extractMemoryValue(repoCtx, "working_install_command"); v != "" {
 		buildCmd = v
 	}
-	if v := extractMemoryValue(repoCtx, "working_run_command"); v != "" {
+	if v := extractMemoryValue(repoCtx, "run_command"); v != "" {
 		runCmd = v
+	}
+	if v := extractMemoryValue(repoCtx, "working_run_command"); v != "" {
+		runCmd = v // working_run_command takes priority (proven to work)
 	}
 
 	slog.Info("resolved commands", "build", truncStr(buildCmd, 80), "run", truncStr(runCmd, 80))
