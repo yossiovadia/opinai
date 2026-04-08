@@ -361,6 +361,15 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 		slog.Info("stored runtime_requirements", "repo", req.Repo)
 	}
 
+	// Store run_command and build_command so the runner can start the server
+	for _, key := range []string{"run_command", "build_command", "health_endpoint"} {
+		if v, ok := planData[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				database.SetRepoMemory(req.Repo, key, s)
+			}
+		}
+	}
+
 	json.NewEncoder(w).Encode(planData)
 }
 
