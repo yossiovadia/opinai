@@ -139,11 +139,18 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event := r.Header.Get("X-GitHub-Event")
-	if event != "push" {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ignored", "event": event})
-		return
-	}
 
+	switch event {
+	case "push":
+		s.handlePushWebhook(w, body)
+	case "pull_request":
+		s.handlePullRequestWebhook(w, body)
+	default:
+		json.NewEncoder(w).Encode(map[string]string{"status": "ignored", "event": event})
+	}
+}
+
+func (s *Server) handlePushWebhook(w http.ResponseWriter, body []byte) {
 	var payload struct {
 		Repository struct {
 			FullName      string `json:"full_name"`
@@ -202,5 +209,84 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		"status":  "processed",
 		"repo":    repo,
 		"reruns":  rerunCount,
+	})
+}
+
+func (s *Server) handlePullRequestWebhook(w http.ResponseWriter, body []byte) {
+	var payload struct {
+		Action string `json:"action"`
+		Number int    `json:"number"`
+		PullRequest struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+			User  struct {
+				Login string `json:"login"`
+			} `json:"user"`
+			Head struct {
+				Ref string `json:"ref"`
+				SHA string `json:"sha"`
+			} `json:"head"`
+			Base struct {
+				Ref string `json:"ref"`
+			} `json:"base"`
+		} `json:"pull_request"`
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	json.Unmarshal(body, &payload)
+
+	repo := payload.Repository.FullName
+	action := payload.Action
+
+	// Only process relevant actions
+	if action != "opened" && action != "synchronize" && action != "reopened" {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ignored",
+			"reason": "action not relevant",
+			"action": action,
+		})
+		return
+	}
+
+	// Check if repo is monitored
+	monitored := ParseRepos(os.Getenv("REPOS"))
+	found := false
+	for _, m := range monitored {
+		if m == repo {
+			found = true
+			break
+		}
+	}
+	if !found {
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_monitored", "repo": repo})
+		return
+	}
+
+	prNumber := payload.Number
+	prTitle := payload.PullRequest.Title
+
+	slog.Info("webhook: pull_request event", "repo", repo, "pr", prNumber, "action", action, "title", prTitle)
+
+	if s.reviewPR == nil {
+		slog.Warn("webhook: PR review callback not set — ignoring")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status": "ignored",
+			"reason": "PR review not configured",
+		})
+		return
+	}
+
+	if err := s.reviewPR(repo, prNumber, prTitle); err != nil {
+		slog.Error("webhook: failed to create PR review job", "error", err)
+		jsonError(w, "failed to queue PR review: "+err.Error(), 500)
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":    "queued",
+		"repo":      repo,
+		"pr_number": prNumber,
+		"action":    action,
 	})
 }

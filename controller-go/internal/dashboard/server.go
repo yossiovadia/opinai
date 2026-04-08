@@ -161,6 +161,9 @@ type MarkRecordedFunc func(repo string, issue int)
 // RetryPendingFunc triggers a check for pending issues in a repo after a job completes.
 type RetryPendingFunc func(repo string)
 
+// ReviewPRFunc is the callback for creating PR review jobs.
+type ReviewPRFunc func(repo string, prNumber int, title string) error
+
 // JobInfo describes an active K8s reproduction job.
 type JobInfo struct {
 	Repo      string `json:"repo"`
@@ -203,6 +206,7 @@ type Server struct {
 	retryPending  RetryPendingFunc
 	listJobs      ListJobsFunc
 	sandbox       SandboxManagerIface
+	reviewPR      ReviewPRFunc
 }
 
 // New creates the dashboard server with all routes.
@@ -253,6 +257,11 @@ func (s *Server) SetListJobsCallback(fn ListJobsFunc) {
 // SetSandboxManager sets the sandbox manager for admin endpoints.
 func (s *Server) SetSandboxManager(sm SandboxManagerIface) {
 	s.sandbox = sm
+}
+
+// SetReviewPRCallback sets the function called to create PR review jobs.
+func (s *Server) SetReviewPRCallback(fn ReviewPRFunc) {
+	s.reviewPR = fn
 }
 
 func (s *Server) buildRouter() chi.Router {
@@ -307,6 +316,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/api/check-now-stream", s.handleCheckNowStream)
 		r.Get("/api/job-logs", s.handleJobLogs)
 		r.Post("/api/internal/result", s.handleInternalResult)
+		r.Post("/api/internal/pr-result", s.handleInternalPRResult)
 	})
 
 	// Core API
@@ -320,6 +330,8 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/jobs", s.handleJobs)
 		r.Get("/report/{id}", s.handleReport)
 		r.Get("/run-history", s.handleRunHistory)
+		r.Get("/pr-reviews", s.handlePRReviews)
+		r.Get("/pr-reviews/{id}", s.handlePRReview)
 
 		// Protected endpoints (bearer auth)
 		r.Group(func(r chi.Router) {
@@ -334,6 +346,8 @@ func (s *Server) buildRouter() chi.Router {
 			r.Delete("/runs/*", s.handleDeleteRuns)
 			r.Post("/rerun/*", s.handleRerun)
 			r.Post("/rerun-all/*", s.handleRerunAll)
+			r.Post("/review-pr", s.handleReviewPR)
+			r.Post("/pr-reviews/{id}/post-comment", s.handlePostPRComment)
 
 			// Admin
 			r.Route("/admin", func(r chi.Router) {

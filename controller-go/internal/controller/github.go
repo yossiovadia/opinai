@@ -298,3 +298,115 @@ func FetchLinkedResources(text string) map[string]string {
 func RemoveLabel(repo string, number int, label string) {
 	ghDelete(fmt.Sprintf("/repos/%s/issues/%d/labels/%s", repo, number, label))
 }
+
+// PullRequest represents a GitHub pull request.
+type PullRequest struct {
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	State     string `json:"state"`
+	Head      struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	User struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// PRChangedFile represents a file changed in a PR.
+type PRChangedFile struct {
+	Filename  string `json:"filename"`
+	Status    string `json:"status"` // added, removed, modified, renamed
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Patch     string `json:"patch"`
+}
+
+// FetchPRDetails returns full details for a pull request.
+func FetchPRDetails(repo string, prNumber int) (*PullRequest, error) {
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/pulls/%d", repo, prNumber))
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	var pr PullRequest
+	if err := json.Unmarshal(body, &pr); err != nil {
+		return nil, err
+	}
+	return &pr, nil
+}
+
+// FetchPRDiff returns the unified diff for a pull request.
+func FetchPRDiff(repo string, prNumber int) (string, error) {
+	req, err := http.NewRequest("GET", ghAPI+fmt.Sprintf("/repos/%s/pulls/%d", repo, prNumber), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header = ghHeaders()
+	req.Header.Set("Accept", "application/vnd.github.v3.diff")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return string(body), nil
+}
+
+// FetchPRChangedFiles returns the list of changed files in a PR.
+func FetchPRChangedFiles(repo string, prNumber int) ([]PRChangedFile, error) {
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/pulls/%d/files?per_page=100", repo, prNumber))
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	var files []PRChangedFile
+	if err := json.Unmarshal(body, &files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// FetchPRComments returns review comments on a pull request.
+func FetchPRComments(repo string, prNumber int) ([]IssueComment, error) {
+	// Get both issue comments and review comments
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=10", repo, prNumber))
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	var raw []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	var comments []IssueComment
+	for _, c := range raw {
+		comments = append(comments, IssueComment{
+			Author:    c.User.Login,
+			Body:      c.Body,
+			CreatedAt: c.CreatedAt,
+		})
+	}
+	return comments, nil
+}

@@ -110,6 +110,169 @@ func Investigate(title, body, serverURL, repoDir, repoContext string, maxIter in
 	return result
 }
 
+// PRReviewResult holds the outcome of a PR review investigation.
+type PRReviewResult struct {
+	Verdict    string   // APPROVE, CHANGES_REQUESTED, COMMENT
+	Risk       string   // LOW, MEDIUM, HIGH, CRITICAL
+	ReviewText string   // Full review markdown
+	Report     string   // AI's final analysis
+	Iterations int
+	ToolCalls  int
+	FilesRead  []string
+}
+
+// ReviewPR runs the agent loop to review a pull request.
+func ReviewPR(prTitle, prBody, prDiff, prAuthor, changedFiles, serverURL, repoDir, repoContext, linkedIssues string, maxIter int) PRReviewResult {
+	cfg := ai.LoadConfig()
+	if !cfg.Available() {
+		slog.Warn("agent: no AI provider configured, skipping PR review")
+		return PRReviewResult{Verdict: "COMMENT", Risk: "LOW", Report: "No AI provider configured"}
+	}
+
+	if maxIter <= 0 {
+		maxIter = 200
+	}
+
+	// Build system prompt
+	systemPrompt := prompts.Render("agent_pr_review.txt", map[string]string{
+		"ServerURL":    serverURL,
+		"RepoDir":      repoDir,
+		"RepoContext":  repoContext,
+		"PRTitle":      prTitle,
+		"PRAuthor":     prAuthor,
+		"PRBody":       prBody,
+		"PRDiff":       prDiff,
+		"ChangedFiles": changedFiles,
+		"LinkedIssues": linkedIssues,
+	})
+
+	// Build user message
+	userMsg := fmt.Sprintf("Review this pull request.\n\n**Title:** %s\n**Author:** %s\n\nThe diff and changed files are in the system prompt. Start by reading the changed files in full context, then investigate.", prTitle, prAuthor)
+	if serverURL != "" {
+		userMsg += fmt.Sprintf("\n\nThe server is running at %s with the PR applied — you can test it.", serverURL)
+	} else {
+		userMsg += "\n\nNo server is running. Focus on code review using read_file, grep, and run_test."
+	}
+
+	state := &ToolState{
+		RepoDir:   repoDir,
+		ServerURL: serverURL,
+	}
+
+	tools := ToolDefs()
+	if serverURL == "" {
+		filtered := tools[:0]
+		for _, t := range tools {
+			if t.Name != "server_request" {
+				filtered = append(filtered, t)
+			}
+		}
+		tools = filtered
+	}
+
+	slog.Info("agent: starting PR review", "repo_dir", repoDir, "server_url", serverURL, "max_iter", maxIter)
+
+	handler := func(call ai.ToolCall) (string, bool) {
+		return state.HandleTool(call)
+	}
+
+	finalText, iterations, toolCalls, err := ai.RunAgentLoop(
+		cfg, systemPrompt, userMsg, tools, handler, maxIter, 4096,
+	)
+	if err != nil {
+		slog.Error("agent: PR review loop error", "error", err)
+		if finalText == "" {
+			finalText = fmt.Sprintf("PR review failed: %s", err)
+		}
+	}
+
+	result := PRReviewResult{
+		Report:     finalText,
+		Iterations: iterations,
+		ToolCalls:  toolCalls,
+		FilesRead:  state.FilesRead,
+	}
+
+	result.Verdict, result.Risk = parsePRVerdict(finalText)
+	result.ReviewText = extractPRReview(finalText)
+
+	slog.Info("agent: PR review complete",
+		"verdict", result.Verdict,
+		"risk", result.Risk,
+		"iterations", result.Iterations,
+		"tool_calls", result.ToolCalls,
+		"files_read", len(result.FilesRead),
+	)
+
+	return result
+}
+
+// parsePRVerdict extracts the verdict and risk from the AI's PR review response.
+func parsePRVerdict(text string) (string, string) {
+	verdict := "COMMENT"
+	risk := "LOW"
+
+	if idx := strings.Index(text, "===PR_VERDICT==="); idx >= 0 {
+		block := text[idx:]
+		if end := strings.Index(block, "===END_PR_VERDICT==="); end >= 0 {
+			block = block[:end]
+		}
+		for _, line := range strings.Split(block, "\n") {
+			line = strings.TrimSpace(line)
+			upper := strings.ToUpper(line)
+			if strings.HasPrefix(upper, "VERDICT:") {
+				val := strings.TrimSpace(strings.TrimPrefix(upper, "VERDICT:"))
+				for _, v := range []string{"APPROVE", "CHANGES_REQUESTED", "COMMENT"} {
+					if strings.Contains(val, v) {
+						verdict = v
+						break
+					}
+				}
+			}
+			if strings.HasPrefix(upper, "RISK:") {
+				val := strings.TrimSpace(strings.TrimPrefix(upper, "RISK:"))
+				for _, r := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+					if strings.Contains(val, r) {
+						risk = r
+						break
+					}
+				}
+			}
+		}
+		return verdict, risk
+	}
+
+	// Fallback keyword scan
+	upper := strings.ToUpper(text)
+	if strings.Contains(upper, "CHANGES_REQUESTED") {
+		verdict = "CHANGES_REQUESTED"
+	} else if strings.Contains(upper, "APPROVE") {
+		verdict = "APPROVE"
+	}
+	for _, r := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+		if strings.Contains(upper, "RISK: "+r) || strings.Contains(upper, "RISK:"+r) {
+			risk = r
+			break
+		}
+	}
+
+	return verdict, risk
+}
+
+// extractPRReview extracts the review text between markers.
+func extractPRReview(text string) string {
+	start := strings.Index(text, "--- OPINAI PR REVIEW ---")
+	if start < 0 {
+		return ""
+	}
+	start += len("--- OPINAI PR REVIEW ---")
+	end := strings.Index(text[start:], "--- END PR REVIEW ---")
+	if end < 0 {
+		return strings.TrimSpace(text[start:])
+	}
+	return strings.TrimSpace(text[start : start+end])
+}
+
 // parseVerdict extracts the verdict and confidence from the AI's final response.
 func parseVerdict(text string) (string, string) {
 	verdict := "INCONCLUSIVE"

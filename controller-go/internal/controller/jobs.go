@@ -441,6 +441,238 @@ func (jm *JobManager) CreateReproductionJob(repo string, issueNumber int, issueT
 	return jm.createJob(repo, issueNumber, issueTitle, false)
 }
 
+// PRReviewJobName generates the K8s job name for a PR review.
+func PRReviewJobName(repo string, prNumber int) string {
+	safe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
+	return fmt.Sprintf("opinai-pr-%s-%d", safe, prNumber)
+}
+
+// CreatePRReviewJob creates a K8s Job to review a pull request.
+func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string) error {
+	name := PRReviewJobName(repo, prNumber)
+	ctx := context.Background()
+
+	// Concurrency control: same limits as reproduction jobs
+	totalActive, repoActive := jm.countRunningJobs(repo)
+	if repoActive {
+		slog.Info("repo already has a running job — skipping PR review", "repo", repo, "pr", prNumber)
+		return nil
+	}
+	if totalActive >= MaxConcurrentJobs {
+		slog.Info("max concurrent jobs reached — skipping PR review", "repo", repo, "pr", prNumber, "active", totalActive)
+		return nil
+	}
+
+	// Delete existing finished job if present
+	existing, err := jm.client.BatchV1().Jobs(jm.namespace).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		if existing.Status.Active > 0 {
+			slog.Info("PR review job already active, skipping", "job", name)
+			return nil
+		}
+		bg := metav1.DeletePropagationBackground
+		jm.client.BatchV1().Jobs(jm.namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &bg})
+		time.Sleep(2 * time.Second)
+	}
+
+	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
+	backoff := int32(0)
+	ttl := int32(3600)
+	activeDeadline := int64(600) // 10 minutes
+
+	// Fetch PR diff and details for the runner
+	prDiff := ""
+	prBody := ""
+	prAuthor := ""
+	prHeadRef := ""
+	if pr, err := FetchPRDetails(repo, prNumber); err == nil {
+		prBody = pr.Body
+		prAuthor = pr.User.Login
+		prHeadRef = pr.Head.Ref
+	}
+	if diff, err := FetchPRDiff(repo, prNumber); err == nil {
+		prDiff = diff
+		if len(prDiff) > 60000 {
+			prDiff = prDiff[:60000] + "\n... (diff truncated)"
+		}
+	}
+
+	// Build changed files list
+	changedFilesJSON := ""
+	if files, err := FetchPRChangedFiles(repo, prNumber); err == nil {
+		// Filter to source files, skip vendor/generated
+		var filtered []PRChangedFile
+		for _, f := range files {
+			if isSourceFile(f.Filename) {
+				filtered = append(filtered, f)
+			}
+		}
+		if b, err := json.Marshal(filtered); err == nil {
+			changedFilesJSON = string(b)
+			if len(changedFilesJSON) > 30000 {
+				changedFilesJSON = changedFilesJSON[:30000]
+			}
+		}
+	}
+
+	// Fetch linked issue investigations from PR body
+	linkedJSON := ""
+	linked := FetchLinkedResources(prBody)
+	if len(linked) > 0 {
+		if b, err := json.Marshal(linked); err == nil {
+			linkedJSON = string(b)
+		}
+	}
+
+	// Build repo context
+	repoContext := buildRepoContext(repo)
+
+	// Select runner image
+	imgSel := jm.selectRunnerImage(repo)
+	runnerImage := jm.image
+	if imgSel.Image != "" {
+		runnerImage = imgSel.Image
+	}
+
+	titleTrunc := title
+	if len(titleTrunc) > 253 {
+		titleTrunc = titleTrunc[:253]
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "REPO", Value: repo},
+		{Name: "OPINAI_MODE", Value: "pr-review"},
+		{Name: "OPINAI_PR_NUMBER", Value: fmt.Sprintf("%d", prNumber)},
+		{Name: "OPINAI_PR_TITLE", Value: truncateStr(title, 1000)},
+		{Name: "OPINAI_PR_BODY", Value: truncateStr(prBody, 4096)},
+		{Name: "OPINAI_PR_DIFF", Value: prDiff},
+		{Name: "OPINAI_PR_AUTHOR", Value: prAuthor},
+		{Name: "OPINAI_PR_HEAD_REF", Value: prHeadRef},
+		{Name: "OPINAI_PR_CHANGED_FILES", Value: changedFilesJSON},
+		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
+		{Name: "OPINAI_LINKED_RESOURCES", Value: linkedJSON},
+		{Name: "OPINAI_CONTROLLER_URL", Value: controllerURL(jm.namespace)},
+		{Name: "OPINAI_RUNNER_IMAGE", Value: runnerImage},
+		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
+	}
+	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)
+	env = append(env, secretEnvVar("AI_PROJECT", "opinai-credentials", "AI_PROJECT")...)
+	env = append(env, secretEnvVar("AI_REGION", "opinai-credentials", "AI_REGION")...)
+	env = append(env, secretEnvVar("AI_MODEL", "opinai-credentials", "AI_MODEL")...)
+	env = append(env, collectProfileEnvVars()...)
+
+	planRes := extractPlanResources("")
+	if imgSel.CPUReq != "" {
+		planRes.CPUReq = imgSel.CPUReq
+	}
+	if imgSel.CPULim != "" {
+		planRes.CPULim = imgSel.CPULim
+	}
+	if imgSel.MemReq != "" {
+		planRes.MemReq = imgSel.MemReq
+	}
+	if imgSel.MemLim != "" {
+		planRes.MemLim = imgSel.MemLim
+	}
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: jm.namespace,
+			Labels: map[string]string{
+				"app":          "opinai-runner",
+				"opinai/repo":  repoSafe,
+				"opinai/pr":    fmt.Sprintf("%d", prNumber),
+				"opinai/type":  "pr-review",
+			},
+			Annotations: map[string]string{
+				"opinai/title":     titleTrunc,
+				"opinai/repo-full": repo,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoff,
+			ActiveDeadlineSeconds:   &activeDeadline,
+			TTLSecondsAfterFinished: &ttl,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "opinai-controller",
+					RestartPolicy:      corev1.RestartPolicyNever,
+					Volumes: []corev1.Volume{
+						{
+							Name: "gcp-credentials",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: "opinai-gcp-credentials",
+									Optional:   boolPtr(true),
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:            "runner",
+							Image:           runnerImage,
+							ImagePullPolicy: imagePullPolicy(runnerImage),
+							Command:         []string{"/app/opinai-go", "--mode=runner"},
+							Env:             env,
+							EnvFrom: []corev1.EnvFromSource{
+								{SecretRef: &corev1.SecretEnvSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: "opinai-credentials"},
+								}},
+								{ConfigMapRef: &corev1.ConfigMapEnvSource{
+									LocalObjectReference: corev1.LocalObjectReference{Name: "opinai-config"},
+									Optional:             boolPtr(true),
+								}},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "gcp-credentials", MountPath: "/var/run/secrets/gcp", ReadOnly: true},
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    mustParseQuantity(planRes.CPUReq),
+									corev1.ResourceMemory: mustParseQuantity(planRes.MemReq),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    mustParseQuantity(planRes.CPULim),
+									corev1.ResourceMemory: mustParseQuantity(planRes.MemLim),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = jm.client.BatchV1().Jobs(jm.namespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("create PR review job %s: %w", name, err)
+	}
+
+	jm.broadcast("pr_review_created", map[string]any{"repo": repo, "pr": prNumber})
+	slog.Info("created PR review job", "job", name, "repo", repo, "pr", prNumber, "title", title)
+	return nil
+}
+
+// isSourceFile returns true if the filename looks like source code (not vendor/generated).
+func isSourceFile(name string) bool {
+	lower := strings.ToLower(name)
+	// Skip vendor, generated, and binary files
+	for _, skip := range []string{"vendor/", "node_modules/", ".min.", ".bundle.", "package-lock.json", "yarn.lock", "go.sum"} {
+		if strings.Contains(lower, skip) {
+			return false
+		}
+	}
+	// Accept common source extensions
+	for _, ext := range []string{".go", ".py", ".js", ".ts", ".jsx", ".tsx", ".rs", ".java", ".rb", ".c", ".cpp", ".h", ".yaml", ".yml", ".toml", ".json", ".sql", ".sh", ".md"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // StartWatcher watches K8s Jobs for real-time result harvesting.
 func (jm *JobManager) StartWatcher() {
 	slog.Info("job watcher started", "namespace", jm.namespace)
@@ -526,8 +758,8 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	if repo == "" {
 		repo = labels["opinai/repo"]
 	}
-	issueStr := labels["opinai/issue"]
 	title := annotations["opinai/title"]
+	isPRReview := labels["opinai/type"] == "pr-review"
 
 	if job.Status.Succeeded > 0 {
 		slog.Info("job succeeded", "job", name)
@@ -547,6 +779,17 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	}
 
 	podLogs := jm.readPodLogs(context.Background(), name)
+
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	if job.Status.CompletionTime != nil {
+		ts = job.Status.CompletionTime.Format("2006-01-02T15:04:05Z")
+	}
+
+	if isPRReview {
+		jm.harvestPRReviewJob(job, repo, title, duration, podLogs, ts)
+		return
+	}
+
 	category := parseMarker(podLogs, "--- OPINAI CATEGORY:", "BUG")
 	confidence := parseMarker(podLogs, "--- OPINAI CONFIDENCE:", "")
 	verdict := parseVerdictMarker(podLogs, category)
@@ -555,12 +798,9 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	reproDetails := extractBlock(podLogs, "--- OPINAI REPRODUCTION_DETAILS ---", "--- END REPRODUCTION_DETAILS ---")
 	storeRepoMemory(repo, podLogs)
 
+	issueStr := labels["opinai/issue"]
 	issue := 0
 	fmt.Sscanf(issueStr, "%d", &issue)
-	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-	if job.Status.CompletionTime != nil {
-		ts = job.Status.CompletionTime.Format("2006-01-02T15:04:05Z")
-	}
 
 	report := suggestedComment
 	if report == "" && len(podLogs) > 3000 {
@@ -602,6 +842,112 @@ func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 
 	// NOTE: retry is triggered by the runner callback (/api/internal/result), not here.
 	// The callback arrives first and is more reliable. Having both causes duplicate retries.
+}
+
+// harvestPRReviewJob extracts PR review results from a completed job's logs.
+func (jm *JobManager) harvestPRReviewJob(job *batchv1.Job, repo, title, duration, podLogs, ts string) {
+	name := job.Name
+	labels := job.Labels
+	if labels == nil {
+		labels = map[string]string{}
+	}
+
+	prNumber := 0
+	fmt.Sscanf(labels["opinai/pr"], "%d", &prNumber)
+
+	verdict := parsePRVerdict(podLogs)
+	risk := parsePRRisk(podLogs)
+	reviewText := extractBlock(podLogs, "--- OPINAI PR REVIEW ---", "--- END PR REVIEW ---")
+	if reviewText == "" && len(podLogs) > 3000 {
+		reviewText = podLogs[len(podLogs)-3000:]
+	} else if reviewText == "" {
+		reviewText = podLogs
+	}
+	if reviewText == "" {
+		reviewText = "(no review output)"
+	}
+
+	author := ""
+	// Try to extract author from logs
+	for _, line := range strings.Split(podLogs, "\n") {
+		if strings.Contains(line, "--- OPINAI PR AUTHOR:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) > 1 {
+				author = strings.TrimSpace(strings.Trim(parts[1], " -"))
+			}
+		}
+	}
+
+	_, dbErr := database.AddPRReview(database.PRReview{
+		Repo: repo, PRNumber: prNumber, Title: title,
+		Author: author, Verdict: verdict, Risk: risk,
+		ReviewText: reviewText, Posted: false, Duration: duration, CreatedAt: ts,
+	})
+	if dbErr != nil {
+		slog.Error("failed to store PR review in DB", "job", name, "error", dbErr)
+		return
+	}
+	jm.mu.Lock()
+	jm.recorded[name] = true
+	jm.mu.Unlock()
+	jm.broadcast("pr_review_completed", map[string]any{"repo": repo, "pr": prNumber, "verdict": verdict, "risk": risk})
+
+	if err := jm.DeleteJob(name); err != nil {
+		slog.Warn("failed to delete completed PR review job", "job", name, "error", err)
+	}
+
+	slog.Info("harvested PR review", "job", name, "repo", repo, "pr", prNumber, "verdict", verdict, "risk", risk)
+}
+
+func parsePRVerdict(logs string) string {
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "--- OPINAI PR VERDICT:") {
+			upper := strings.ToUpper(line)
+			for _, v := range []string{"APPROVE", "CHANGES_REQUESTED", "COMMENT"} {
+				if strings.Contains(upper, v) {
+					return v
+				}
+			}
+		}
+	}
+	// Fallback keyword scan
+	upper := strings.ToUpper(logs)
+	if strings.Contains(upper, "CHANGES_REQUESTED") {
+		return "CHANGES_REQUESTED"
+	}
+	if strings.Contains(upper, "===PR_VERDICT===") {
+		block := logs[strings.Index(upper, "===PR_VERDICT==="):]
+		if strings.Contains(strings.ToUpper(block), "APPROVE") {
+			return "APPROVE"
+		}
+		if strings.Contains(strings.ToUpper(block), "CHANGES_REQUESTED") {
+			return "CHANGES_REQUESTED"
+		}
+	}
+	return "COMMENT"
+}
+
+func parsePRRisk(logs string) string {
+	for _, line := range strings.Split(logs, "\n") {
+		if strings.Contains(line, "--- OPINAI PR RISK:") || strings.Contains(line, "risk:") {
+			upper := strings.ToUpper(line)
+			for _, r := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+				if strings.Contains(upper, r) {
+					return r
+				}
+			}
+		}
+	}
+	// Fallback from verdict block
+	if idx := strings.Index(strings.ToUpper(logs), "===PR_VERDICT==="); idx >= 0 {
+		block := strings.ToUpper(logs[idx:])
+		for _, r := range []string{"CRITICAL", "HIGH", "MEDIUM", "LOW"} {
+			if strings.Contains(block, "RISK: "+r) || strings.Contains(block, "RISK:"+r) {
+				return r
+			}
+		}
+	}
+	return "LOW"
 }
 
 // trySandboxDeploy checks if the repo needs K8s sandbox deployment and creates one if so.

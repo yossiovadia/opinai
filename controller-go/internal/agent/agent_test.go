@@ -250,6 +250,166 @@ func TestToolState_ServerRequestNoServer(t *testing.T) {
 	_ = result
 }
 
+func TestParsePRVerdict_StructuredBlock(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		wantV string
+		wantR string
+	}{
+		{
+			name: "approve with low risk",
+			text: `Code looks good.
+
+===PR_VERDICT===
+verdict: APPROVE
+risk: LOW
+===END_PR_VERDICT===`,
+			wantV: "APPROVE",
+			wantR: "LOW",
+		},
+		{
+			name: "changes requested high risk",
+			text: `Found issues.
+
+===PR_VERDICT===
+verdict: CHANGES_REQUESTED
+risk: HIGH
+===END_PR_VERDICT===`,
+			wantV: "CHANGES_REQUESTED",
+			wantR: "HIGH",
+		},
+		{
+			name: "comment medium risk",
+			text: `===PR_VERDICT===
+verdict: COMMENT
+risk: MEDIUM
+===END_PR_VERDICT===`,
+			wantV: "COMMENT",
+			wantR: "MEDIUM",
+		},
+		{
+			name: "critical risk",
+			text: `===PR_VERDICT===
+verdict: CHANGES_REQUESTED
+risk: CRITICAL
+===END_PR_VERDICT===`,
+			wantV: "CHANGES_REQUESTED",
+			wantR: "CRITICAL",
+		},
+		{
+			name: "missing end marker",
+			text: `===PR_VERDICT===
+verdict: APPROVE
+risk: LOW`,
+			wantV: "APPROVE",
+			wantR: "LOW",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, r := parsePRVerdict(tt.text)
+			if v != tt.wantV {
+				t.Errorf("verdict = %q, want %q", v, tt.wantV)
+			}
+			if r != tt.wantR {
+				t.Errorf("risk = %q, want %q", r, tt.wantR)
+			}
+		})
+	}
+}
+
+func TestParsePRVerdict_FallbackKeywords(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		wantV string
+		wantR string
+	}{
+		{
+			name:  "keyword CHANGES_REQUESTED",
+			text:  "This PR has issues: CHANGES_REQUESTED. Risk: HIGH",
+			wantV: "CHANGES_REQUESTED",
+			wantR: "HIGH",
+		},
+		{
+			name:  "keyword APPROVE",
+			text:  "APPROVE this PR.",
+			wantV: "APPROVE",
+			wantR: "LOW",
+		},
+		{
+			name:  "no keywords defaults to COMMENT LOW",
+			text:  "Some observations about the code.",
+			wantV: "COMMENT",
+			wantR: "LOW",
+		},
+		{
+			name:  "empty text",
+			text:  "",
+			wantV: "COMMENT",
+			wantR: "LOW",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, r := parsePRVerdict(tt.text)
+			if v != tt.wantV {
+				t.Errorf("verdict = %q, want %q", v, tt.wantV)
+			}
+			if r != tt.wantR {
+				t.Errorf("risk = %q, want %q", r, tt.wantR)
+			}
+		})
+	}
+}
+
+func TestExtractPRReview(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{
+			name: "with markers",
+			text: `Some preamble
+
+--- OPINAI PR REVIEW ---
+## Summary
+This PR adds feature X.
+
+## Verdict
+Looks good.
+--- END PR REVIEW ---
+
+Some epilogue`,
+			want: "## Summary\nThis PR adds feature X.\n\n## Verdict\nLooks good.",
+		},
+		{
+			name: "no end marker",
+			text: `--- OPINAI PR REVIEW ---
+Review content here.`,
+			want: "Review content here.",
+		},
+		{
+			name: "no markers",
+			text: "Just regular text.",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractPRReview(tt.text)
+			if got != tt.want {
+				t.Errorf("extractPRReview() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestToolDefs(t *testing.T) {
 	defs := ToolDefs()
 	if len(defs) != 5 {

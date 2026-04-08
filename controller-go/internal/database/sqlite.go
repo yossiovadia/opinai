@@ -121,6 +121,23 @@ func migrate() error {
 		profile_json TEXT NOT NULL,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS pr_reviews (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL,
+		pr_number INTEGER NOT NULL,
+		title TEXT,
+		author TEXT,
+		verdict TEXT,
+		risk TEXT,
+		review_text TEXT,
+		posted BOOLEAN DEFAULT FALSE,
+		posted_at TEXT,
+		duration TEXT,
+		created_at TEXT DEFAULT (datetime('now')),
+		UNIQUE(repo, pr_number, created_at)
+	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo ON pr_reviews(repo)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo_pr ON pr_reviews(repo, pr_number)")
 	return nil
 }
 
@@ -583,4 +600,100 @@ func GetHostProfile() string {
 		return ""
 	}
 	return j
+}
+
+// --- PR Reviews ---
+
+// PRReview represents a PR review result.
+type PRReview struct {
+	ID         int64   `json:"id"`
+	Repo       string  `json:"repo"`
+	PRNumber   int     `json:"pr_number"`
+	Title      string  `json:"title"`
+	Author     string  `json:"author"`
+	Verdict    string  `json:"verdict"`
+	Risk       string  `json:"risk"`
+	ReviewText string  `json:"review_text"`
+	Posted     bool    `json:"posted"`
+	PostedAt   *string `json:"posted_at"`
+	Duration   string  `json:"duration"`
+	CreatedAt  string  `json:"timestamp"`
+}
+
+func AddPRReview(r PRReview) (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(
+		`INSERT OR REPLACE INTO pr_reviews
+		 (repo, pr_number, title, author, verdict, risk, review_text, posted, duration, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.Repo, r.PRNumber, r.Title, r.Author, r.Verdict, r.Risk,
+		r.ReviewText, r.Posted, r.Duration, r.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func GetPRReviews(repo string, limit int) ([]PRReview, error) {
+	var rows *sql.Rows
+	var err error
+	if repo != "" {
+		rows, err = db.Query("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews WHERE repo = ? ORDER BY created_at DESC LIMIT ?", repo, limit)
+	} else {
+		rows, err = db.Query("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews ORDER BY created_at DESC LIMIT ?", limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPRReviews(rows)
+}
+
+func GetPRReview(id int64) (*PRReview, error) {
+	row := db.QueryRow("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews WHERE id = ?", id)
+	var r PRReview
+	err := row.Scan(&r.ID, &r.Repo, &r.PRNumber, &r.Title, &r.Author, &r.Verdict,
+		&r.Risk, &r.ReviewText, &r.Posted, &r.PostedAt, &r.Duration, &r.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+func GetPRReviewsByPR(repo string, prNumber int) ([]PRReview, error) {
+	rows, err := db.Query(
+		"SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews WHERE repo = ? AND pr_number = ? ORDER BY created_at DESC",
+		repo, prNumber,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanPRReviews(rows)
+}
+
+func MarkPRReviewPosted(id int64) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("UPDATE pr_reviews SET posted = TRUE, posted_at = datetime('now') WHERE id = ?", id)
+	return err
+}
+
+func scanPRReviews(rows *sql.Rows) ([]PRReview, error) {
+	var result []PRReview
+	for rows.Next() {
+		var r PRReview
+		err := rows.Scan(&r.ID, &r.Repo, &r.PRNumber, &r.Title, &r.Author, &r.Verdict,
+			&r.Risk, &r.ReviewText, &r.Posted, &r.PostedAt, &r.Duration, &r.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
 }

@@ -406,6 +406,196 @@ func jsonString(s string) string {
 	return string(b)
 }
 
+// --- /api/pr-reviews ---
+
+func (s *Server) handlePRReviews(w http.ResponseWriter, r *http.Request) {
+	limit := intQuery(r, "limit", 50)
+	repo := r.URL.Query().Get("repo")
+	reviews, err := database.GetPRReviews(repo, limit)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if reviews == nil {
+		reviews = []database.PRReview{}
+	}
+	json.NewEncoder(w).Encode(reviews)
+}
+
+// --- /api/pr-reviews/{id} ---
+
+func (s *Server) handlePRReview(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	review, err := database.GetPRReview(id)
+	if err != nil || review == nil {
+		jsonError(w, "review not found", 404)
+		return
+	}
+	json.NewEncoder(w).Encode(review)
+}
+
+// --- POST /api/review-pr ---
+
+func (s *Server) handleReviewPR(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo     string `json:"repo"`
+		PRNumber int    `json:"pr_number"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		jsonError(w, "invalid request", 400)
+		return
+	}
+	if req.Repo == "" || req.PRNumber == 0 {
+		jsonError(w, "repo and pr_number required", 400)
+		return
+	}
+
+	// Check monitored repos
+	monitored := ParseRepos(os.Getenv("REPOS"))
+	found := false
+	for _, m := range monitored {
+		if m == req.Repo {
+			found = true
+			break
+		}
+	}
+	if !found {
+		jsonError(w, "Repo not monitored. Add it via Admin first.", 403)
+		return
+	}
+
+	if s.reviewPR == nil {
+		jsonError(w, "PR review not available", 503)
+		return
+	}
+
+	// Fetch PR title for the job
+	title := fmt.Sprintf("PR #%d", req.PRNumber)
+	if err := s.reviewPR(req.Repo, req.PRNumber, title); err != nil {
+		jsonError(w, "failed to create PR review job: "+err.Error(), 500)
+		return
+	}
+
+	s.hub.Broadcast(WSEvent{
+		Type: "pr_review_queued",
+		Data: map[string]any{"repo": req.Repo, "pr_number": req.PRNumber},
+	})
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":    "queued",
+		"repo":      req.Repo,
+		"pr_number": req.PRNumber,
+	})
+}
+
+// --- POST /api/pr-reviews/{id}/post-comment ---
+
+func (s *Server) handlePostPRComment(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonError(w, "invalid review id", 400)
+		return
+	}
+
+	review, err := database.GetPRReview(id)
+	if err != nil || review == nil {
+		jsonError(w, "review not found", 404)
+		return
+	}
+	if review.Posted {
+		jsonError(w, "already posted", 400)
+		return
+	}
+	if review.Repo == "" || review.ReviewText == "" {
+		jsonError(w, "missing repo or review text", 400)
+		return
+	}
+
+	// Post to GitHub as a PR comment (issue comments API works for PRs too)
+	ghToken := os.Getenv("GITHUB_TOKEN")
+	url := fmt.Sprintf("https://api.github.com/repos/%s/issues/%d/comments", review.Repo, review.PRNumber)
+	body := fmt.Sprintf(`{"body":%s}`, jsonString(sanitize(review.ReviewText)))
+
+	req2, _ := http.NewRequest("POST", url, strings.NewReader(body))
+	req2.Header.Set("Accept", "application/vnd.github+json")
+	req2.Header.Set("Authorization", "Bearer "+ghToken)
+	req2.Header.Set("Content-Type", "application/json")
+
+	ghClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := ghClient.Do(req2)
+	if err != nil {
+		jsonError(w, "GitHub API error: "+err.Error(), 500)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		jsonError(w, fmt.Sprintf("GitHub returned %d", resp.StatusCode), 500)
+		return
+	}
+
+	database.MarkPRReviewPosted(id)
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":    "posted",
+		"repo":      review.Repo,
+		"pr_number": review.PRNumber,
+	})
+}
+
+// --- POST /api/internal/pr-result ---
+// Called by the runner pod to report PR review results directly.
+
+func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo     string `json:"repo"`
+		PRNumber int    `json:"pr_number"`
+		Title    string `json:"title"`
+		Author   string `json:"author"`
+		Verdict  string `json:"verdict"`
+		Risk     string `json:"risk"`
+		Report   string `json:"report"`
+		Duration string `json:"duration"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		jsonError(w, "invalid request: "+err.Error(), 400)
+		return
+	}
+	if req.Repo == "" || req.PRNumber == 0 {
+		jsonError(w, "repo and pr_number required", 400)
+		return
+	}
+
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	_, dbErr := database.AddPRReview(database.PRReview{
+		Repo: req.Repo, PRNumber: req.PRNumber, Title: req.Title,
+		Author: req.Author, Verdict: req.Verdict, Risk: req.Risk,
+		ReviewText: req.Report, Posted: false, Duration: req.Duration, CreatedAt: ts,
+	})
+	if dbErr != nil {
+		slog.Error("internal PR result: failed to store review", "error", dbErr)
+		jsonError(w, "failed to store review: "+dbErr.Error(), 500)
+		return
+	}
+
+	// Mark as recorded so the log-scraping harvester skips this job
+	if s.markRecorded != nil {
+		// Use a synthetic issue number (negative PR number) to avoid collision
+		s.markRecorded(req.Repo, -req.PRNumber)
+	}
+
+	s.hub.Broadcast(WSEvent{
+		Type: "pr_review_completed",
+		Data: map[string]any{"repo": req.Repo, "pr_number": req.PRNumber, "verdict": req.Verdict, "risk": req.Risk},
+	})
+
+	slog.Info("received PR review result via callback", "repo", req.Repo, "pr", req.PRNumber, "verdict", req.Verdict)
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+}
+
 // ghGet makes an authenticated GET to the GitHub API.
 func ghGet(path string) ([]byte, int, error) {
 	token := os.Getenv("GITHUB_TOKEN")

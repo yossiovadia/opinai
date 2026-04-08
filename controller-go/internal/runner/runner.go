@@ -28,6 +28,12 @@ var collectedRepoMemory = map[string]string{} // accumulated for postResult
 
 // Run executes the full reproduction flow. Called when --mode=runner.
 func Run() {
+	// Check if this is a PR review job
+	if os.Getenv("OPINAI_MODE") == "pr-review" {
+		RunPRReview()
+		return
+	}
+
 	repo := os.Getenv("REPO")
 	issueNumber := os.Getenv("ISSUE_NUMBER")
 	if repo == "" || issueNumber == "" {
@@ -557,6 +563,180 @@ func Run() {
 		"repo_memory": collectedRepoMemory,
 	})
 	slog.Info("reproduction complete", "repo", repo, "issue", issueNumber)
+}
+
+// RunPRReview executes the PR review flow. Called when OPINAI_MODE=pr-review.
+func RunPRReview() {
+	repo := os.Getenv("REPO")
+	prNumberStr := os.Getenv("OPINAI_PR_NUMBER")
+	if repo == "" || prNumberStr == "" {
+		slog.Error("REPO and OPINAI_PR_NUMBER env vars required for PR review")
+		os.Exit(1)
+	}
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		slog.Error("GITHUB_TOKEN env var required")
+		os.Exit(1)
+	}
+
+	prNumber := atoi(prNumberStr)
+	prTitle := os.Getenv("OPINAI_PR_TITLE")
+	prBody := os.Getenv("OPINAI_PR_BODY")
+	prDiff := os.Getenv("OPINAI_PR_DIFF")
+	prAuthor := os.Getenv("OPINAI_PR_AUTHOR")
+	prHeadRef := os.Getenv("OPINAI_PR_HEAD_REF")
+	changedFilesJSON := os.Getenv("OPINAI_PR_CHANGED_FILES")
+
+	slog.Info("starting PR review", "repo", repo, "pr", prNumber, "title", prTitle)
+
+	// Clone repo and checkout PR branch
+	cloneDir := "/tmp/opinai-repo"
+	if !cloneRepo(repo) {
+		slog.Error("failed to clone repo for PR review")
+		emitPRResult(repo, prNumber, prTitle, prAuthor, "COMMENT", "LOW", "Failed to clone repository", "")
+		return
+	}
+
+	// Fetch and checkout the PR branch
+	if prHeadRef != "" {
+		slog.Info("checking out PR branch", "ref", prHeadRef)
+		fetchCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("pull/%d/head:pr-%d", prNumber, prNumber))
+		fetchCmd.Dir = cloneDir
+		fetchCmd.Stdout = os.Stderr
+		fetchCmd.Stderr = os.Stderr
+		if err := fetchCmd.Run(); err != nil {
+			slog.Warn("failed to fetch PR ref, trying branch name", "error", err)
+			// Fallback: try fetching by branch name
+			fetchCmd2 := exec.Command("git", "fetch", "origin", prHeadRef)
+			fetchCmd2.Dir = cloneDir
+			fetchCmd2.Stdout = os.Stderr
+			fetchCmd2.Stderr = os.Stderr
+			fetchCmd2.Run()
+		}
+		checkoutCmd := exec.Command("git", "checkout", fmt.Sprintf("pr-%d", prNumber))
+		checkoutCmd.Dir = cloneDir
+		checkoutCmd.Stdout = os.Stderr
+		checkoutCmd.Stderr = os.Stderr
+		if err := checkoutCmd.Run(); err != nil {
+			slog.Warn("checkout PR branch failed, reviewing from default branch with diff", "error", err)
+		}
+	}
+
+	// Build repo context
+	repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
+	richCtx := formatRichRepoContext(repoCtx)
+
+	// Build changed files summary for the agent
+	changedFilesSummary := ""
+	if changedFilesJSON != "" {
+		var files []struct {
+			Filename  string `json:"filename"`
+			Status    string `json:"status"`
+			Additions int    `json:"additions"`
+			Deletions int    `json:"deletions"`
+		}
+		if json.Unmarshal([]byte(changedFilesJSON), &files) == nil {
+			for _, f := range files {
+				changedFilesSummary += fmt.Sprintf("- %s (%s, +%d/-%d)\n", f.Filename, f.Status, f.Additions, f.Deletions)
+			}
+		}
+	}
+
+	// Build linked issues context
+	linkedIssuesCtx := ""
+	if linkedJSON := os.Getenv("OPINAI_LINKED_RESOURCES"); linkedJSON != "" {
+		var linked map[string]string
+		if json.Unmarshal([]byte(linkedJSON), &linked) == nil && len(linked) > 0 {
+			linkedIssuesCtx = "The following linked issues/PRs were referenced:\n\n"
+			for url, content := range linked {
+				linkedIssuesCtx += fmt.Sprintf("### %s\n%s\n\n", url, content)
+			}
+		}
+	}
+
+	// Check if previous investigations exist for linked issues
+	// (the repo context already includes previous run summaries)
+
+	// Truncate diff intelligently for the prompt
+	truncatedDiff := prDiff
+	if len(truncatedDiff) > 30000 {
+		truncatedDiff = truncatedDiff[:30000] + "\n... (diff truncated, use read_file to see full files)"
+	}
+
+	slog.Info("starting PR review agent", "changed_files", len(changedFilesSummary), "diff_bytes", len(truncatedDiff))
+
+	// Run agent investigation
+	result := agent.ReviewPR(
+		prTitle, prBody, truncatedDiff, prAuthor,
+		changedFilesSummary, "", cloneDir, richCtx,
+		linkedIssuesCtx, 0,
+	)
+
+	// Build review output
+	reviewText := result.ReviewText
+	if reviewText == "" {
+		reviewText = result.Report
+	}
+	if reviewText == "" {
+		reviewText = "(Agent produced no review output)"
+	}
+
+	// Emit markers for log-based harvesting
+	fmt.Printf("--- OPINAI PR AUTHOR: %s ---\n", prAuthor)
+	fmt.Printf("--- OPINAI PR VERDICT: %s ---\n", result.Verdict)
+	fmt.Printf("--- OPINAI PR RISK: %s ---\n", result.Risk)
+	fmt.Println("--- OPINAI PR REVIEW ---")
+	fmt.Println(reviewText)
+	fmt.Println("--- END PR REVIEW ---")
+
+	slog.Info("PR review complete", "verdict", result.Verdict, "risk", result.Risk,
+		"iterations", result.Iterations, "tool_calls", result.ToolCalls)
+
+	// Build structured report for the dashboard
+	report := fmt.Sprintf(
+		"## OpinAI PR Review\n\n"+
+			"**PR:** #%d\n"+
+			"**Title:** %s\n"+
+			"**Author:** @%s\n"+
+			"**Verdict:** %s\n"+
+			"**Risk:** %s\n"+
+			"**Analysis:** AI-powered (model: %s)\n\n"+
+			"%s",
+		prNumber, prTitle, prAuthor, result.Verdict, result.Risk,
+		os.Getenv("AI_MODEL"), reviewText,
+	)
+
+	// Post result to controller
+	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, report, "")
+}
+
+func emitPRResult(repo string, prNumber int, title, author, verdict, risk, report, duration string) {
+	controllerURL := os.Getenv("OPINAI_CONTROLLER_URL")
+	if controllerURL == "" {
+		return
+	}
+	payload := map[string]any{
+		"type":      "pr-review",
+		"repo":      repo,
+		"pr_number": prNumber,
+		"title":     title,
+		"author":    author,
+		"verdict":   verdict,
+		"risk":      risk,
+		"report":    report,
+		"duration":  duration,
+	}
+	b, _ := json.Marshal(payload)
+	resp, err := http.Post(controllerURL+"/api/internal/pr-result", "application/json", strings.NewReader(string(b)))
+	if err != nil {
+		slog.Warn("failed to POST PR review result to controller", "error", err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		slog.Info("PR review result posted to controller successfully")
+	} else {
+		slog.Warn("controller returned non-200 for PR result", "status", resp.StatusCode)
+	}
 }
 
 // --- helpers ---

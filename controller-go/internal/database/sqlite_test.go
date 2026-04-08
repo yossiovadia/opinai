@@ -261,3 +261,113 @@ func TestGetTotalStats(t *testing.T) {
 		t.Errorf("not_reproducible = %d, want 1", s.NotReproducible)
 	}
 }
+
+func TestPRReviewTable(t *testing.T) {
+	setupTestDB(t)
+	// Verify table exists
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='pr_reviews'").Scan(&name)
+	if err != nil {
+		t.Fatalf("pr_reviews table not found: %v", err)
+	}
+}
+
+func TestAddPRReviewGetPRReviews(t *testing.T) {
+	setupTestDB(t)
+	id, err := AddPRReview(PRReview{
+		Repo: "owner/repo", PRNumber: 10, Title: "Fix bug",
+		Author: "alice", Verdict: "APPROVE", Risk: "LOW",
+		ReviewText: "LGTM", Duration: "3s",
+		CreatedAt: "2026-04-01T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("AddPRReview: %v", err)
+	}
+	if id == 0 {
+		t.Error("expected non-zero ID")
+	}
+
+	reviews, err := GetPRReviews("owner/repo", 10)
+	if err != nil {
+		t.Fatalf("GetPRReviews: %v", err)
+	}
+	if len(reviews) != 1 {
+		t.Fatalf("expected 1 review, got %d", len(reviews))
+	}
+	r := reviews[0]
+	if r.PRNumber != 10 {
+		t.Errorf("pr_number = %d, want 10", r.PRNumber)
+	}
+	if r.Verdict != "APPROVE" {
+		t.Errorf("verdict = %q, want APPROVE", r.Verdict)
+	}
+	if r.Risk != "LOW" {
+		t.Errorf("risk = %q, want LOW", r.Risk)
+	}
+	if r.Author != "alice" {
+		t.Errorf("author = %q, want alice", r.Author)
+	}
+	if r.Posted {
+		t.Error("should not be posted initially")
+	}
+
+	// Filter by different repo
+	reviews2, _ := GetPRReviews("other/repo", 10)
+	if len(reviews2) != 0 {
+		t.Errorf("expected 0 reviews for other repo, got %d", len(reviews2))
+	}
+
+	// No filter
+	allReviews, _ := GetPRReviews("", 10)
+	if len(allReviews) != 1 {
+		t.Errorf("expected 1 total review, got %d", len(allReviews))
+	}
+}
+
+func TestGetPRReview(t *testing.T) {
+	setupTestDB(t)
+	id, _ := AddPRReview(PRReview{Repo: "r/r", PRNumber: 5, CreatedAt: "2026-01-01"})
+	review, err := GetPRReview(id)
+	if err != nil || review == nil {
+		t.Fatalf("GetPRReview(%d): %v", id, err)
+	}
+	if review.PRNumber != 5 {
+		t.Errorf("pr_number = %d", review.PRNumber)
+	}
+
+	// Non-existent
+	r2, _ := GetPRReview(9999)
+	if r2 != nil {
+		t.Error("expected nil for non-existent review")
+	}
+}
+
+func TestGetPRReviewsByPR(t *testing.T) {
+	setupTestDB(t)
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 7, Verdict: "COMMENT", CreatedAt: "2026-01-01"})
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 7, Verdict: "APPROVE", CreatedAt: "2026-01-02"})
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 8, Verdict: "APPROVE", CreatedAt: "2026-01-03"})
+
+	reviews, _ := GetPRReviewsByPR("r/r", 7)
+	if len(reviews) != 2 {
+		t.Fatalf("expected 2 reviews for PR 7, got %d", len(reviews))
+	}
+	// Newest first
+	if reviews[0].Verdict != "APPROVE" {
+		t.Errorf("first review verdict = %q, want APPROVE (newest)", reviews[0].Verdict)
+	}
+}
+
+func TestMarkPRReviewPosted(t *testing.T) {
+	setupTestDB(t)
+	id, _ := AddPRReview(PRReview{Repo: "r/r", PRNumber: 1, CreatedAt: "2026-01-01"})
+	review, _ := GetPRReview(id)
+	if review.Posted {
+		t.Error("should not be posted initially")
+	}
+	MarkPRReviewPosted(id)
+	review, _ = GetPRReview(id)
+	if !review.Posted {
+		t.Error("should be posted after MarkPRReviewPosted")
+	}
+}
