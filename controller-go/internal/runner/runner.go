@@ -680,10 +680,10 @@ func RunPRReview() {
 		linkedIssuesCtx, existingCommentsCtx, 0,
 	)
 
-	// Build review output
-	reviewText := result.ReviewText
+	// Build review output — prefer full Report which includes "Previously Identified" section
+	reviewText := result.Report
 	if reviewText == "" {
-		reviewText = result.Report
+		reviewText = result.ReviewText
 	}
 	if reviewText == "" {
 		reviewText = "(Agent produced no review output)"
