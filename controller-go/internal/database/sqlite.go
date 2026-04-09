@@ -1101,6 +1101,31 @@ func GetFindingsForFiles(repo string, filePaths []string) ([]InvestigationFindin
 	return findings, rows.Err()
 }
 
+// HasFindingsForIssue checks if findings already exist for a given repo+issue.
+func HasFindingsForIssue(repo string, issue int) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		"SELECT 1 FROM investigation_findings WHERE repo = ? AND issue_number = ? LIMIT 1",
+		repo, issue,
+	).Scan(&n)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// GetAllRunsWithReproDetails returns all runs that have non-empty repro_details.
+func GetAllRunsWithReproDetails() ([]Run, error) {
+	rows, err := db.Query(
+		"SELECT id,repo,issue,title,category,verdict,confidence,report,posted,posted_at,ai_powered,duration,suggested_questions,repro_details,created_at FROM runs WHERE repro_details != '' AND repro_details IS NOT NULL ORDER BY id",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRuns(rows)
+}
+
 // GetFindingsForRepo returns all findings for a repo, newest first.
 func GetFindingsForRepo(repo string, limit int) ([]InvestigationFinding, error) {
 	rows, err := db.Query(

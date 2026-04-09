@@ -67,6 +67,9 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		slog.Info("cleaned up duplicate PR reviews", "removed", n)
 	}
 
+	// Backfill investigation findings from existing runs
+	dashboard.BackfillFindings()
+
 	// Initialize K8s client
 	k8sClient, err := initK8sClient()
 	if err != nil {
@@ -234,9 +237,21 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			poller.RetryPendingForRepo(repo)
 		})
 
+		// Wire check-outcomes callback
+		srv.SetCheckOutcomesCallback(func() {
+			controller.CheckOutcomes(repos)
+		})
+
 		go jobMgr.StartWatcher()
 		go poller.Start()
 		go poller.StartPendingProcessor()
+
+		// Run outcome check once on startup after a delay
+		go func() {
+			time.Sleep(30 * time.Second)
+			slog.Info("running startup outcome check")
+			controller.CheckOutcomes(repos)
+		}()
 	}
 
 	// Create HTTP servers

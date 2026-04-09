@@ -836,6 +836,89 @@ func TestGetFindingsForFilesMultiplePerFile(t *testing.T) {
 	}
 }
 
+func TestHasFindingsForIssue(t *testing.T) {
+	setupTestDB(t)
+
+	has, err := HasFindingsForIssue("r/r", 42)
+	if err != nil {
+		t.Fatalf("HasFindingsForIssue: %v", err)
+	}
+	if has {
+		t.Error("should not have findings initially")
+	}
+
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 42, FilePath: "main.go",
+		Finding: "bug", Verdict: "BUG_CONFIRMED", Confidence: "HIGH",
+	})
+
+	has, err = HasFindingsForIssue("r/r", 42)
+	if err != nil {
+		t.Fatalf("HasFindingsForIssue: %v", err)
+	}
+	if !has {
+		t.Error("should have findings after insert")
+	}
+
+	// Different issue should not match
+	has, _ = HasFindingsForIssue("r/r", 99)
+	if has {
+		t.Error("should not match different issue")
+	}
+
+	// Different repo should not match
+	has, _ = HasFindingsForIssue("other/repo", 42)
+	if has {
+		t.Error("should not match different repo")
+	}
+}
+
+func TestGetAllRunsWithReproDetails(t *testing.T) {
+	setupTestDB(t)
+
+	// Run with repro_details
+	AddRun(Run{
+		Repo: "r/r", Issue: 1, Verdict: "BUG_CONFIRMED",
+		ReproDetails: `{"files_investigated":["main.go"]}`,
+		CreatedAt:    "2026-01-01",
+	})
+	// Run without repro_details
+	AddRun(Run{Repo: "r/r", Issue: 2, Verdict: "NOT_REPRODUCIBLE", CreatedAt: "2026-01-02"})
+	// Another run with repro_details
+	AddRun(Run{
+		Repo: "r/r", Issue: 3, Verdict: "BUG_CONFIRMED",
+		ReproDetails: `{"files_investigated":["server.go"]}`,
+		CreatedAt:    "2026-01-03",
+	})
+
+	runs, err := GetAllRunsWithReproDetails()
+	if err != nil {
+		t.Fatalf("GetAllRunsWithReproDetails: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("expected 2 runs with repro_details, got %d", len(runs))
+	}
+	// Should be ordered by ID (ascending)
+	if runs[0].Issue != 1 {
+		t.Errorf("first run issue = %d, want 1", runs[0].Issue)
+	}
+	if runs[1].Issue != 3 {
+		t.Errorf("second run issue = %d, want 3", runs[1].Issue)
+	}
+}
+
+func TestGetAllRunsWithReproDetailsEmpty(t *testing.T) {
+	setupTestDB(t)
+
+	runs, err := GetAllRunsWithReproDetails()
+	if err != nil {
+		t.Fatalf("GetAllRunsWithReproDetails: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("expected 0 runs on empty DB, got %d", len(runs))
+	}
+}
+
 // --- Outcomes Tests ---
 
 func TestAddAndGetOutcomes(t *testing.T) {

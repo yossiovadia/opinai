@@ -168,6 +168,9 @@ type RetryPendingFunc func(repo string)
 // ReviewPRFunc is the callback for creating PR review jobs.
 type ReviewPRFunc func(repo string, prNumber int, title string) error
 
+// CheckOutcomesFunc is the callback for triggering outcome checks.
+type CheckOutcomesFunc func()
+
 // JobInfo describes an active K8s reproduction job.
 type JobInfo struct {
 	Repo      string `json:"repo"`
@@ -232,6 +235,7 @@ type Server struct {
 	sandbox       SandboxManagerIface
 	infraMgr      InfraManagerIface
 	reviewPR      ReviewPRFunc
+	checkOutcomes CheckOutcomesFunc
 }
 
 // New creates the dashboard server with all routes.
@@ -297,6 +301,11 @@ func (s *Server) SetInfraManager(im InfraManagerIface) {
 // SetReviewPRCallback sets the function called to create PR review jobs.
 func (s *Server) SetReviewPRCallback(fn ReviewPRFunc) {
 	s.reviewPR = fn
+}
+
+// SetCheckOutcomesCallback sets the function called to trigger outcome checks.
+func (s *Server) SetCheckOutcomesCallback(fn CheckOutcomesFunc) {
+	s.checkOutcomes = fn
 }
 
 func (s *Server) buildRouter() chi.Router {
@@ -411,6 +420,8 @@ func (s *Server) buildRouter() chi.Router {
 				r.Post("/infra/{dep}/start", s.handleAdminInfraStart)
 				r.Post("/infra/{dep}/stop", s.handleAdminInfraStop)
 				r.Delete("/infra/{dep}", s.handleAdminInfraTeardown)
+
+				r.Post("/check-outcomes", s.handleCheckOutcomes)
 
 				// Memory journal
 				r.Get("/memory", s.handleAdminMemory)

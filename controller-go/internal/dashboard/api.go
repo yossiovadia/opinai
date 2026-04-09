@@ -590,6 +590,9 @@ func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Extract investigation findings from the PR review text
+	extractAndStoreFindingsFromPRReview(req.Repo, req.PRNumber, req.Verdict, req.Report)
+
 	// Mark as recorded so the log-scraping harvester skips this job
 	if s.markPRRecorded != nil {
 		s.markPRRecorded(req.Repo, req.PRNumber)
@@ -735,6 +738,140 @@ func truncStr(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// BackfillFindings reads all existing runs with repro_details and extracts
+// investigation findings for any that don't already have findings stored.
+// Idempotent — safe to call multiple times.
+func BackfillFindings() {
+	runs, err := database.GetAllRunsWithReproDetails()
+	if err != nil {
+		slog.Error("backfill findings: failed to get runs", "error", err)
+		return
+	}
+
+	backfilled := 0
+	for _, run := range runs {
+		if run.ReproDetails == "" || run.Verdict == "" {
+			continue
+		}
+		// Skip if findings already exist for this repo+issue
+		has, _ := database.HasFindingsForIssue(run.Repo, run.Issue)
+		if has {
+			continue
+		}
+		extractAndStoreFindings(run.Repo, run.Issue, run.Verdict, run.Confidence, run.ReproDetails)
+		backfilled++
+	}
+	if backfilled > 0 {
+		slog.Info("backfilled investigation findings", "runs_processed", backfilled)
+	}
+}
+
+// extractAndStoreFindingsFromPRReview parses a PR review's text to find
+// file-specific findings and stores them as investigation findings.
+// Uses the PR number as the reference and "PR_REVIEW" as the verdict prefix.
+func extractAndStoreFindingsFromPRReview(repo string, prNumber int, verdict, reviewText string) {
+	if reviewText == "" {
+		return
+	}
+
+	// Extract file paths mentioned in the review text.
+	// PR reviews commonly reference files in backtick-quoted paths or markdown code blocks.
+	files := extractFilePathsFromText(reviewText)
+	if len(files) == 0 {
+		return
+	}
+
+	// Build per-file findings from context around file mentions
+	filesAny := make([]any, len(files))
+	for i, f := range files {
+		filesAny[i] = f
+	}
+	fileFindings := extractPerFileFindings(reviewText, filesAny)
+
+	stored := 0
+	for _, filePath := range files {
+		finding := ""
+		if pf, ok := fileFindings[filePath]; ok {
+			finding = pf
+		} else {
+			finding = truncStr(reviewText, 500)
+		}
+
+		database.AddInvestigationFinding(database.InvestigationFinding{
+			Repo:        repo,
+			IssueNumber: prNumber,
+			FilePath:    filePath,
+			Finding:     finding,
+			Verdict:     "PR_REVIEW:" + verdict,
+			Confidence:  "MEDIUM",
+		})
+		stored++
+	}
+	if stored > 0 {
+		slog.Info("stored PR review findings", "repo", repo, "pr", prNumber, "files", stored)
+	}
+}
+
+// extractFilePathsFromText finds file paths in review text.
+// Looks for backtick-quoted paths (e.g. `src/main.go`) and bare paths with extensions.
+func extractFilePathsFromText(text string) []string {
+	seen := make(map[string]bool)
+	var paths []string
+
+	// Find backtick-quoted paths that look like file references
+	for _, part := range strings.Split(text, "`") {
+		trimmed := strings.TrimSpace(part)
+		// Strip line number suffix like :42 before checking
+		candidate := trimmed
+		if idx := strings.LastIndex(candidate, ":"); idx > 0 {
+			stripped := candidate[:idx]
+			if looksLikeFilePath(stripped) {
+				candidate = stripped
+			}
+		}
+		if looksLikeFilePath(candidate) {
+			if !seen[candidate] {
+				seen[candidate] = true
+				paths = append(paths, candidate)
+			}
+		}
+	}
+	return paths
+}
+
+// looksLikeFilePath checks if a string resembles a file path.
+func looksLikeFilePath(s string) bool {
+	if s == "" || len(s) > 200 || strings.ContainsAny(s, " \t\n{}()[]<>") {
+		return false
+	}
+	// Must have a file extension
+	dot := strings.LastIndex(s, ".")
+	if dot < 1 || dot >= len(s)-1 {
+		return false
+	}
+	ext := s[dot+1:]
+	// Common code file extensions
+	for _, e := range []string{"go", "py", "js", "ts", "tsx", "jsx", "rs", "java", "rb", "c", "cpp", "h", "hpp", "yaml", "yml", "json", "toml", "md", "sql", "sh", "css", "html", "vue", "svelte", "proto", "graphql", "tf"} {
+		if ext == e {
+			return true
+		}
+	}
+	return false
+}
+
+// handleCheckOutcomes handles POST /api/admin/check-outcomes — triggers outcome checking immediately.
+func (s *Server) handleCheckOutcomes(w http.ResponseWriter, r *http.Request) {
+	if s.checkOutcomes == nil {
+		jsonError(w, "outcome checking not available", 503)
+		return
+	}
+	go s.checkOutcomes()
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "ok",
+		"message": "outcome check triggered",
+	})
 }
 
 // ghGet makes an authenticated GET to the GitHub API.

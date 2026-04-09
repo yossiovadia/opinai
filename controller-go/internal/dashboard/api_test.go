@@ -214,6 +214,198 @@ func TestExtractAndStoreFindingsNoSummary(t *testing.T) {
 	}
 }
 
+func TestBackfillFindings(t *testing.T) {
+	setupTestServer(t)
+
+	// Add runs with repro_details
+	database.AddRun(database.Run{
+		Repo: "test/repo", Issue: 1, Verdict: "BUG_CONFIRMED", Confidence: "HIGH",
+		ReproDetails: `{"files_investigated":["main.go","server.go"],"summary":"main.go has a nil pointer. server.go handles connections"}`,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	})
+	database.AddRun(database.Run{
+		Repo: "test/repo", Issue: 2, Verdict: "NOT_REPRODUCIBLE", Confidence: "MEDIUM",
+		ReproDetails: `{"files_investigated":["handler.go"],"summary":"handler.go looks fine"}`,
+		CreatedAt:    "2026-01-02T00:00:00Z",
+	})
+	// Run without repro_details — should be skipped
+	database.AddRun(database.Run{
+		Repo: "test/repo", Issue: 3, Verdict: "BUG_CONFIRMED", Confidence: "HIGH",
+		CreatedAt: "2026-01-03T00:00:00Z",
+	})
+	// Run without verdict — should be skipped
+	database.AddRun(database.Run{
+		Repo: "test/repo", Issue: 4,
+		ReproDetails: `{"files_investigated":["other.go"]}`,
+		CreatedAt:    "2026-01-04T00:00:00Z",
+	})
+
+	// Run backfill
+	BackfillFindings()
+
+	// Check findings were created for issues 1 and 2
+	findings, _ := database.GetFindingsForRepo("test/repo", 50)
+	if len(findings) != 3 { // 2 files from issue 1, 1 from issue 2
+		t.Fatalf("expected 3 findings, got %d", len(findings))
+	}
+
+	// Run backfill again — should be idempotent (no duplicates)
+	BackfillFindings()
+	findings2, _ := database.GetFindingsForRepo("test/repo", 50)
+	if len(findings2) != 3 {
+		t.Errorf("expected 3 findings after second backfill (idempotent), got %d", len(findings2))
+	}
+}
+
+func TestBackfillFindingsEmpty(t *testing.T) {
+	setupTestServer(t)
+
+	// No runs — should not error
+	BackfillFindings()
+
+	findings, _ := database.GetFindingsForRepo("test/repo", 10)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings on empty DB, got %d", len(findings))
+	}
+}
+
+func TestExtractFilePathsFromText(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		expected []string
+	}{
+		{
+			name:     "backtick paths",
+			text:     "The issue is in `src/main.go` and also affects `handler.go`",
+			expected: []string{"src/main.go", "handler.go"},
+		},
+		{
+			name:     "paths with line numbers",
+			text:     "See `middleware.go:42` for the problem",
+			expected: []string{"middleware.go"},
+		},
+		{
+			name:     "no file paths",
+			text:     "This is a general comment with no file references",
+			expected: nil,
+		},
+		{
+			name:     "deduplication",
+			text:     "Both `main.go` and `main.go` are referenced",
+			expected: []string{"main.go"},
+		},
+		{
+			name:     "various extensions",
+			text:     "Check `app.py`, `config.yaml`, and `test.js`",
+			expected: []string{"app.py", "config.yaml", "test.js"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := extractFilePathsFromText(tc.text)
+			if len(result) != len(tc.expected) {
+				t.Fatalf("expected %d paths, got %d: %v", len(tc.expected), len(result), result)
+			}
+			for i, exp := range tc.expected {
+				if result[i] != exp {
+					t.Errorf("path[%d] = %q, want %q", i, result[i], exp)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractAndStoreFindingsFromPRReview(t *testing.T) {
+	setupTestServer(t)
+
+	reviewText := "The `middleware.go` has a buffering issue where Flush() is never called. " +
+		"Also `handler.go` should validate input before processing."
+
+	extractAndStoreFindingsFromPRReview("test/repo", 100, "CHANGES_REQUESTED", reviewText)
+
+	findings, _ := database.GetFindingsForRepo("test/repo", 10)
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings from PR review, got %d", len(findings))
+	}
+
+	// Check that verdict has PR_REVIEW prefix
+	for _, f := range findings {
+		if f.Verdict != "PR_REVIEW:CHANGES_REQUESTED" {
+			t.Errorf("verdict = %q, want PR_REVIEW:CHANGES_REQUESTED", f.Verdict)
+		}
+		if f.IssueNumber != 100 {
+			t.Errorf("issue_number = %d, want 100 (PR number)", f.IssueNumber)
+		}
+	}
+}
+
+func TestExtractAndStoreFindingsFromPRReviewEmpty(t *testing.T) {
+	setupTestServer(t)
+
+	// No file references — should store nothing
+	extractAndStoreFindingsFromPRReview("test/repo", 50, "APPROVE", "LGTM, looks good!")
+	findings, _ := database.GetFindingsForRepo("test/repo", 10)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for review without file references, got %d", len(findings))
+	}
+
+	// Empty text — should store nothing
+	extractAndStoreFindingsFromPRReview("test/repo", 51, "COMMENT", "")
+	findings, _ = database.GetFindingsForRepo("test/repo", 10)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for empty review, got %d", len(findings))
+	}
+}
+
+func TestLooksLikeFilePath(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"main.go", true},
+		{"src/handler.py", true},
+		{"config.yaml", true},
+		{"noextension", false},
+		{"", false},
+		{"has spaces.go", false},
+		{".go", false},
+		{"very/deep/nested/path/to/file.ts", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			if result := looksLikeFilePath(tc.input); result != tc.expected {
+				t.Errorf("looksLikeFilePath(%q) = %v, want %v", tc.input, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestCheckOutcomesEndpoint(t *testing.T) {
+	srv := setupTestServer(t)
+
+	// Without callback — should return 503
+	req := httptest.NewRequest("POST", "/api/admin/check-outcomes", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != 503 {
+		t.Errorf("without callback: status = %d, want 503", w.Code)
+	}
+
+	// With callback — should return 200
+	srv.SetCheckOutcomesCallback(func() {})
+	req2 := httptest.NewRequest("POST", "/api/admin/check-outcomes", nil)
+	w2 := httptest.NewRecorder()
+	srv.router.ServeHTTP(w2, req2)
+	if w2.Code != 200 {
+		t.Errorf("with callback: status = %d, want 200", w2.Code)
+	}
+	// Note: callback runs in goroutine, so 'called' may not be true yet
+	// but we verify the endpoint responds correctly
+}
+
 func TestJsonErrorFormat(t *testing.T) {
 	w := httptest.NewRecorder()
 	jsonError(w, "test error", 422)
