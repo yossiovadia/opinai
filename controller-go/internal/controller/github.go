@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -380,10 +381,9 @@ func FetchPRChangedFiles(repo string, prNumber int) ([]PRChangedFile, error) {
 	return files, nil
 }
 
-// FetchPRComments returns review comments on a pull request.
+// FetchPRComments returns issue-level comments on a pull request.
 func FetchPRComments(repo string, prNumber int) ([]IssueComment, error) {
-	// Get both issue comments and review comments
-	body, code, err := ghGet(fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=10", repo, prNumber))
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=30", repo, prNumber))
 	if err != nil {
 		return nil, err
 	}
@@ -409,4 +409,163 @@ func FetchPRComments(repo string, prNumber int) ([]IssueComment, error) {
 		})
 	}
 	return comments, nil
+}
+
+// PRReview represents a GitHub pull request review.
+type PRReview struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+	State  string `json:"state"` // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
+}
+
+// FetchPRReviews returns review objects for a pull request.
+func FetchPRReviews(repo string, prNumber int) ([]PRReview, error) {
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=30", repo, prNumber))
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	var raw []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body  string `json:"body"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	var reviews []PRReview
+	for _, r := range raw {
+		if r.Body == "" {
+			continue // Skip reviews with no body (e.g. bare approvals)
+		}
+		reviews = append(reviews, PRReview{
+			Author: r.User.Login,
+			Body:   r.Body,
+			State:  r.State,
+		})
+	}
+	return reviews, nil
+}
+
+// FetchPRInlineComments returns inline diff review comments on a pull request.
+func FetchPRInlineComments(repo string, prNumber int) ([]IssueComment, error) {
+	body, code, err := ghGet(fmt.Sprintf("/repos/%s/pulls/%d/comments?per_page=30", repo, prNumber))
+	if err != nil {
+		return nil, err
+	}
+	if code != 200 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	var raw []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Body      string `json:"body"`
+		Path      string `json:"path"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	var comments []IssueComment
+	for _, c := range raw {
+		commentBody := c.Body
+		if c.Path != "" {
+			commentBody = fmt.Sprintf("[%s] %s", c.Path, commentBody)
+		}
+		comments = append(comments, IssueComment{
+			Author:    c.User.Login,
+			Body:      commentBody,
+			CreatedAt: c.CreatedAt,
+		})
+	}
+	return comments, nil
+}
+
+// PRCommentContext represents a comment or review for passing to the runner.
+type PRCommentContext struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
+	Type   string `json:"type"` // "comment", "review", "inline"
+}
+
+// CollectPRComments fetches all comments, reviews, and inline comments for a PR
+// and returns them as a combined slice, truncating individual bodies to maxBodyLen.
+func CollectPRComments(repo string, prNumber int, maxBodyLen int) []PRCommentContext {
+	var result []PRCommentContext
+
+	// Issue-level comments
+	if comments, err := FetchPRComments(repo, prNumber); err == nil {
+		for _, c := range comments {
+			body := c.Body
+			if len(body) > maxBodyLen {
+				body = body[:maxBodyLen] + "..."
+			}
+			result = append(result, PRCommentContext{Author: c.Author, Body: body, Type: "comment"})
+		}
+	}
+
+	// Review objects (body + state)
+	if reviews, err := FetchPRReviews(repo, prNumber); err == nil {
+		for _, r := range reviews {
+			body := r.Body
+			if r.State != "" {
+				body = fmt.Sprintf("[%s] %s", r.State, body)
+			}
+			if len(body) > maxBodyLen {
+				body = body[:maxBodyLen] + "..."
+			}
+			result = append(result, PRCommentContext{Author: r.Author, Body: body, Type: "review"})
+		}
+	}
+
+	// Inline diff comments
+	if inlines, err := FetchPRInlineComments(repo, prNumber); err == nil {
+		for _, c := range inlines {
+			body := c.Body
+			if len(body) > maxBodyLen {
+				body = body[:maxBodyLen] + "..."
+			}
+			result = append(result, PRCommentContext{Author: c.Author, Body: body, Type: "inline"})
+		}
+	}
+
+	return result
+}
+
+// FormatPRCommentsForAgent formats collected PR comments into a human-readable
+// string suitable for inclusion in the agent prompt.
+func FormatPRCommentsForAgent(comments []PRCommentContext) string {
+	if len(comments) == 0 {
+		return ""
+	}
+
+	// Group by author
+	type entry struct {
+		bodies []string
+	}
+	authorOrder := []string{}
+	grouped := map[string]*entry{}
+	for _, c := range comments {
+		if _, ok := grouped[c.Author]; !ok {
+			authorOrder = append(authorOrder, c.Author)
+			grouped[c.Author] = &entry{}
+		}
+		grouped[c.Author].bodies = append(grouped[c.Author].bodies, c.Body)
+	}
+
+	var sb strings.Builder
+	for _, author := range authorOrder {
+		e := grouped[author]
+		sb.WriteString(fmt.Sprintf("### @%s:\n", author))
+		for _, body := range e.bodies {
+			sb.WriteString(body)
+			sb.WriteString("\n\n")
+		}
+	}
+	return sb.String()
 }

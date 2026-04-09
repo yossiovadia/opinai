@@ -557,6 +557,17 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 	// Build repo context
 	repoContext := buildRepoContext(repo)
 
+	// Fetch existing PR comments and reviews for context-aware review
+	prCommentsJSON := ""
+	if collected := CollectPRComments(repo, prNumber, 500); len(collected) > 0 {
+		if b, err := json.Marshal(collected); err == nil {
+			prCommentsJSON = string(b)
+			if len(prCommentsJSON) > 30000 {
+				prCommentsJSON = prCommentsJSON[:30000]
+			}
+		}
+	}
+
 	// Select runner image
 	imgSel := jm.selectRunnerImage(repo)
 	runnerImage := jm.image
@@ -579,6 +590,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 		{Name: "OPINAI_PR_AUTHOR", Value: prAuthor},
 		{Name: "OPINAI_PR_HEAD_REF", Value: prHeadRef},
 		{Name: "OPINAI_PR_CHANGED_FILES", Value: changedFilesJSON},
+		{Name: "OPINAI_PR_COMMENTS", Value: prCommentsJSON},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
 		{Name: "OPINAI_LINKED_RESOURCES", Value: linkedJSON},
 		{Name: "OPINAI_CONTROLLER_URL", Value: controllerURL(jm.namespace)},

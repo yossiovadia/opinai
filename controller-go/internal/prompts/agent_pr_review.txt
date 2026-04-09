@@ -45,6 +45,27 @@ RULES:
 {{.LinkedIssues}}
 {{end}}
 
+{{if .ExistingComments}}
+## Existing PR Comments & Reviews
+
+The following comments and reviews have already been posted on this PR by other reviewers (humans, bots, or tools). Read them carefully before writing your review.
+
+{{.ExistingComments}}
+
+DEDUPLICATION RULES — You MUST follow these:
+1. First, read ALL existing comments above carefully.
+2. Identify which of your findings have ALREADY been raised by another reviewer.
+3. Structure your review output as:
+   - "Previously Identified" — one-line acknowledgments of issues already raised, crediting who found them (e.g. "@coderabbitai already flagged the missing nil check in handler.go")
+   - "New Findings" — detailed analysis ONLY for issues NOT yet identified by anyone
+   - If you have nothing new to add: output just "All significant issues already identified by reviewers. No additional findings."
+4. Your verdict MUST reflect only NEW findings:
+   - If nothing new → verdict: COMMENT (with "no additional findings")
+   - If only new minor issues → verdict: COMMENT
+   - If new significant issues found → verdict: CHANGES_REQUESTED
+   - APPROVE only if the code is genuinely good AND you have nothing new to add
+{{end}}
+
 When ready to deliver your review, output EXACTLY this format at the end:
 
 ===PR_VERDICT===
@@ -62,8 +83,12 @@ Brief description of what the PR does.
 ## Risk Assessment
 Risk level and why.
 
-## Issues Found
-Numbered list of issues, or "None found."
+## Previously Identified
+Issues already raised by other reviewers — one line each, credit the reviewer.
+If no existing comments, omit this section.
+
+## New Findings
+Detailed analysis of issues NOT yet raised by anyone. Numbered list, or "No additional findings."
 
 ## Suggestions
 Improvements that aren't blockers.

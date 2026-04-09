@@ -122,7 +122,8 @@ type PRReviewResult struct {
 }
 
 // ReviewPR runs the agent loop to review a pull request.
-func ReviewPR(prTitle, prBody, prDiff, prAuthor, changedFiles, serverURL, repoDir, repoContext, linkedIssues string, maxIter int) PRReviewResult {
+// existingComments is a pre-formatted string of existing PR comments/reviews for deduplication.
+func ReviewPR(prTitle, prBody, prDiff, prAuthor, changedFiles, serverURL, repoDir, repoContext, linkedIssues, existingComments string, maxIter int) PRReviewResult {
 	cfg := ai.LoadConfig()
 	if !cfg.Available() {
 		slog.Warn("agent: no AI provider configured, skipping PR review")
@@ -135,15 +136,16 @@ func ReviewPR(prTitle, prBody, prDiff, prAuthor, changedFiles, serverURL, repoDi
 
 	// Build system prompt
 	systemPrompt := prompts.Render("agent_pr_review.txt", map[string]string{
-		"ServerURL":    serverURL,
-		"RepoDir":      repoDir,
-		"RepoContext":  repoContext,
-		"PRTitle":      prTitle,
-		"PRAuthor":     prAuthor,
-		"PRBody":       prBody,
-		"PRDiff":       prDiff,
-		"ChangedFiles": changedFiles,
-		"LinkedIssues": linkedIssues,
+		"ServerURL":        serverURL,
+		"RepoDir":          repoDir,
+		"RepoContext":      repoContext,
+		"PRTitle":          prTitle,
+		"PRAuthor":         prAuthor,
+		"PRBody":           prBody,
+		"PRDiff":           prDiff,
+		"ChangedFiles":     changedFiles,
+		"LinkedIssues":     linkedIssues,
+		"ExistingComments": existingComments,
 	})
 
 	// Build user message

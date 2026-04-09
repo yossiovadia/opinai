@@ -662,13 +662,22 @@ func RunPRReview() {
 		truncatedDiff = truncatedDiff[:30000] + "\n... (diff truncated, use read_file to see full files)"
 	}
 
-	slog.Info("starting PR review agent", "changed_files", len(changedFilesSummary), "diff_bytes", len(truncatedDiff))
+	// Format existing PR comments for deduplication
+	existingCommentsCtx := ""
+	if prCommentsJSON := os.Getenv("OPINAI_PR_COMMENTS"); prCommentsJSON != "" {
+		var comments []controller.PRCommentContext
+		if json.Unmarshal([]byte(prCommentsJSON), &comments) == nil && len(comments) > 0 {
+			existingCommentsCtx = controller.FormatPRCommentsForAgent(comments)
+		}
+	}
+
+	slog.Info("starting PR review agent", "changed_files", len(changedFilesSummary), "diff_bytes", len(truncatedDiff), "existing_comments", len(existingCommentsCtx) > 0)
 
 	// Run agent investigation
 	result := agent.ReviewPR(
 		prTitle, prBody, truncatedDiff, prAuthor,
 		changedFilesSummary, "", cloneDir, richCtx,
-		linkedIssuesCtx, 0,
+		linkedIssuesCtx, existingCommentsCtx, 0,
 	)
 
 	// Build review output
