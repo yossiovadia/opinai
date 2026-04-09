@@ -592,7 +592,7 @@ func RunPRReview() {
 	cloneDir := "/tmp/opinai-repo"
 	if !cloneRepo(repo) {
 		slog.Error("failed to clone repo for PR review")
-		emitPRResult(repo, prNumber, prTitle, prAuthor, "COMMENT", "LOW", "Failed to clone repository", "")
+		emitPRResult(repo, prNumber, prTitle, prAuthor, "COMMENT", "LOW", "Failed to clone repository", "", "")
 		return
 	}
 
@@ -697,6 +697,12 @@ func RunPRReview() {
 	fmt.Println(reviewText)
 	fmt.Println("--- END PR REVIEW ---")
 
+	if result.SuggestedQuestions != "" {
+		fmt.Println("--- OPINAI SUGGESTED_QUESTIONS ---")
+		fmt.Println(result.SuggestedQuestions)
+		fmt.Println("--- END SUGGESTED_QUESTIONS ---")
+	}
+
 	slog.Info("PR review complete", "verdict", result.Verdict, "risk", result.Risk,
 		"iterations", result.Iterations, "tool_calls", result.ToolCalls)
 
@@ -715,24 +721,25 @@ func RunPRReview() {
 	)
 
 	// Post result to controller
-	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, report, "")
+	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, report, "", result.SuggestedQuestions)
 }
 
-func emitPRResult(repo string, prNumber int, title, author, verdict, risk, report, duration string) {
+func emitPRResult(repo string, prNumber int, title, author, verdict, risk, report, duration, suggestedQuestions string) {
 	controllerURL := os.Getenv("OPINAI_CONTROLLER_URL")
 	if controllerURL == "" {
 		return
 	}
 	payload := map[string]any{
-		"type":      "pr-review",
-		"repo":      repo,
-		"pr_number": prNumber,
-		"title":     title,
-		"author":    author,
-		"verdict":   verdict,
-		"risk":      risk,
-		"report":    report,
-		"duration":  duration,
+		"type":                "pr-review",
+		"repo":                repo,
+		"pr_number":           prNumber,
+		"title":               title,
+		"author":              author,
+		"verdict":             verdict,
+		"risk":                risk,
+		"report":              report,
+		"duration":            duration,
+		"suggested_questions": suggestedQuestions,
 	}
 	b, _ := json.Marshal(payload)
 	resp, err := http.Post(controllerURL+"/api/internal/pr-result", "application/json", strings.NewReader(string(b)))

@@ -99,3 +99,11 @@ Assessment of test coverage for the changes.
 ## Verdict
 Your final assessment.
 --- END PR REVIEW ---
+
+After your review, generate 3-5 follow-up questions specific to THIS PR's changes. Questions should help the developer think deeper about the code — not generic. Reference specific files, functions, or behaviors from the diff.
+
+Output them as a JSON array between these markers:
+
+--- OPINAI SUGGESTED_QUESTIONS ---
+["What happens if X?", "Does this affect Y?", ...]
+--- END SUGGESTED_QUESTIONS ---

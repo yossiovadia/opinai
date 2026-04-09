@@ -139,6 +139,7 @@ func migrate() error {
 	)`)
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo ON pr_reviews(repo)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo_pr ON pr_reviews(repo, pr_number)")
+	db.Exec("ALTER TABLE pr_reviews ADD COLUMN suggested_questions TEXT DEFAULT ''")
 	db.Exec(`CREATE TABLE IF NOT EXISTS pending_pr_reviews (
 		repo TEXT NOT NULL,
 		pr_number INTEGER NOT NULL,
@@ -783,18 +784,19 @@ func GetHostProfile() string {
 
 // PRReview represents a PR review result.
 type PRReview struct {
-	ID         int64   `json:"id"`
-	Repo       string  `json:"repo"`
-	PRNumber   int     `json:"pr_number"`
-	Title      string  `json:"title"`
-	Author     string  `json:"author"`
-	Verdict    string  `json:"verdict"`
-	Risk       string  `json:"risk"`
-	ReviewText string  `json:"review_text"`
-	Posted     bool    `json:"posted"`
-	PostedAt   *string `json:"posted_at"`
-	Duration   string  `json:"duration"`
-	CreatedAt  string  `json:"timestamp"`
+	ID                 int64   `json:"id"`
+	Repo               string  `json:"repo"`
+	PRNumber           int     `json:"pr_number"`
+	Title              string  `json:"title"`
+	Author             string  `json:"author"`
+	Verdict            string  `json:"verdict"`
+	Risk               string  `json:"risk"`
+	ReviewText         string  `json:"review_text"`
+	Posted             bool    `json:"posted"`
+	PostedAt           *string `json:"posted_at"`
+	Duration           string  `json:"duration"`
+	SuggestedQuestions string  `json:"suggested_questions,omitempty"`
+	CreatedAt          string  `json:"timestamp"`
 }
 
 func AddPRReview(r PRReview) (int64, error) {
@@ -802,10 +804,10 @@ func AddPRReview(r PRReview) (int64, error) {
 	defer mu.Unlock()
 	res, err := db.Exec(
 		`INSERT OR REPLACE INTO pr_reviews
-		 (repo, pr_number, title, author, verdict, risk, review_text, posted, duration, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (repo, pr_number, title, author, verdict, risk, review_text, posted, duration, suggested_questions, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Repo, r.PRNumber, r.Title, r.Author, r.Verdict, r.Risk,
-		r.ReviewText, r.Posted, r.Duration, r.CreatedAt,
+		r.ReviewText, r.Posted, r.Duration, r.SuggestedQuestions, r.CreatedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -817,9 +819,9 @@ func GetPRReviews(repo string, limit int) ([]PRReview, error) {
 	var rows *sql.Rows
 	var err error
 	if repo != "" {
-		rows, err = db.Query("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews WHERE repo = ? ORDER BY created_at DESC LIMIT ?", repo, limit)
+		rows, err = db.Query("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,suggested_questions,created_at FROM pr_reviews WHERE repo = ? ORDER BY created_at DESC LIMIT ?", repo, limit)
 	} else {
-		rows, err = db.Query("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews ORDER BY created_at DESC LIMIT ?", limit)
+		rows, err = db.Query("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,suggested_questions,created_at FROM pr_reviews ORDER BY created_at DESC LIMIT ?", limit)
 	}
 	if err != nil {
 		return nil, err
@@ -829,10 +831,10 @@ func GetPRReviews(repo string, limit int) ([]PRReview, error) {
 }
 
 func GetPRReview(id int64) (*PRReview, error) {
-	row := db.QueryRow("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews WHERE id = ?", id)
+	row := db.QueryRow("SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,suggested_questions,created_at FROM pr_reviews WHERE id = ?", id)
 	var r PRReview
 	err := row.Scan(&r.ID, &r.Repo, &r.PRNumber, &r.Title, &r.Author, &r.Verdict,
-		&r.Risk, &r.ReviewText, &r.Posted, &r.PostedAt, &r.Duration, &r.CreatedAt)
+		&r.Risk, &r.ReviewText, &r.Posted, &r.PostedAt, &r.Duration, &r.SuggestedQuestions, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -844,7 +846,7 @@ func GetPRReview(id int64) (*PRReview, error) {
 
 func GetPRReviewsByPR(repo string, prNumber int) ([]PRReview, error) {
 	rows, err := db.Query(
-		"SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,created_at FROM pr_reviews WHERE repo = ? AND pr_number = ? ORDER BY created_at DESC",
+		"SELECT id,repo,pr_number,title,author,verdict,risk,review_text,posted,posted_at,duration,suggested_questions,created_at FROM pr_reviews WHERE repo = ? AND pr_number = ? ORDER BY created_at DESC",
 		repo, prNumber,
 	)
 	if err != nil {
@@ -886,7 +888,7 @@ func scanPRReviews(rows *sql.Rows) ([]PRReview, error) {
 	for rows.Next() {
 		var r PRReview
 		err := rows.Scan(&r.ID, &r.Repo, &r.PRNumber, &r.Title, &r.Author, &r.Verdict,
-			&r.Risk, &r.ReviewText, &r.Posted, &r.PostedAt, &r.Duration, &r.CreatedAt)
+			&r.Risk, &r.ReviewText, &r.Posted, &r.PostedAt, &r.Duration, &r.SuggestedQuestions, &r.CreatedAt)
 		if err != nil {
 			return nil, err
 		}

@@ -958,6 +958,8 @@ func (jm *JobManager) harvestPRReviewJob(job *batchv1.Job, repo, title, duration
 		}
 	}
 
+	suggestedQuestions := extractBlock(podLogs, "--- OPINAI SUGGESTED_QUESTIONS ---", "--- END SUGGESTED_QUESTIONS ---")
+
 	// Check if a review already exists (callback API is the primary path; harvester is fallback)
 	if existing, _ := database.GetPRReviewsByPR(repo, prNumber); len(existing) > 0 {
 		slog.Info("PR review already recorded via callback, skipping harvest", "job", name, "repo", repo, "pr", prNumber)
@@ -973,7 +975,8 @@ func (jm *JobManager) harvestPRReviewJob(job *batchv1.Job, repo, title, duration
 	_, dbErr := database.AddPRReview(database.PRReview{
 		Repo: repo, PRNumber: prNumber, Title: title,
 		Author: author, Verdict: verdict, Risk: risk,
-		ReviewText: reviewText, Posted: false, Duration: duration, CreatedAt: ts,
+		ReviewText: reviewText, Posted: false, Duration: duration,
+		SuggestedQuestions: suggestedQuestions, CreatedAt: ts,
 	})
 	if dbErr != nil {
 		slog.Error("failed to store PR review in DB", "job", name, "error", dbErr)

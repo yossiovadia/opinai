@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -112,13 +113,14 @@ func Investigate(title, body, serverURL, repoDir, repoContext string, maxIter in
 
 // PRReviewResult holds the outcome of a PR review investigation.
 type PRReviewResult struct {
-	Verdict    string   // APPROVE, CHANGES_REQUESTED, COMMENT
-	Risk       string   // LOW, MEDIUM, HIGH, CRITICAL
-	ReviewText string   // Full review markdown
-	Report     string   // AI's final analysis
-	Iterations int
-	ToolCalls  int
-	FilesRead  []string
+	Verdict            string   // APPROVE, CHANGES_REQUESTED, COMMENT
+	Risk               string   // LOW, MEDIUM, HIGH, CRITICAL
+	ReviewText         string   // Full review markdown
+	Report             string   // AI's final analysis
+	SuggestedQuestions string   // JSON array of follow-up questions
+	Iterations         int
+	ToolCalls          int
+	FilesRead          []string
 }
 
 // ReviewPR runs the agent loop to review a pull request.
@@ -197,6 +199,7 @@ func ReviewPR(prTitle, prBody, prDiff, prAuthor, changedFiles, serverURL, repoDi
 
 	result.Verdict, result.Risk = parsePRVerdict(finalText)
 	result.ReviewText = extractPRReview(finalText)
+	result.SuggestedQuestions = extractSuggestedQuestions(finalText)
 
 	slog.Info("agent: PR review complete",
 		"verdict", result.Verdict,
@@ -273,6 +276,28 @@ func extractPRReview(text string) string {
 		return strings.TrimSpace(text[start:])
 	}
 	return strings.TrimSpace(text[start : start+end])
+}
+
+// extractSuggestedQuestions extracts the JSON array of suggested questions from agent output.
+func extractSuggestedQuestions(text string) string {
+	start := strings.Index(text, "--- OPINAI SUGGESTED_QUESTIONS ---")
+	if start < 0 {
+		return ""
+	}
+	start += len("--- OPINAI SUGGESTED_QUESTIONS ---")
+	end := strings.Index(text[start:], "--- END SUGGESTED_QUESTIONS ---")
+	block := ""
+	if end < 0 {
+		block = strings.TrimSpace(text[start:])
+	} else {
+		block = strings.TrimSpace(text[start : start+end])
+	}
+	// Validate it's a JSON array
+	var arr []string
+	if json.Unmarshal([]byte(block), &arr) != nil {
+		return ""
+	}
+	return block
 }
 
 // parseVerdict extracts the verdict and confidence from the AI's final response.

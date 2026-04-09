@@ -575,14 +575,15 @@ func (s *Server) handleDeletePRReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Repo     string `json:"repo"`
-		PRNumber int    `json:"pr_number"`
-		Title    string `json:"title"`
-		Author   string `json:"author"`
-		Verdict  string `json:"verdict"`
-		Risk     string `json:"risk"`
-		Report   string `json:"report"`
-		Duration string `json:"duration"`
+		Repo               string `json:"repo"`
+		PRNumber           int    `json:"pr_number"`
+		Title              string `json:"title"`
+		Author             string `json:"author"`
+		Verdict            string `json:"verdict"`
+		Risk               string `json:"risk"`
+		Report             string `json:"report"`
+		Duration           string `json:"duration"`
+		SuggestedQuestions string `json:"suggested_questions"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		jsonError(w, "invalid request: "+err.Error(), 400)
@@ -597,7 +598,8 @@ func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) 
 	_, dbErr := database.AddPRReview(database.PRReview{
 		Repo: req.Repo, PRNumber: req.PRNumber, Title: req.Title,
 		Author: req.Author, Verdict: req.Verdict, Risk: req.Risk,
-		ReviewText: req.Report, Posted: false, Duration: req.Duration, CreatedAt: ts,
+		ReviewText: req.Report, Posted: false, Duration: req.Duration,
+		SuggestedQuestions: req.SuggestedQuestions, CreatedAt: ts,
 	})
 	if dbErr != nil {
 		slog.Error("internal PR result: failed to store review", "error", dbErr)

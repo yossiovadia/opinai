@@ -1202,6 +1202,19 @@ async function setPRChatContext(repo, prNumber, title) {
     }
   } catch(e) { /* ignore */ }
   _dynamicSuggestions = null;
+  // Load dynamic suggestions from PR review
+  for (var i = 0; i < allPRReviews.length; i++) {
+    var pr = allPRReviews[i];
+    if (pr.repo === repo && pr.pr_number == prNumber && pr.suggested_questions) {
+      try {
+        var qs = JSON.parse(pr.suggested_questions);
+        if (Array.isArray(qs) && qs.length > 0) {
+          _dynamicSuggestions = qs;
+        }
+      } catch(e) {}
+      break;
+    }
+  }
   renderChatMessages();
   renderSuggestions();
   if (!chatOpen) toggleChat();
