@@ -200,6 +200,9 @@ func migrate() error {
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_outcomes_repo ON outcomes(repo)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_outcomes_repo_type ON outcomes(repo, type)")
 
+	// Backfill legacy memory events that have reason="set" / source="unknown"
+	db.Exec(`UPDATE memory_events SET reason = 'initial analysis', source = 'repo_analysis' WHERE reason = 'set' AND source = 'unknown'`)
+
 	return nil
 }
 

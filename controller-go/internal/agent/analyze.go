@@ -286,6 +286,14 @@ func (a *RepoAnalysis) ToFlatMap() map[string]string {
 		"install_command": a.Deployment.InstallCommand,
 	}
 
+	// Filter out AI placeholder values like "none", "n/a"
+	for k, v := range m {
+		low := strings.ToLower(strings.TrimSpace(v))
+		if low == "none" || low == "n/a" || low == "null" {
+			m[k] = ""
+		}
+	}
+
 	// Store the full analysis as JSON for rich context
 	fullJSON, err := json.Marshal(a)
 	if err == nil {
