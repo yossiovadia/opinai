@@ -44,12 +44,13 @@ func (s *Server) handleRepos(w http.ResponseWriter, r *http.Request) {
 	result := make([]map[string]any, 0, len(repos))
 	for name, status := range repos {
 		result = append(result, map[string]any{
-			"name":        name,
-			"pending":     status.Pending,
-			"processed":   status.Processed,
-			"manual_only": status.ManualOnly,
-			"is_analyzing": false,
-			"last_check":  status.LastCheck,
+			"name":           name,
+			"pending":        status.Pending,
+			"processed":      status.Processed,
+			"manual_only":    status.ManualOnly,
+			"is_analyzing":   false,
+			"last_check":     status.LastCheck,
+			"memory_events":  database.CountMemoryEvents(name),
 		})
 	}
 	json.NewEncoder(w).Encode(result)
@@ -604,7 +605,7 @@ func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) 
 }
 
 // extractAndStoreFindings parses repro_details JSON to extract files_investigated
-// and stores findings in the investigation_findings table.
+// and stores findings with per-file context from the summary text.
 func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproDetailsJSON string) {
 	if reproDetailsJSON == "" {
 		return
@@ -624,22 +625,32 @@ func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproD
 		return
 	}
 
-	// Build a brief finding from the summary or method
-	finding := ""
-	if summary, ok := details["summary"].(string); ok && summary != "" {
-		finding = summary
-		if len(finding) > 500 {
-			finding = finding[:500]
-		}
-	} else {
-		finding = verdict
+	// Build the overall summary
+	summary := ""
+	if s, ok := details["summary"].(string); ok && s != "" {
+		summary = s
 	}
+
+	// Extract per-file findings from the summary text.
+	// The summary often contains references like "middleware.go:145" or "in handler.go"
+	// near relevant descriptions. Build a map of file -> contextual sentence.
+	fileFindings := extractPerFileFindings(summary, filesSlice)
 
 	for _, f := range filesSlice {
 		filePath, ok := f.(string)
 		if !ok || filePath == "" {
 			continue
 		}
+
+		finding := ""
+		if pf, ok := fileFindings[filePath]; ok {
+			finding = pf
+		} else if summary != "" {
+			finding = truncStr(summary, 500)
+		} else {
+			finding = verdict
+		}
+
 		database.AddInvestigationFinding(database.InvestigationFinding{
 			Repo:        repo,
 			IssueNumber: issue,
@@ -652,6 +663,78 @@ func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproD
 	if len(filesSlice) > 0 {
 		slog.Info("stored investigation findings", "repo", repo, "issue", issue, "files", len(filesSlice))
 	}
+}
+
+// extractPerFileFindings scans summary text for sentences that reference specific files
+// from the investigated files list, returning file -> relevant context.
+func extractPerFileFindings(summary string, files []any) map[string]string {
+	result := make(map[string]string)
+	if summary == "" {
+		return result
+	}
+
+	// Build a set of base filenames and full paths for matching
+	fileSet := make(map[string]string) // baseName -> fullPath
+	for _, f := range files {
+		fp, ok := f.(string)
+		if !ok || fp == "" {
+			continue
+		}
+		// Store both the full path and the basename
+		parts := strings.Split(fp, "/")
+		base := parts[len(parts)-1]
+		fileSet[base] = fp
+		fileSet[fp] = fp
+	}
+
+	// Split summary into sentences (roughly)
+	sentences := splitSentences(summary)
+	for _, sentence := range sentences {
+		trimmed := strings.TrimSpace(sentence)
+		if trimmed == "" {
+			continue
+		}
+		// Check if this sentence references any investigated file
+		for name, fullPath := range fileSet {
+			if strings.Contains(trimmed, name) {
+				existing := result[fullPath]
+				if existing == "" {
+					result[fullPath] = truncStr(trimmed, 500)
+				} else if len(existing) < 500 {
+					result[fullPath] = truncStr(existing+"; "+trimmed, 500)
+				}
+			}
+		}
+	}
+	return result
+}
+
+// splitSentences splits text into sentences on period/newline boundaries.
+func splitSentences(text string) []string {
+	// Split on newlines first, then on sentence-ending punctuation
+	var sentences []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Split on ". " but keep the sentence together otherwise
+		parts := strings.Split(line, ". ")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				sentences = append(sentences, p)
+			}
+		}
+	}
+	return sentences
+}
+
+func truncStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // ghGet makes an authenticated GET to the GitHub API.

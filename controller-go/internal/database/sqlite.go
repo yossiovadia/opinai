@@ -328,6 +328,11 @@ func SetRepoMemoryWithReason(repo, key, value, reason, source string) error {
 	var oldValue sql.NullString
 	db.QueryRow("SELECT value FROM repo_memory WHERE repo = ? AND key = ?", repo, key).Scan(&oldValue)
 
+	// Skip no-op: if old value equals new value, don't log a redundant event
+	if oldValue.Valid && oldValue.String == value {
+		return nil
+	}
+
 	// Log the event
 	var oldPtr *string
 	if oldValue.Valid {
@@ -371,6 +376,30 @@ func GetRepoMemory(repo string, key *string) (map[string]string, error) {
 			return nil, err
 		}
 		result[k] = v
+	}
+	return result, rows.Err()
+}
+
+// MemoryEntry holds a memory value with its last update time.
+type MemoryEntry struct {
+	Value     string `json:"value"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// GetRepoMemoryWithMeta returns memory entries with metadata (updated_at).
+func GetRepoMemoryWithMeta(repo string) (map[string]MemoryEntry, error) {
+	rows, err := db.Query("SELECT key, value, updated_at FROM repo_memory WHERE repo = ?", repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]MemoryEntry)
+	for rows.Next() {
+		var k, v, u string
+		if err := rows.Scan(&k, &v, &u); err != nil {
+			return nil, err
+		}
+		result[k] = MemoryEntry{Value: v, UpdatedAt: u}
 	}
 	return result, rows.Err()
 }

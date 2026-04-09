@@ -801,8 +801,11 @@ func (s *Server) handleAdminMemory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Current knowledge
-	memory, _ := database.GetRepoMemory(repo, nil)
+	// Current knowledge with metadata
+	memory, _ := database.GetRepoMemoryWithMeta(repo)
+	if memory == nil {
+		memory = map[string]database.MemoryEntry{}
+	}
 
 	// Recent events
 	events, _ := database.GetMemoryEvents(repo, 20, 0)

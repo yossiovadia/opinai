@@ -116,7 +116,7 @@ waitLoop:
 	flatMap := analysis.ToFlatMap()
 	for k, v := range flatMap {
 		if v != "" {
-			database.SetRepoMemory(repo, k, v)
+			database.SetRepoMemoryWithReason(repo, k, v, "deep analysis", "controller")
 		}
 	}
 
@@ -147,7 +147,7 @@ waitLoop:
 		// Extract and store runtime_requirements if present
 		if rr, ok := planData["runtime_requirements"]; ok {
 			rrBytes, _ := json.Marshal(rr)
-			database.SetRepoMemory(repo, "runtime_requirements", string(rrBytes))
+			database.SetRepoMemoryWithReason(repo, "runtime_requirements", string(rrBytes), "deep analysis", "controller")
 			slog.Info("stored runtime_requirements from analysis", "repo", repo)
 		}
 	}

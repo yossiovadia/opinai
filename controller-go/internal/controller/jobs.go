@@ -1104,7 +1104,7 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 			if success {
 				endpoints, _ := result["endpoints"].(map[string]string)
 				endpointsJSON, _ := json.Marshal(endpoints)
-				database.SetRepoMemory(repo, "working_deploy_option", opt.ID)
+				database.SetRepoMemoryWithReason(repo, "working_deploy_option", opt.ID, fmt.Sprintf("sandbox deploy succeeded: %s", opt.Name), "controller")
 				slog.Info("sandbox deployed successfully", "namespace", sandboxNS, "option", opt.Name)
 				return sandboxNS, string(endpointsJSON), planJSON, string(opt.TestEndpoint), string(opt.AllEndpoints)
 			}
@@ -1117,7 +1117,7 @@ func (jm *JobManager) trySandboxDeploy(repo string, issueNumber int, issueTitle 
 		} else if errs, ok := result["errors"].([]string); ok && len(errs) > 0 {
 			errMsg = strings.Join(errs, "; ")
 		}
-		database.SetRepoMemory(repo, fmt.Sprintf("deploy_option_%s_error", opt.ID), errMsg)
+		database.SetRepoMemoryWithReason(repo, fmt.Sprintf("deploy_option_%s_error", opt.ID), errMsg, fmt.Sprintf("sandbox deploy failed: %s", opt.Name), "controller")
 		slog.Warn("deployment option failed", "option", opt.Name, "error", errMsg)
 		jm.sandbox.TeardownSandbox(sandboxNS)
 		// Clean up /tmp deploy clones between attempts
@@ -1436,7 +1436,7 @@ func storeRepoMemory(repo, logs string) {
 		}
 		for k, v := range data {
 			if v != "" {
-				database.SetRepoMemory(repo, k, v)
+				database.SetRepoMemoryWithReason(repo, k, v, "extracted from runner logs", "runner")
 			}
 		}
 		slog.Info("stored repo memory", "repo", repo, "keys", len(data))

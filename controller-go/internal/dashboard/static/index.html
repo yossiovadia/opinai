@@ -299,6 +299,7 @@ async function loadRepos() {
         '<div class="card-stats">' +
           '<div><span class="stat-value">' + (r.processed || 0) + '</span> <span class="stat-label">processed</span></div>' +
           (r.manual_only ? '' : '<div><span class="stat-value">' + (r.pending || 0) + '</span> <span class="stat-label">pending</span></div>') +
+          '<div><a href="/memory?repo=' + encodeURIComponent(r.name) + '" style="text-decoration:none"><span class="stat-value">' + (r.memory_events || 0) + '</span> <span class="stat-label">memories</span></a></div>' +
         '</div>' +
         '<div class="card-footer">' +
           '<span>Last check: ' + timeAgo(r.last_check) + '</span>' +

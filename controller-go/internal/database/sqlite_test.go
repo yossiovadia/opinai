@@ -143,6 +143,44 @@ func TestRepoMemory(t *testing.T) {
 	}
 }
 
+func TestSetRepoMemorySkipsNoOp(t *testing.T) {
+	setupTestDB(t)
+
+	// Initial set — should create an event
+	SetRepoMemoryWithReason("r/r", "lang", "Go", "initial", "test")
+	events, _ := GetMemoryEventsForKey("r/r", "lang", 10)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event after initial set, got %d", len(events))
+	}
+
+	// Same value again — should NOT create an event
+	SetRepoMemoryWithReason("r/r", "lang", "Go", "duplicate", "test")
+	events, _ = GetMemoryEventsForKey("r/r", "lang", 10)
+	if len(events) != 1 {
+		t.Fatalf("expected still 1 event after no-op, got %d", len(events))
+	}
+
+	// Verify value is still correct
+	mem, _ := GetRepoMemory("r/r", nil)
+	if mem["lang"] != "Go" {
+		t.Errorf("value changed unexpectedly: %q", mem["lang"])
+	}
+
+	// Different value — should create a new event
+	SetRepoMemoryWithReason("r/r", "lang", "Rust", "changed", "test")
+	events, _ = GetMemoryEventsForKey("r/r", "lang", 10)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events after actual change, got %d", len(events))
+	}
+
+	// And re-setting to the new value should be a no-op again
+	SetRepoMemoryWithReason("r/r", "lang", "Rust", "duplicate2", "test")
+	events, _ = GetMemoryEventsForKey("r/r", "lang", 10)
+	if len(events) != 2 {
+		t.Fatalf("expected still 2 events after second no-op, got %d", len(events))
+	}
+}
+
 func TestDeploymentPlan(t *testing.T) {
 	setupTestDB(t)
 

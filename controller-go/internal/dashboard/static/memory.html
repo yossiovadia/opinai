@@ -87,6 +87,20 @@
       color: var(--green);
     }
 
+    /* Knowledge grid with categories */
+    .knowledge-category {
+      margin-bottom: 24px;
+    }
+    .knowledge-category-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
     .knowledge-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -98,12 +112,22 @@
       border-radius: 8px;
       padding: 14px 18px;
     }
+    .knowledge-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+    }
     .knowledge-key {
       font-size: 12px;
       color: var(--text-dim);
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      margin-bottom: 4px;
+    }
+    .knowledge-updated {
+      font-size: 11px;
+      color: var(--text-dim);
+      opacity: 0.7;
     }
     .knowledge-value {
       font-size: 13px;
@@ -115,6 +139,52 @@
       border-radius: 4px;
       font-family: "SFMono-Regular", Consolas, monospace;
       font-size: 12px;
+    }
+    .knowledge-value.collapsed {
+      max-height: 80px;
+      overflow: hidden;
+      position: relative;
+    }
+    .knowledge-value.collapsed::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 30px;
+      background: linear-gradient(transparent, var(--card));
+    }
+    .expand-btn {
+      background: none;
+      border: none;
+      color: var(--blue);
+      font-size: 12px;
+      cursor: pointer;
+      padding: 4px 0;
+      font-family: var(--font);
+    }
+    .expand-btn:hover { text-decoration: underline; }
+
+    /* JSON pretty-print */
+    .json-value {
+      background: rgba(110, 118, 129, 0.1);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      max-height: 80px;
+      overflow: hidden;
+      position: relative;
+    }
+    .json-value.expanded {
+      max-height: none;
+    }
+    .json-value.collapsed::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 30px;
+      background: linear-gradient(transparent, var(--card));
     }
 
     .stat-cards {
@@ -143,6 +213,24 @@
     .stat-wrong { color: var(--red); }
     .stat-pending { color: var(--yellow); }
     .stat-accuracy { color: var(--blue); }
+
+    /* Accuracy bar */
+    .accuracy-bar-container {
+      width: 100%;
+      height: 8px;
+      background: rgba(110, 118, 129, 0.2);
+      border-radius: 4px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+    .accuracy-bar {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.3s ease;
+    }
+    .accuracy-bar.good { background: var(--green); }
+    .accuracy-bar.ok { background: var(--yellow); }
+    .accuracy-bar.bad { background: var(--red); }
 
     .finding-item {
       background: var(--card);
@@ -212,7 +300,7 @@
 
     <!-- Knowledge Tab -->
     <div class="tab-content" id="tab-knowledge">
-      <div class="knowledge-grid" id="knowledgeGrid">
+      <div id="knowledgeContainer">
         <div class="empty">Loading...</div>
       </div>
     </div>
@@ -241,6 +329,17 @@ const API = '';
 let currentRepo = '';
 let eventsOffset = 0;
 const EVENTS_PAGE = 50;
+
+// Knowledge category definitions
+const CATEGORIES = {
+  'Project Info': ['description', 'tech_stack', 'language', 'framework', 'repo_type', 'project_type'],
+  'Commands': ['build_command', 'run_command', 'install_command', 'test_command', 'health_endpoint', 'test_endpoint'],
+  'Analysis': ['rich_analysis', 'runtime_requirements', 'api_surface', 'deployment_type', 'working_deploy_option'],
+  'Investigation': ['last_verdict', 'last_analyzed_issue', 'test_strategy', 'needs_cluster']
+};
+
+// Keys that contain JSON
+const JSON_KEYS = new Set(['runtime_requirements', 'rich_analysis', 'api_surface']);
 
 async function api(path) {
   const token = localStorage.getItem('opinai_token') || '';
@@ -303,7 +402,11 @@ async function loadTimeline(reset) {
       document.getElementById('loadMoreBtn').style.display = 'none';
       return;
     }
-    data.events.forEach(e => container.appendChild(renderEvent(e)));
+    // Filter out no-op events client-side (old_value == new_value)
+    var meaningful = data.events.filter(function(e) {
+      return e.old_value !== e.new_value;
+    });
+    meaningful.forEach(e => container.appendChild(renderEvent(e)));
     eventsOffset += data.events.length;
     document.getElementById('loadMoreBtn').style.display =
       eventsOffset < data.total ? '' : 'none';
@@ -325,13 +428,18 @@ function renderEvent(e) {
 
   let diffHtml = '';
   if (isNew) {
-    const val = truncVal(e.new_value || '');
+    const val = e.new_value || '';
     diffHtml = '<span class="diff-new">' + esc(val) + '</span>';
   } else {
-    const oldV = truncVal(e.old_value || '');
-    const newV = truncVal(e.new_value || '');
+    const oldV = e.old_value || '';
+    const newV = e.new_value || '';
     diffHtml = '<span class="diff-old">' + esc(oldV) + '</span> &rarr; <span class="diff-new">' + esc(newV) + '</span>';
   }
+
+  // Make diff expandable if long
+  var needsExpand = (e.new_value && e.new_value.length > 200) || (e.old_value && e.old_value.length > 200);
+  var diffClass = 'event-diff' + (needsExpand ? ' collapsed' : '');
+  var expandBtn = needsExpand ? '<button class="expand-btn" onclick="toggleExpand(this)">Show full</button>' : '';
 
   div.innerHTML = '<div class="event-header">' +
     '<span class="event-key">' + esc(e.key) + ' <span style="color:var(--text-dim);font-weight:400;font-size:12px">' + (isNew ? 'SET' : 'UPDATED') + '</span></span>' +
@@ -341,35 +449,123 @@ function renderEvent(e) {
     '<span>Reason: ' + esc(e.reason || '-') + '</span>' +
     '<span>Source: ' + esc(e.source || '-') + '</span>' +
     '</div>' +
-    '<div class="event-diff">' + diffHtml + '</div>';
+    '<div class="' + diffClass + '">' + diffHtml + '</div>' +
+    expandBtn;
 
   return div;
+}
+
+function toggleExpand(btn) {
+  var target = btn.previousElementSibling;
+  if (target.classList.contains('collapsed')) {
+    target.classList.remove('collapsed');
+    btn.textContent = 'Show less';
+  } else {
+    target.classList.add('collapsed');
+    btn.textContent = 'Show full';
+  }
 }
 
 async function loadKnowledge() {
   try {
     const data = await api('/api/admin/memory?repo=' + encodeURIComponent(currentRepo));
-    const grid = document.getElementById('knowledgeGrid');
+    const container = document.getElementById('knowledgeContainer');
     const knowledge = data.knowledge || {};
-    const keys = Object.keys(knowledge).sort();
+    const keys = Object.keys(knowledge);
     if (keys.length === 0) {
-      grid.innerHTML = '<div class="empty">No knowledge stored for this repo.</div>';
+      container.innerHTML = '<div class="empty">No knowledge stored for this repo.</div>';
       return;
     }
-    grid.innerHTML = '';
-    keys.forEach(k => {
-      const val = knowledge[k];
-      const item = document.createElement('div');
-      item.className = 'knowledge-item';
-      const isCmd = k.includes('command') || k.includes('endpoint');
-      const displayVal = isCmd ? '<code>' + esc(val) + '</code>' : esc(truncVal(val, 300));
-      item.innerHTML = '<div class="knowledge-key">' + esc(k) + '</div>' +
-        '<div class="knowledge-value">' + displayVal + '</div>';
-      grid.appendChild(item);
-    });
+
+    // Categorize keys
+    var categorized = {};
+    var usedKeys = new Set();
+
+    for (var cat in CATEGORIES) {
+      var items = [];
+      CATEGORIES[cat].forEach(function(k) {
+        if (knowledge[k]) {
+          items.push(k);
+          usedKeys.add(k);
+        }
+      });
+      if (items.length > 0) categorized[cat] = items;
+    }
+
+    // Remaining keys go to "Other"
+    var other = keys.filter(function(k) { return !usedKeys.has(k); }).sort();
+    if (other.length > 0) categorized['Other'] = other;
+
+    container.innerHTML = '';
+    for (var catName in categorized) {
+      var section = document.createElement('div');
+      section.className = 'knowledge-category';
+      section.innerHTML = '<div class="knowledge-category-title">' + esc(catName) + '</div>';
+
+      var grid = document.createElement('div');
+      grid.className = 'knowledge-grid';
+
+      categorized[catName].forEach(function(k) {
+        var entry = knowledge[k];
+        // entry is now {value, updated_at}
+        var val = typeof entry === 'object' ? entry.value : entry;
+        var updatedAt = typeof entry === 'object' ? entry.updated_at : '';
+
+        var item = document.createElement('div');
+        item.className = 'knowledge-item';
+
+        var isCmd = k.includes('command') || k.includes('endpoint');
+        var isJSON = JSON_KEYS.has(k) || isLikelyJSON(val);
+        var isLong = val && val.length > 150;
+
+        var valueHtml = '';
+        if (isJSON) {
+          valueHtml = renderJSONValue(val, isLong);
+        } else if (isCmd) {
+          valueHtml = '<code>' + esc(val) + '</code>';
+        } else if (isLong) {
+          valueHtml = '<div class="knowledge-value collapsed" data-full="' + escAttr(val) + '">' + esc(val) + '</div>' +
+            '<button class="expand-btn" onclick="toggleExpand(this)">Show full</button>';
+        } else {
+          valueHtml = '<div class="knowledge-value">' + esc(val) + '</div>';
+        }
+
+        var updatedHtml = updatedAt ? '<span class="knowledge-updated">' + timeAgo(updatedAt) + '</span>' : '';
+
+        item.innerHTML = '<div class="knowledge-header">' +
+          '<span class="knowledge-key">' + esc(k) + '</span>' +
+          updatedHtml +
+          '</div>' +
+          valueHtml;
+
+        grid.appendChild(item);
+      });
+
+      section.appendChild(grid);
+      container.appendChild(section);
+    }
   } catch (e) {
     console.error('Failed to load knowledge:', e);
   }
+}
+
+function renderJSONValue(val, isLong) {
+  var formatted = val;
+  try {
+    var parsed = JSON.parse(val);
+    formatted = JSON.stringify(parsed, null, 2);
+  } catch(e) {
+    // Not valid JSON, show as-is
+  }
+  var cls = 'json-value' + (isLong ? ' collapsed' : '');
+  var btn = isLong ? '<button class="expand-btn" onclick="toggleExpand(this)">Show full</button>' : '';
+  return '<div class="' + cls + '">' + esc(formatted) + '</div>' + btn;
+}
+
+function isLikelyJSON(s) {
+  if (!s) return false;
+  var t = s.trim();
+  return (t[0] === '{' || t[0] === '[') && (t[t.length-1] === '}' || t[t.length-1] === ']');
 }
 
 async function loadTrackRecord() {
@@ -381,14 +577,25 @@ async function loadTrackRecord() {
     const summary = data.summary || [];
     summary.forEach(s => {
       const total = s.correct + s.wrong;
-      const accuracy = total >= 5 ? Math.round(100 * s.correct / total) + '%' : 'n/a';
+      const pct = total >= 3 ? Math.round(100 * s.correct / total) : -1;
+      const accuracy = pct >= 0 ? pct + '%' : 'n/a';
       const label = s.type === 'issue' ? 'Issue Verdicts' : 'PR Reviews';
+
+      // Accuracy bar color
+      var barClass = 'good';
+      if (pct >= 0 && pct < 60) barClass = 'bad';
+      else if (pct >= 0 && pct < 80) barClass = 'ok';
+
+      var barHtml = '';
+      if (pct >= 0) {
+        barHtml = '<div class="accuracy-bar-container"><div class="accuracy-bar ' + barClass + '" style="width:' + pct + '%"></div></div>';
+      }
 
       cards.innerHTML +=
         '<div class="stat-card"><div class="stat-card-value stat-correct">' + s.correct + '</div><div class="stat-card-label">Correct ' + label + '</div></div>' +
         '<div class="stat-card"><div class="stat-card-value stat-wrong">' + s.wrong + '</div><div class="stat-card-label">Wrong ' + label + '</div></div>' +
         '<div class="stat-card"><div class="stat-card-value stat-pending">' + s.pending + '</div><div class="stat-card-label">Pending ' + label + '</div></div>' +
-        '<div class="stat-card"><div class="stat-card-value stat-accuracy">' + accuracy + '</div><div class="stat-card-label">Accuracy (' + label + ')</div></div>';
+        '<div class="stat-card"><div class="stat-card-value stat-accuracy">' + accuracy + '</div><div class="stat-card-label">Accuracy (' + label + ')' + barHtml + '</div></div>';
     });
 
     if (summary.length === 0) {
@@ -461,10 +668,22 @@ function showTab(name) {
   event.target.classList.add('active');
 }
 
-function truncVal(s, max) {
-  max = max || 200;
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  var d = new Date(dateStr + (dateStr.includes('Z') ? '' : 'Z'));
+  var now = new Date();
+  var diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+  if (diff < 2592000) return Math.floor(diff / 604800) + 'w ago';
+  return d.toLocaleDateString();
+}
+
+function escAttr(s) {
   if (!s) return '';
-  return s.length > max ? s.substring(0, max) + '...' : s;
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function esc(s) {

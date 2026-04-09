@@ -127,10 +127,10 @@ func TestReproduceValidation(t *testing.T) {
 func TestExtractAndStoreFindings(t *testing.T) {
 	setupTestServer(t)
 
-	// Valid repro_details with files_investigated
+	// Valid repro_details with files_investigated and per-file references in summary
 	reproDetails := `{
 		"files_investigated": ["middleware.go", "handler.go"],
-		"summary": "The streaming middleware buffers responses incorrectly"
+		"summary": "The streaming middleware.go buffers responses incorrectly. The handler.go routes requests to the middleware"
 	}`
 	extractAndStoreFindings("test/repo", 42, "BUG_CONFIRMED", "HIGH", reproDetails)
 
@@ -141,14 +141,46 @@ func TestExtractAndStoreFindings(t *testing.T) {
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 findings, got %d", len(findings))
 	}
-	if findings[0].FilePath != "handler.go" && findings[0].FilePath != "middleware.go" {
-		t.Errorf("unexpected file_path: %q", findings[0].FilePath)
+
+	// Build a map for easier assertion
+	byFile := map[string]string{}
+	for _, f := range findings {
+		byFile[f.FilePath] = f.Finding
+		if f.Verdict != "BUG_CONFIRMED" {
+			t.Errorf("verdict = %q, want BUG_CONFIRMED", f.Verdict)
+		}
 	}
-	if findings[0].Verdict != "BUG_CONFIRMED" {
-		t.Errorf("verdict = %q, want BUG_CONFIRMED", findings[0].Verdict)
+
+	// Each file should have gotten its own per-file finding
+	if mw, ok := byFile["middleware.go"]; !ok {
+		t.Error("missing finding for middleware.go")
+	} else if !strings.Contains(mw, "middleware.go buffers responses") {
+		t.Errorf("middleware finding should reference buffering, got: %q", mw)
 	}
-	if findings[0].Finding != "The streaming middleware buffers responses incorrectly" {
-		t.Errorf("finding = %q", findings[0].Finding)
+	if h, ok := byFile["handler.go"]; !ok {
+		t.Error("missing finding for handler.go")
+	} else if !strings.Contains(h, "handler.go routes requests") {
+		t.Errorf("handler finding should reference routing, got: %q", h)
+	}
+}
+
+func TestExtractPerFileFindings(t *testing.T) {
+	// Test the per-file extraction logic directly
+	files := []any{"src/server.go", "config.go"}
+	summary := "The bug is in server.go where Flush() is never called. The config.go file loads defaults incorrectly"
+
+	result := extractPerFileFindings(summary, files)
+
+	if f, ok := result["src/server.go"]; !ok {
+		t.Error("expected finding for src/server.go via basename match")
+	} else if !strings.Contains(f, "Flush") {
+		t.Errorf("server finding should mention Flush, got: %q", f)
+	}
+
+	if f, ok := result["config.go"]; !ok {
+		t.Error("expected finding for config.go")
+	} else if !strings.Contains(f, "defaults") {
+		t.Errorf("config finding should mention defaults, got: %q", f)
 	}
 }
 
