@@ -357,7 +357,7 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 	// Store runtime_requirements if present
 	if rr, ok := planData["runtime_requirements"]; ok {
 		rrBytes, _ := json.Marshal(rr)
-		database.SetRepoMemory(req.Repo, "runtime_requirements", string(rrBytes))
+		database.SetRepoMemoryWithReason(req.Repo, "runtime_requirements", string(rrBytes), "deployment_analysis", "controller")
 		slog.Info("stored runtime_requirements", "repo", req.Repo)
 	}
 
@@ -365,7 +365,7 @@ func (s *Server) handleAdminAnalyze(w http.ResponseWriter, r *http.Request) {
 	for _, key := range []string{"run_command", "build_command", "health_endpoint"} {
 		if v, ok := planData[key]; ok {
 			if s, ok := v.(string); ok && s != "" {
-				database.SetRepoMemory(req.Repo, key, s)
+				database.SetRepoMemoryWithReason(req.Repo, key, s, "deployment_analysis", "controller")
 			}
 		}
 	}
@@ -713,7 +713,7 @@ func autoUpdateProfileFromPlan(repo string, planData map[string]any) {
 
 	for k, v := range memFields {
 		if v != "" {
-			database.SetRepoMemory(repo, k, v)
+			database.SetRepoMemoryWithReason(repo, k, v, "deployment_analysis", "controller")
 		}
 	}
 	slog.Info("stored AI knowledge from deployment analysis", "repo", repo, "fields", len(memFields))
@@ -781,6 +781,119 @@ func (s *Server) handleAdminInfraTeardown(w http.ResponseWriter, r *http.Request
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+// --- Memory Journal API ---
+
+// GET /api/admin/memory?repo=owner/repo
+func (s *Server) handleAdminMemory(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		jsonError(w, "repo query parameter required", 400)
+		return
+	}
+
+	// Current knowledge
+	memory, _ := database.GetRepoMemory(repo, nil)
+
+	// Recent events
+	events, _ := database.GetMemoryEvents(repo, 20, 0)
+	if events == nil {
+		events = []database.MemoryEvent{}
+	}
+
+	// Outcome summary
+	summary, _ := database.GetOutcomeSummary(repo)
+	if summary == nil {
+		summary = []database.OutcomeSummary{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"repo":       repo,
+		"knowledge":  memory,
+		"events":     events,
+		"outcomes":   summary,
+	})
+}
+
+// GET /api/admin/memory/events?repo=owner/repo&limit=50&offset=0
+func (s *Server) handleAdminMemoryEvents(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	limit := intQuery(r, "limit", 50)
+	offset := intQuery(r, "offset", 0)
+
+	events, err := database.GetMemoryEvents(repo, limit, offset)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if events == nil {
+		events = []database.MemoryEvent{}
+	}
+
+	total := database.CountMemoryEvents(repo)
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"events": events,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
+// GET /api/admin/memory/outcomes?repo=owner/repo
+func (s *Server) handleAdminMemoryOutcomes(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		jsonError(w, "repo query parameter required", 400)
+		return
+	}
+
+	summary, err := database.GetOutcomeSummary(repo)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if summary == nil {
+		summary = []database.OutcomeSummary{}
+	}
+
+	outcomes, err := database.GetOutcomes(repo, 50)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if outcomes == nil {
+		outcomes = []database.Outcome{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"summary":  summary,
+		"outcomes": outcomes,
+	})
+}
+
+// GET /api/admin/memory/findings?repo=owner/repo
+func (s *Server) handleAdminMemoryFindings(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		jsonError(w, "repo query parameter required", 400)
+		return
+	}
+
+	limit := intQuery(r, "limit", 100)
+	findings, err := database.GetFindingsForRepo(repo, limit)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if findings == nil {
+		findings = []database.InvestigationFinding{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"findings": findings,
+	})
 }
 
 func ghGetDashboard(path string) ([]byte, int, error) {

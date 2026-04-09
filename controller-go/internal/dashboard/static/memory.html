@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinAI Memory Journal</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .repo-select {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+      font-family: var(--font);
+      outline: none;
+      min-width: 200px;
+    }
+    .repo-select:focus { border-color: var(--blue); }
+
+    .tab-bar {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    .tab-btn {
+      padding: 10px 20px;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-dim);
+      font-size: 14px;
+      font-family: var(--font);
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--blue);
+      border-bottom-color: var(--blue);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .event-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+    }
+    .event-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .event-key {
+      font-weight: 600;
+      color: var(--blue);
+      font-size: 14px;
+    }
+    .event-time {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .event-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+    .event-diff {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .diff-old {
+      color: var(--red);
+      text-decoration: line-through;
+      opacity: 0.7;
+    }
+    .diff-new {
+      color: var(--green);
+    }
+
+    .knowledge-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+    }
+    .knowledge-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+    }
+    .knowledge-key {
+      font-size: 12px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .knowledge-value {
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .knowledge-value code {
+      background: rgba(110, 118, 129, 0.2);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .stat-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      text-align: center;
+    }
+    .stat-card-value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .stat-card-label {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+    .stat-correct { color: var(--green); }
+    .stat-wrong { color: var(--red); }
+    .stat-pending { color: var(--yellow); }
+    .stat-accuracy { color: var(--blue); }
+
+    .finding-item {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 10px;
+    }
+    .finding-file {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      color: var(--blue);
+    }
+    .finding-meta {
+      display: flex;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--text-dim);
+      margin: 4px 0;
+    }
+
+    .load-more {
+      text-align: center;
+      padding: 16px;
+    }
+  </style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo">&#x1F9E0; Memory Journal</div>
+    <div class="header-tagline">What OpinAI knows and how it learned it</div>
+  </div>
+  <div class="header-right">
+    <select class="repo-select" id="repoSelect" onchange="loadRepo()">
+      <option value="">Select a repo...</option>
+    </select>
+    <a href="/" style="color:var(--text-dim);font-size:13px">Dashboard</a>
+    <a href="/admin" style="color:var(--text-dim);font-size:13px">Admin</a>
+  </div>
+</header>
+
+<main class="main">
+
+  <div id="noRepo" class="empty">
+    Select a monitored repo to view its memory journal.
+  </div>
+
+  <div id="content" style="display:none">
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="showTab('timeline')">Timeline</button>
+      <button class="tab-btn" onclick="showTab('knowledge')">Current Knowledge</button>
+      <button class="tab-btn" onclick="showTab('track-record')">Track Record</button>
+      <button class="tab-btn" onclick="showTab('findings')">Findings</button>
+    </div>
+
+    <!-- Timeline Tab -->
+    <div class="tab-content active" id="tab-timeline">
+      <div id="timelineEvents">
+        <div class="empty">Loading events...</div>
+      </div>
+      <div class="load-more" id="loadMoreBtn" style="display:none">
+        <button class="btn" onclick="loadMoreEvents()">Load older events</button>
+      </div>
+    </div>
+
+    <!-- Knowledge Tab -->
+    <div class="tab-content" id="tab-knowledge">
+      <div class="knowledge-grid" id="knowledgeGrid">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Track Record Tab -->
+    <div class="tab-content" id="tab-track-record">
+      <div class="stat-cards" id="trackRecordCards"></div>
+      <h3 style="margin-bottom:12px;font-size:16px">Recent Outcomes</h3>
+      <div id="outcomesTable">
+        <div class="empty">No outcomes recorded yet.</div>
+      </div>
+    </div>
+
+    <!-- Findings Tab -->
+    <div class="tab-content" id="tab-findings">
+      <div id="findingsList">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const API = '';
+let currentRepo = '';
+let eventsOffset = 0;
+const EVENTS_PAGE = 50;
+
+async function api(path) {
+  const token = localStorage.getItem('opinai_token') || '';
+  const resp = await fetch(API + path, {
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {}
+  });
+  if (!resp.ok) throw new Error('API error: ' + resp.status);
+  return resp.json();
+}
+
+async function init() {
+  try {
+    const repos = await api('/api/admin/repos');
+    const sel = document.getElementById('repoSelect');
+    repos.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.name;
+      opt.textContent = r.name;
+      sel.appendChild(opt);
+    });
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('repo')) {
+      sel.value = params.get('repo');
+      loadRepo();
+    }
+  } catch (e) {
+    console.error('Failed to load repos:', e);
+  }
+}
+
+function loadRepo() {
+  currentRepo = document.getElementById('repoSelect').value;
+  if (!currentRepo) {
+    document.getElementById('noRepo').style.display = '';
+    document.getElementById('content').style.display = 'none';
+    return;
+  }
+  document.getElementById('noRepo').style.display = 'none';
+  document.getElementById('content').style.display = '';
+
+  history.replaceState(null, '', '?repo=' + encodeURIComponent(currentRepo));
+
+  eventsOffset = 0;
+  loadTimeline(true);
+  loadKnowledge();
+  loadTrackRecord();
+  loadFindings();
+}
+
+async function loadTimeline(reset) {
+  if (reset) eventsOffset = 0;
+  try {
+    const data = await api('/api/admin/memory/events?repo=' + encodeURIComponent(currentRepo) +
+      '&limit=' + EVENTS_PAGE + '&offset=' + eventsOffset);
+    const container = document.getElementById('timelineEvents');
+    if (reset) container.innerHTML = '';
+    if (data.events.length === 0 && reset) {
+      container.innerHTML = '<div class="empty">No memory events recorded yet.</div>';
+      document.getElementById('loadMoreBtn').style.display = 'none';
+      return;
+    }
+    data.events.forEach(e => container.appendChild(renderEvent(e)));
+    eventsOffset += data.events.length;
+    document.getElementById('loadMoreBtn').style.display =
+      eventsOffset < data.total ? '' : 'none';
+  } catch (e) {
+    console.error('Failed to load events:', e);
+  }
+}
+
+function loadMoreEvents() {
+  loadTimeline(false);
+}
+
+function renderEvent(e) {
+  const div = document.createElement('div');
+  div.className = 'event-item';
+
+  const time = e.created_at ? new Date(e.created_at + 'Z').toLocaleString() : '';
+  const isNew = !e.old_value;
+
+  let diffHtml = '';
+  if (isNew) {
+    const val = truncVal(e.new_value || '');
+    diffHtml = '<span class="diff-new">' + esc(val) + '</span>';
+  } else {
+    const oldV = truncVal(e.old_value || '');
+    const newV = truncVal(e.new_value || '');
+    diffHtml = '<span class="diff-old">' + esc(oldV) + '</span> &rarr; <span class="diff-new">' + esc(newV) + '</span>';
+  }
+
+  div.innerHTML = '<div class="event-header">' +
+    '<span class="event-key">' + esc(e.key) + ' <span style="color:var(--text-dim);font-weight:400;font-size:12px">' + (isNew ? 'SET' : 'UPDATED') + '</span></span>' +
+    '<span class="event-time">' + esc(time) + '</span>' +
+    '</div>' +
+    '<div class="event-meta">' +
+    '<span>Reason: ' + esc(e.reason || '-') + '</span>' +
+    '<span>Source: ' + esc(e.source || '-') + '</span>' +
+    '</div>' +
+    '<div class="event-diff">' + diffHtml + '</div>';
+
+  return div;
+}
+
+async function loadKnowledge() {
+  try {
+    const data = await api('/api/admin/memory?repo=' + encodeURIComponent(currentRepo));
+    const grid = document.getElementById('knowledgeGrid');
+    const knowledge = data.knowledge || {};
+    const keys = Object.keys(knowledge).sort();
+    if (keys.length === 0) {
+      grid.innerHTML = '<div class="empty">No knowledge stored for this repo.</div>';
+      return;
+    }
+    grid.innerHTML = '';
+    keys.forEach(k => {
+      const val = knowledge[k];
+      const item = document.createElement('div');
+      item.className = 'knowledge-item';
+      const isCmd = k.includes('command') || k.includes('endpoint');
+      const displayVal = isCmd ? '<code>' + esc(val) + '</code>' : esc(truncVal(val, 300));
+      item.innerHTML = '<div class="knowledge-key">' + esc(k) + '</div>' +
+        '<div class="knowledge-value">' + displayVal + '</div>';
+      grid.appendChild(item);
+    });
+  } catch (e) {
+    console.error('Failed to load knowledge:', e);
+  }
+}
+
+async function loadTrackRecord() {
+  try {
+    const data = await api('/api/admin/memory/outcomes?repo=' + encodeURIComponent(currentRepo));
+    const cards = document.getElementById('trackRecordCards');
+    cards.innerHTML = '';
+
+    const summary = data.summary || [];
+    summary.forEach(s => {
+      const total = s.correct + s.wrong;
+      const accuracy = total >= 5 ? Math.round(100 * s.correct / total) + '%' : 'n/a';
+      const label = s.type === 'issue' ? 'Issue Verdicts' : 'PR Reviews';
+
+      cards.innerHTML +=
+        '<div class="stat-card"><div class="stat-card-value stat-correct">' + s.correct + '</div><div class="stat-card-label">Correct ' + label + '</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value stat-wrong">' + s.wrong + '</div><div class="stat-card-label">Wrong ' + label + '</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value stat-pending">' + s.pending + '</div><div class="stat-card-label">Pending ' + label + '</div></div>' +
+        '<div class="stat-card"><div class="stat-card-value stat-accuracy">' + accuracy + '</div><div class="stat-card-label">Accuracy (' + label + ')</div></div>';
+    });
+
+    if (summary.length === 0) {
+      cards.innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-card-value" style="color:var(--text-dim)">-</div><div class="stat-card-label">No outcomes recorded yet</div></div>';
+    }
+
+    const outcomes = data.outcomes || [];
+    const table = document.getElementById('outcomesTable');
+    if (outcomes.length === 0) {
+      table.innerHTML = '<div class="empty">No outcomes recorded yet.</div>';
+      return;
+    }
+    let html = '<div class="table-wrap"><table><thead><tr>' +
+      '<th>Type</th><th>#</th><th>OpinAI Said</th><th>What Happened</th><th>Correct?</th><th>When</th>' +
+      '</tr></thead><tbody>';
+    outcomes.forEach(o => {
+      const correctBadge = o.correct === true ? '<span class="verdict verdict-ok">Yes</span>' :
+        o.correct === false ? '<span class="verdict verdict-bug">No</span>' :
+        '<span class="verdict verdict-warn">Unknown</span>';
+      const time = o.created_at ? new Date(o.created_at + 'Z').toLocaleDateString() : '';
+      html += '<tr><td>' + esc(o.type) + '</td><td>#' + o.reference_number + '</td>' +
+        '<td>' + esc(o.opinai_verdict || '-') + '</td>' +
+        '<td>' + esc(o.actual_outcome || '-') + '</td>' +
+        '<td>' + correctBadge + '</td>' +
+        '<td>' + esc(time) + '</td></tr>';
+    });
+    html += '</tbody></table></div>';
+    table.innerHTML = html;
+  } catch (e) {
+    console.error('Failed to load track record:', e);
+  }
+}
+
+async function loadFindings() {
+  try {
+    const data = await api('/api/admin/memory/findings?repo=' + encodeURIComponent(currentRepo));
+    const list = document.getElementById('findingsList');
+    const findings = data.findings || [];
+    if (findings.length === 0) {
+      list.innerHTML = '<div class="empty">No investigation findings recorded yet.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    findings.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'finding-item';
+      const time = f.created_at ? new Date(f.created_at + 'Z').toLocaleDateString() : '';
+      const verdictClass = f.verdict === 'BUG_CONFIRMED' ? 'verdict-bug' :
+        f.verdict === 'NOT_REPRODUCIBLE' ? 'verdict-ok' : 'verdict-warn';
+      item.innerHTML =
+        '<div class="finding-file">' + esc(f.file_path) + '</div>' +
+        '<div class="finding-meta">' +
+        '<span>Issue #' + f.issue_number + '</span>' +
+        '<span class="verdict ' + verdictClass + '" style="font-size:11px">' + esc(f.verdict || '-') + '</span>' +
+        '<span>' + esc(f.confidence || '-') + '</span>' +
+        '<span>' + esc(time) + '</span>' +
+        '</div>' +
+        '<div style="font-size:13px;margin-top:4px">' + esc(f.finding) + '</div>';
+      list.appendChild(item);
+    });
+  } catch (e) {
+    console.error('Failed to load findings:', e);
+  }
+}
+
+function showTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function truncVal(s, max) {
+  max = max || 200;
+  if (!s) return '';
+  return s.length > max ? s.substring(0, max) + '...' : s;
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+init();
+</script>
+</body>
+</html>

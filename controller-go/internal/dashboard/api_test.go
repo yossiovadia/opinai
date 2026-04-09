@@ -124,6 +124,64 @@ func TestReproduceValidation(t *testing.T) {
 	}
 }
 
+func TestExtractAndStoreFindings(t *testing.T) {
+	setupTestServer(t)
+
+	// Valid repro_details with files_investigated
+	reproDetails := `{
+		"files_investigated": ["middleware.go", "handler.go"],
+		"summary": "The streaming middleware buffers responses incorrectly"
+	}`
+	extractAndStoreFindings("test/repo", 42, "BUG_CONFIRMED", "HIGH", reproDetails)
+
+	findings, err := database.GetFindingsForRepo("test/repo", 10)
+	if err != nil {
+		t.Fatalf("GetFindingsForRepo: %v", err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(findings))
+	}
+	if findings[0].FilePath != "handler.go" && findings[0].FilePath != "middleware.go" {
+		t.Errorf("unexpected file_path: %q", findings[0].FilePath)
+	}
+	if findings[0].Verdict != "BUG_CONFIRMED" {
+		t.Errorf("verdict = %q, want BUG_CONFIRMED", findings[0].Verdict)
+	}
+	if findings[0].Finding != "The streaming middleware buffers responses incorrectly" {
+		t.Errorf("finding = %q", findings[0].Finding)
+	}
+}
+
+func TestExtractAndStoreFindingsEmptyDetails(t *testing.T) {
+	setupTestServer(t)
+
+	// Should not panic with empty details
+	extractAndStoreFindings("test/repo", 42, "BUG_CONFIRMED", "HIGH", "")
+	extractAndStoreFindings("test/repo", 42, "BUG_CONFIRMED", "HIGH", "{}")
+	extractAndStoreFindings("test/repo", 42, "BUG_CONFIRMED", "HIGH", `{"files_investigated": []}`)
+
+	findings, _ := database.GetFindingsForRepo("test/repo", 10)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings for empty details, got %d", len(findings))
+	}
+}
+
+func TestExtractAndStoreFindingsNoSummary(t *testing.T) {
+	setupTestServer(t)
+
+	// When no summary, should use verdict as finding
+	reproDetails := `{"files_investigated": ["main.go"]}`
+	extractAndStoreFindings("test/repo", 10, "NOT_REPRODUCIBLE", "MEDIUM", reproDetails)
+
+	findings, _ := database.GetFindingsForRepo("test/repo", 10)
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].Finding != "NOT_REPRODUCIBLE" {
+		t.Errorf("finding = %q, want 'NOT_REPRODUCIBLE' (fallback to verdict)", findings[0].Finding)
+	}
+}
+
 func TestJsonErrorFormat(t *testing.T) {
 	w := httptest.NewRecorder()
 	jsonError(w, "test error", 422)

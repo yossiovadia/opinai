@@ -557,6 +557,31 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 	// Build repo context
 	repoContext := buildRepoContext(repo)
 
+	// Build investigation context: check if any changed files have prior findings
+	investigationContext := ""
+	if changedFilesJSON != "" {
+		var changedFiles []PRChangedFile
+		if json.Unmarshal([]byte(changedFilesJSON), &changedFiles) == nil && len(changedFiles) > 0 {
+			var filePaths []string
+			for _, f := range changedFiles {
+				filePaths = append(filePaths, f.Filename)
+			}
+			if findings, err := database.GetFindingsForFiles(repo, filePaths); err == nil && len(findings) > 0 {
+				var parts []string
+				for _, f := range findings {
+					parts = append(parts, fmt.Sprintf("- `%s` -- %s of issue #%d: %s (confidence: %s)",
+						f.FilePath, f.Verdict, f.IssueNumber, f.Finding, f.Confidence))
+				}
+				ctx := "## Prior Investigation Context\n\nThe following files in this PR were previously investigated:\n\n" + strings.Join(parts, "\n")
+				if len(ctx) > 10000 {
+					ctx = ctx[:10000]
+				}
+				investigationContext = ctx
+				slog.Info("found investigation context for PR review", "repo", repo, "pr", prNumber, "findings", len(findings))
+			}
+		}
+	}
+
 	// Fetch existing PR comments and reviews for context-aware review
 	prCommentsJSON := ""
 	if collected := CollectPRComments(repo, prNumber, 500); len(collected) > 0 {
@@ -595,6 +620,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 		{Name: "OPINAI_LINKED_RESOURCES", Value: linkedJSON},
 		{Name: "OPINAI_CONTROLLER_URL", Value: controllerURL(jm.namespace)},
 		{Name: "OPINAI_RUNNER_IMAGE", Value: runnerImage},
+		{Name: "OPINAI_PR_INVESTIGATION_CONTEXT", Value: investigationContext},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 	}
 	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)

@@ -555,3 +555,436 @@ func TestGetTotalStatsIncludesPRReviews(t *testing.T) {
 		t.Errorf("PRsCommented = %d, want 1", stats.PRsCommented)
 	}
 }
+
+// --- Memory Events Tests ---
+
+func TestMemoryEventsTablesExist(t *testing.T) {
+	setupTestDB(t)
+	for _, table := range []string{"memory_events", "investigation_findings", "outcomes"} {
+		var name string
+		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
+		if err != nil {
+			t.Errorf("table %s not found: %v", table, err)
+		}
+	}
+}
+
+func TestSetRepoMemoryLogsEvent(t *testing.T) {
+	setupTestDB(t)
+
+	// First set — no old value
+	SetRepoMemory("r/r", "desc", "initial description")
+	events, err := GetMemoryEvents("r/r", 10, 0)
+	if err != nil {
+		t.Fatalf("GetMemoryEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].OldValue != nil {
+		t.Errorf("first set should have nil old_value, got %q", *events[0].OldValue)
+	}
+	if events[0].NewValue == nil || *events[0].NewValue != "initial description" {
+		t.Errorf("new_value = %v, want 'initial description'", events[0].NewValue)
+	}
+	if events[0].Key != "desc" {
+		t.Errorf("key = %q, want 'desc'", events[0].Key)
+	}
+
+	// Update — should capture old value
+	SetRepoMemory("r/r", "desc", "updated description")
+	events, _ = GetMemoryEvents("r/r", 10, 0)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	// Newest first
+	if events[0].OldValue == nil || *events[0].OldValue != "initial description" {
+		t.Errorf("update event old_value = %v, want 'initial description'", events[0].OldValue)
+	}
+	if events[0].NewValue == nil || *events[0].NewValue != "updated description" {
+		t.Errorf("update event new_value = %v, want 'updated description'", events[0].NewValue)
+	}
+}
+
+func TestSetRepoMemoryWithReason(t *testing.T) {
+	setupTestDB(t)
+
+	SetRepoMemoryWithReason("r/r", "install_cmd", "pip install .", "investigation #42", "runner")
+
+	// Value should be set in repo_memory
+	mem, _ := GetRepoMemory("r/r", nil)
+	if mem["install_cmd"] != "pip install ." {
+		t.Errorf("memory value = %q, want 'pip install .'", mem["install_cmd"])
+	}
+
+	// Event should have reason and source
+	events, _ := GetMemoryEvents("r/r", 10, 0)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Reason != "investigation #42" {
+		t.Errorf("reason = %q, want 'investigation #42'", events[0].Reason)
+	}
+	if events[0].Source != "runner" {
+		t.Errorf("source = %q, want 'runner'", events[0].Source)
+	}
+}
+
+func TestGetMemoryEventsForKey(t *testing.T) {
+	setupTestDB(t)
+
+	SetRepoMemoryWithReason("r/r", "desc", "v1", "initial", "analysis")
+	SetRepoMemoryWithReason("r/r", "lang", "Go", "initial", "analysis")
+	SetRepoMemoryWithReason("r/r", "desc", "v2", "updated", "runner")
+
+	// Get events for "desc" only
+	events, err := GetMemoryEventsForKey("r/r", "desc", 10)
+	if err != nil {
+		t.Fatalf("GetMemoryEventsForKey: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events for 'desc', got %d", len(events))
+	}
+	// Newest first
+	if events[0].Reason != "updated" {
+		t.Errorf("first event reason = %q, want 'updated'", events[0].Reason)
+	}
+}
+
+func TestGetMemoryEventsPagination(t *testing.T) {
+	setupTestDB(t)
+
+	for i := 0; i < 5; i++ {
+		SetRepoMemoryWithReason("r/r", "key", "v"+string(rune('0'+i)), "set", "test")
+	}
+
+	// Get first 2
+	events, _ := GetMemoryEvents("r/r", 2, 0)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events with limit 2, got %d", len(events))
+	}
+
+	// Get with offset
+	events2, _ := GetMemoryEvents("r/r", 2, 2)
+	if len(events2) != 2 {
+		t.Fatalf("expected 2 events with offset 2, got %d", len(events2))
+	}
+	// Should be different events
+	if events[0].ID == events2[0].ID {
+		t.Error("offset 2 returned same events as offset 0")
+	}
+}
+
+func TestGetMemoryEventsAllRepos(t *testing.T) {
+	setupTestDB(t)
+
+	SetRepoMemoryWithReason("a/a", "k", "v1", "set", "test")
+	SetRepoMemoryWithReason("b/b", "k", "v2", "set", "test")
+
+	// All repos
+	events, _ := GetMemoryEvents("", 10, 0)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events across all repos, got %d", len(events))
+	}
+}
+
+func TestCountMemoryEvents(t *testing.T) {
+	setupTestDB(t)
+
+	SetRepoMemory("r/r", "k1", "v1")
+	SetRepoMemory("r/r", "k2", "v2")
+	SetRepoMemory("other/repo", "k1", "v1")
+
+	if count := CountMemoryEvents("r/r"); count != 2 {
+		t.Errorf("count for r/r = %d, want 2", count)
+	}
+	if count := CountMemoryEvents(""); count != 3 {
+		t.Errorf("total count = %d, want 3", count)
+	}
+}
+
+// --- Investigation Findings Tests ---
+
+func TestAddAndGetFindings(t *testing.T) {
+	setupTestDB(t)
+
+	id, err := AddInvestigationFinding(InvestigationFinding{
+		Repo:        "r/r",
+		IssueNumber: 42,
+		FilePath:    "middleware.go",
+		Finding:     "Flush() never called after SSE writes",
+		Verdict:     "BUG_CONFIRMED",
+		Confidence:  "HIGH",
+	})
+	if err != nil {
+		t.Fatalf("AddInvestigationFinding: %v", err)
+	}
+	if id == 0 {
+		t.Error("expected non-zero ID")
+	}
+
+	findings, err := GetFindingsForRepo("r/r", 10)
+	if err != nil {
+		t.Fatalf("GetFindingsForRepo: %v", err)
+	}
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(findings))
+	}
+	if findings[0].FilePath != "middleware.go" {
+		t.Errorf("file_path = %q", findings[0].FilePath)
+	}
+	if findings[0].Finding != "Flush() never called after SSE writes" {
+		t.Errorf("finding = %q", findings[0].Finding)
+	}
+}
+
+func TestGetFindingsForFiles(t *testing.T) {
+	setupTestDB(t)
+
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 10, FilePath: "middleware.go",
+		Finding: "buffering issue", Verdict: "BUG_CONFIRMED", Confidence: "HIGH",
+	})
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 11, FilePath: "handler.go",
+		Finding: "nil pointer", Verdict: "BUG_CONFIRMED", Confidence: "MEDIUM",
+	})
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 12, FilePath: "utils.go",
+		Finding: "race condition", Verdict: "BUG_CONFIRMED", Confidence: "LOW",
+	})
+
+	// Query for specific files
+	findings, err := GetFindingsForFiles("r/r", []string{"middleware.go", "handler.go"})
+	if err != nil {
+		t.Fatalf("GetFindingsForFiles: %v", err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(findings))
+	}
+
+	// Query for file with no findings
+	findings2, _ := GetFindingsForFiles("r/r", []string{"nonexistent.go"})
+	if len(findings2) != 0 {
+		t.Errorf("expected 0 findings for nonexistent file, got %d", len(findings2))
+	}
+
+	// Empty file list
+	findings3, _ := GetFindingsForFiles("r/r", []string{})
+	if len(findings3) != 0 {
+		t.Errorf("expected 0 findings for empty list, got %d", len(findings3))
+	}
+}
+
+func TestGetFindingsForFilesMultiplePerFile(t *testing.T) {
+	setupTestDB(t)
+
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 10, FilePath: "main.go",
+		Finding: "first issue", Verdict: "BUG_CONFIRMED", Confidence: "HIGH",
+	})
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 20, FilePath: "main.go",
+		Finding: "second issue", Verdict: "NOT_REPRODUCIBLE", Confidence: "MEDIUM",
+	})
+
+	findings, _ := GetFindingsForFiles("r/r", []string{"main.go"})
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings for main.go, got %d", len(findings))
+	}
+	// Newest first
+	if findings[0].IssueNumber != 20 {
+		t.Errorf("expected newest finding first, got issue %d", findings[0].IssueNumber)
+	}
+}
+
+// --- Outcomes Tests ---
+
+func TestAddAndGetOutcomes(t *testing.T) {
+	setupTestDB(t)
+
+	correct := true
+	id, err := AddOutcome(Outcome{
+		Repo:            "r/r",
+		Type:            "issue",
+		ReferenceNumber: 42,
+		OpinaiVerdict:   "BUG_CONFIRMED",
+		ActualOutcome:   "issue_closed_with_fix",
+		OutcomeDetails:  "fix PR #43 merged",
+		Correct:         &correct,
+	})
+	if err != nil {
+		t.Fatalf("AddOutcome: %v", err)
+	}
+	if id == 0 {
+		t.Error("expected non-zero ID")
+	}
+
+	outcomes, err := GetOutcomes("r/r", 10)
+	if err != nil {
+		t.Fatalf("GetOutcomes: %v", err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected 1 outcome, got %d", len(outcomes))
+	}
+	o := outcomes[0]
+	if o.Type != "issue" {
+		t.Errorf("type = %q", o.Type)
+	}
+	if o.ReferenceNumber != 42 {
+		t.Errorf("reference_number = %d", o.ReferenceNumber)
+	}
+	if o.OpinaiVerdict != "BUG_CONFIRMED" {
+		t.Errorf("opinai_verdict = %q", o.OpinaiVerdict)
+	}
+	if o.Correct == nil || !*o.Correct {
+		t.Errorf("correct = %v, want true", o.Correct)
+	}
+}
+
+func TestAddOutcomeNullCorrect(t *testing.T) {
+	setupTestDB(t)
+
+	id, err := AddOutcome(Outcome{
+		Repo:            "r/r",
+		Type:            "pr_review",
+		ReferenceNumber: 10,
+		OpinaiVerdict:   "APPROVE",
+		ActualOutcome:   "pr_merged",
+		Correct:         nil,
+	})
+	if err != nil {
+		t.Fatalf("AddOutcome with nil correct: %v", err)
+	}
+	if id == 0 {
+		t.Error("expected non-zero ID")
+	}
+
+	outcomes, _ := GetOutcomes("r/r", 10)
+	if len(outcomes) != 1 {
+		t.Fatalf("expected 1 outcome, got %d", len(outcomes))
+	}
+	if outcomes[0].Correct != nil {
+		t.Errorf("correct = %v, want nil", outcomes[0].Correct)
+	}
+}
+
+func TestHasOutcome(t *testing.T) {
+	setupTestDB(t)
+
+	has, _ := HasOutcome("r/r", "issue", 42)
+	if has {
+		t.Error("should not have outcome initially")
+	}
+
+	correct := true
+	AddOutcome(Outcome{
+		Repo: "r/r", Type: "issue", ReferenceNumber: 42,
+		OpinaiVerdict: "BUG_CONFIRMED", ActualOutcome: "closed_with_fix", Correct: &correct,
+	})
+
+	has, _ = HasOutcome("r/r", "issue", 42)
+	if !has {
+		t.Error("should have outcome after insert")
+	}
+
+	// Different type should not match
+	has, _ = HasOutcome("r/r", "pr_review", 42)
+	if has {
+		t.Error("should not match different type")
+	}
+}
+
+func TestGetOutcomeSummary(t *testing.T) {
+	setupTestDB(t)
+
+	// Add some runs and PR reviews to count pending
+	AddRun(Run{Repo: "r/r", Issue: 1, Verdict: "BUG_CONFIRMED", CreatedAt: "2026-01-01"})
+	AddRun(Run{Repo: "r/r", Issue: 2, Verdict: "NOT_REPRODUCIBLE", CreatedAt: "2026-01-02"})
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 10, Verdict: "APPROVE", CreatedAt: "2026-01-01"})
+
+	// Add one outcome
+	correct := true
+	AddOutcome(Outcome{
+		Repo: "r/r", Type: "issue", ReferenceNumber: 1,
+		OpinaiVerdict: "BUG_CONFIRMED", ActualOutcome: "closed_with_fix", Correct: &correct,
+	})
+
+	summary, err := GetOutcomeSummary("r/r")
+	if err != nil {
+		t.Fatalf("GetOutcomeSummary: %v", err)
+	}
+
+	var issueSummary, prSummary *OutcomeSummary
+	for i := range summary {
+		switch summary[i].Type {
+		case "issue":
+			issueSummary = &summary[i]
+		case "pr_review":
+			prSummary = &summary[i]
+		}
+	}
+
+	if issueSummary == nil {
+		t.Fatal("missing issue summary")
+	}
+	if issueSummary.Correct != 1 {
+		t.Errorf("issue correct = %d, want 1", issueSummary.Correct)
+	}
+	if issueSummary.Pending != 1 {
+		t.Errorf("issue pending = %d, want 1 (issue #2 has no outcome)", issueSummary.Pending)
+	}
+
+	if prSummary == nil {
+		t.Fatal("missing pr_review summary")
+	}
+	if prSummary.Pending != 1 {
+		t.Errorf("pr pending = %d, want 1", prSummary.Pending)
+	}
+}
+
+func TestGetOutcomesAllRepos(t *testing.T) {
+	setupTestDB(t)
+
+	correct := true
+	AddOutcome(Outcome{Repo: "a/a", Type: "issue", ReferenceNumber: 1, Correct: &correct})
+	AddOutcome(Outcome{Repo: "b/b", Type: "issue", ReferenceNumber: 2, Correct: &correct})
+
+	outcomes, _ := GetOutcomes("", 10)
+	if len(outcomes) != 2 {
+		t.Fatalf("expected 2 outcomes across all repos, got %d", len(outcomes))
+	}
+
+	// Filter by repo
+	outcomes2, _ := GetOutcomes("a/a", 10)
+	if len(outcomes2) != 1 {
+		t.Fatalf("expected 1 outcome for a/a, got %d", len(outcomes2))
+	}
+}
+
+func TestDeleteRepoDataIncludesNewTables(t *testing.T) {
+	setupTestDB(t)
+
+	SetRepoMemoryWithReason("r/r", "k", "v", "test", "test")
+	AddInvestigationFinding(InvestigationFinding{
+		Repo: "r/r", IssueNumber: 1, FilePath: "f.go",
+		Finding: "bug", Verdict: "BUG_CONFIRMED", Confidence: "HIGH",
+	})
+	correct := true
+	AddOutcome(Outcome{Repo: "r/r", Type: "issue", ReferenceNumber: 1, Correct: &correct})
+
+	DeleteRepoData("r/r")
+
+	events, _ := GetMemoryEvents("r/r", 10, 0)
+	if len(events) != 0 {
+		t.Errorf("expected 0 events after delete, got %d", len(events))
+	}
+	findings, _ := GetFindingsForRepo("r/r", 10)
+	if len(findings) != 0 {
+		t.Errorf("expected 0 findings after delete, got %d", len(findings))
+	}
+	outcomes, _ := GetOutcomes("r/r", 10)
+	if len(outcomes) != 0 {
+		t.Errorf("expected 0 outcomes after delete, got %d", len(outcomes))
+	}
+}

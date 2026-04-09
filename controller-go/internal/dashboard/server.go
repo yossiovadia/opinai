@@ -328,6 +328,7 @@ func (s *Server) buildRouter() chi.Router {
 		}
 		r.Get("/", serveFile("index.html", "text/html; charset=utf-8"))
 		r.Get("/admin", serveFile("admin.html", "text/html; charset=utf-8"))
+		r.Get("/memory", serveFile("memory.html", "text/html; charset=utf-8"))
 		r.Get("/style.css", serveFile("style.css", "text/css; charset=utf-8"))
 	}
 
@@ -409,6 +410,12 @@ func (s *Server) buildRouter() chi.Router {
 				r.Post("/infra/{dep}/start", s.handleAdminInfraStart)
 				r.Post("/infra/{dep}/stop", s.handleAdminInfraStop)
 				r.Delete("/infra/{dep}", s.handleAdminInfraTeardown)
+
+				// Memory journal
+				r.Get("/memory", s.handleAdminMemory)
+				r.Get("/memory/events", s.handleAdminMemoryEvents)
+				r.Get("/memory/outcomes", s.handleAdminMemoryOutcomes)
+				r.Get("/memory/findings", s.handleAdminMemoryFindings)
 			})
 		})
 	})

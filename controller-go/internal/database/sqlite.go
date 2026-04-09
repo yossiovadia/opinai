@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,6 +156,49 @@ func migrate() error {
 		helm_release TEXT,
 		created_at TEXT DEFAULT (datetime('now'))
 	)`)
+
+	// --- Memory system tables (Phase 1) ---
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS memory_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL,
+		key TEXT NOT NULL,
+		old_value TEXT,
+		new_value TEXT,
+		reason TEXT,
+		source TEXT,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_events_repo ON memory_events(repo)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_memory_events_repo_key ON memory_events(repo, key)")
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS investigation_findings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL,
+		issue_number INTEGER NOT NULL,
+		file_path TEXT NOT NULL,
+		finding TEXT NOT NULL,
+		verdict TEXT,
+		confidence TEXT,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_findings_repo_file ON investigation_findings(repo, file_path)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_findings_repo_issue ON investigation_findings(repo, issue_number)")
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS outcomes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL,
+		type TEXT NOT NULL,
+		reference_number INTEGER,
+		opinai_verdict TEXT,
+		actual_outcome TEXT,
+		outcome_details TEXT,
+		correct BOOLEAN,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_outcomes_repo ON outcomes(repo)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_outcomes_repo_type ON outcomes(repo, type)")
+
 	return nil
 }
 
@@ -272,8 +316,33 @@ func scanRun(row *sql.Row) (*Run, error) {
 // --- Repo Memory ---
 
 func SetRepoMemory(repo, key, value string) error {
+	return SetRepoMemoryWithReason(repo, key, value, "", "")
+}
+
+// SetRepoMemoryWithReason updates repo memory and logs an event with context.
+func SetRepoMemoryWithReason(repo, key, value, reason, source string) error {
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Read old value for the audit trail
+	var oldValue sql.NullString
+	db.QueryRow("SELECT value FROM repo_memory WHERE repo = ? AND key = ?", repo, key).Scan(&oldValue)
+
+	// Log the event
+	var oldPtr *string
+	if oldValue.Valid {
+		oldPtr = &oldValue.String
+	}
+	if reason == "" {
+		reason = "set"
+	}
+	if source == "" {
+		source = "unknown"
+	}
+	db.Exec(`INSERT INTO memory_events (repo, key, old_value, new_value, reason, source) VALUES (?, ?, ?, ?, ?, ?)`,
+		repo, key, oldPtr, value, reason, source)
+
+	// Upsert the materialized value
 	_, err := db.Exec(
 		`INSERT INTO repo_memory (repo, key, value, updated_at)
 		 VALUES (?, ?, ?, datetime('now'))
@@ -564,7 +633,7 @@ func UpdateDeploymentPlanStatus(repo, status string) error {
 func DeleteRepoData(repo string) error {
 	mu.Lock()
 	defer mu.Unlock()
-	for _, table := range []string{"deployment_plans", "repo_memory", "processed_issues"} {
+	for _, table := range []string{"deployment_plans", "repo_memory", "processed_issues", "memory_events", "investigation_findings", "outcomes"} {
 		if _, err := db.Exec("DELETE FROM "+table+" WHERE repo = ?", repo); err != nil {
 			return err
 		}
@@ -867,4 +936,288 @@ func DeleteInfraDep(name string) error {
 	defer mu.Unlock()
 	_, err := db.Exec("DELETE FROM infra_deps WHERE name = ?", name)
 	return err
+}
+
+// --- Memory Events ---
+
+type MemoryEvent struct {
+	ID        int64   `json:"id"`
+	Repo      string  `json:"repo"`
+	Key       string  `json:"key"`
+	OldValue  *string `json:"old_value"`
+	NewValue  *string `json:"new_value"`
+	Reason    string  `json:"reason"`
+	Source    string  `json:"source"`
+	CreatedAt string  `json:"created_at"`
+}
+
+// GetMemoryEvents returns paginated memory events for a repo, newest first.
+func GetMemoryEvents(repo string, limit, offset int) ([]MemoryEvent, error) {
+	query := "SELECT id, repo, key, old_value, new_value, reason, source, created_at FROM memory_events"
+	var args []any
+	if repo != "" {
+		query += " WHERE repo = ?"
+		args = append(args, repo)
+	}
+	query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []MemoryEvent
+	for rows.Next() {
+		var e MemoryEvent
+		if err := rows.Scan(&e.ID, &e.Repo, &e.Key, &e.OldValue, &e.NewValue, &e.Reason, &e.Source, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// GetMemoryEventsForKey returns events for a specific repo+key, newest first.
+func GetMemoryEventsForKey(repo, key string, limit int) ([]MemoryEvent, error) {
+	rows, err := db.Query(
+		"SELECT id, repo, key, old_value, new_value, reason, source, created_at FROM memory_events WHERE repo = ? AND key = ? ORDER BY id DESC LIMIT ?",
+		repo, key, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []MemoryEvent
+	for rows.Next() {
+		var e MemoryEvent
+		if err := rows.Scan(&e.ID, &e.Repo, &e.Key, &e.OldValue, &e.NewValue, &e.Reason, &e.Source, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// CountMemoryEvents returns the total count of memory events for a repo.
+func CountMemoryEvents(repo string) int {
+	var count int
+	if repo != "" {
+		db.QueryRow("SELECT COUNT(*) FROM memory_events WHERE repo = ?", repo).Scan(&count)
+	} else {
+		db.QueryRow("SELECT COUNT(*) FROM memory_events").Scan(&count)
+	}
+	return count
+}
+
+// --- Investigation Findings ---
+
+type InvestigationFinding struct {
+	ID          int64  `json:"id"`
+	Repo        string `json:"repo"`
+	IssueNumber int    `json:"issue_number"`
+	FilePath    string `json:"file_path"`
+	Finding     string `json:"finding"`
+	Verdict     string `json:"verdict"`
+	Confidence  string `json:"confidence"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// AddInvestigationFinding stores a finding for a file from an investigation.
+func AddInvestigationFinding(f InvestigationFinding) (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(
+		`INSERT INTO investigation_findings (repo, issue_number, file_path, finding, verdict, confidence)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		f.Repo, f.IssueNumber, f.FilePath, f.Finding, f.Verdict, f.Confidence,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetFindingsForFiles returns active findings for the given file paths in a repo.
+func GetFindingsForFiles(repo string, filePaths []string) ([]InvestigationFinding, error) {
+	if len(filePaths) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(filePaths))
+	args := []any{repo}
+	for i, fp := range filePaths {
+		placeholders[i] = "?"
+		args = append(args, fp)
+	}
+	query := fmt.Sprintf(
+		"SELECT id, repo, issue_number, file_path, finding, verdict, confidence, created_at FROM investigation_findings WHERE repo = ? AND file_path IN (%s) ORDER BY id DESC",
+		strings.Join(placeholders, ","),
+	)
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var findings []InvestigationFinding
+	for rows.Next() {
+		var f InvestigationFinding
+		if err := rows.Scan(&f.ID, &f.Repo, &f.IssueNumber, &f.FilePath, &f.Finding, &f.Verdict, &f.Confidence, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		findings = append(findings, f)
+	}
+	return findings, rows.Err()
+}
+
+// GetFindingsForRepo returns all findings for a repo, newest first.
+func GetFindingsForRepo(repo string, limit int) ([]InvestigationFinding, error) {
+	rows, err := db.Query(
+		"SELECT id, repo, issue_number, file_path, finding, verdict, confidence, created_at FROM investigation_findings WHERE repo = ? ORDER BY id DESC LIMIT ?",
+		repo, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var findings []InvestigationFinding
+	for rows.Next() {
+		var f InvestigationFinding
+		if err := rows.Scan(&f.ID, &f.Repo, &f.IssueNumber, &f.FilePath, &f.Finding, &f.Verdict, &f.Confidence, &f.CreatedAt); err != nil {
+			return nil, err
+		}
+		findings = append(findings, f)
+	}
+	return findings, rows.Err()
+}
+
+// --- Outcomes ---
+
+type Outcome struct {
+	ID              int64  `json:"id"`
+	Repo            string `json:"repo"`
+	Type            string `json:"type"`
+	ReferenceNumber int    `json:"reference_number"`
+	OpinaiVerdict   string `json:"opinai_verdict"`
+	ActualOutcome   string `json:"actual_outcome"`
+	OutcomeDetails  string `json:"outcome_details"`
+	Correct         *bool  `json:"correct"`
+	CreatedAt       string `json:"created_at"`
+}
+
+// AddOutcome records an observed outcome for an issue or PR review.
+func AddOutcome(o Outcome) (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(
+		`INSERT INTO outcomes (repo, type, reference_number, opinai_verdict, actual_outcome, outcome_details, correct)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		o.Repo, o.Type, o.ReferenceNumber, o.OpinaiVerdict, o.ActualOutcome, o.OutcomeDetails, o.Correct,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetOutcomes returns outcomes for a repo, newest first.
+func GetOutcomes(repo string, limit int) ([]Outcome, error) {
+	query := "SELECT id, repo, type, reference_number, opinai_verdict, actual_outcome, outcome_details, correct, created_at FROM outcomes"
+	var args []any
+	if repo != "" {
+		query += " WHERE repo = ?"
+		args = append(args, repo)
+	}
+	query += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var outcomes []Outcome
+	for rows.Next() {
+		var o Outcome
+		if err := rows.Scan(&o.ID, &o.Repo, &o.Type, &o.ReferenceNumber, &o.OpinaiVerdict, &o.ActualOutcome, &o.OutcomeDetails, &o.Correct, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		outcomes = append(outcomes, o)
+	}
+	return outcomes, rows.Err()
+}
+
+// HasOutcome checks if an outcome already exists for a given repo+type+reference.
+func HasOutcome(repo, outcomeType string, referenceNumber int) (bool, error) {
+	var n int
+	err := db.QueryRow(
+		"SELECT 1 FROM outcomes WHERE repo = ? AND type = ? AND reference_number = ?",
+		repo, outcomeType, referenceNumber,
+	).Scan(&n)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// OutcomeSummary holds aggregate outcome statistics.
+type OutcomeSummary struct {
+	Type    string `json:"type"`
+	Correct int    `json:"correct"`
+	Wrong   int    `json:"wrong"`
+	Pending int    `json:"pending"`
+}
+
+// GetOutcomeSummary returns aggregate outcome stats for a repo.
+func GetOutcomeSummary(repo string) ([]OutcomeSummary, error) {
+	// Count outcomes by type and correctness
+	rows, err := db.Query(`
+		SELECT type,
+			SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) as correct,
+			SUM(CASE WHEN correct = 0 THEN 1 ELSE 0 END) as wrong
+		FROM outcomes WHERE repo = ? GROUP BY type`, repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	summaryMap := make(map[string]*OutcomeSummary)
+	for rows.Next() {
+		var s OutcomeSummary
+		if err := rows.Scan(&s.Type, &s.Correct, &s.Wrong); err != nil {
+			return nil, err
+		}
+		summaryMap[s.Type] = &s
+	}
+
+	// Count pending (runs/reviews without outcomes)
+	var issuePending int
+	db.QueryRow(`SELECT COUNT(DISTINCT r.repo || ':' || r.issue) FROM runs r
+		WHERE r.repo = ? AND r.verdict != ''
+		AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.repo = r.repo AND o.type = 'issue' AND o.reference_number = r.issue)`, repo).Scan(&issuePending)
+
+	var prPending int
+	db.QueryRow(`SELECT COUNT(DISTINCT pr.repo || ':' || pr.pr_number) FROM pr_reviews pr
+		WHERE pr.repo = ? AND pr.verdict != ''
+		AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.repo = pr.repo AND o.type = 'pr_review' AND o.reference_number = pr.pr_number)`, repo).Scan(&prPending)
+
+	if _, ok := summaryMap["issue"]; !ok {
+		summaryMap["issue"] = &OutcomeSummary{Type: "issue"}
+	}
+	summaryMap["issue"].Pending = issuePending
+
+	if _, ok := summaryMap["pr_review"]; !ok {
+		summaryMap["pr_review"] = &OutcomeSummary{Type: "pr_review"}
+	}
+	summaryMap["pr_review"].Pending = prPending
+
+	var result []OutcomeSummary
+	for _, s := range summaryMap {
+		result = append(result, *s)
+	}
+	return result, nil
 }

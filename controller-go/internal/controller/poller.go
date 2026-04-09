@@ -30,6 +30,9 @@ func NewPoller(state *dashboard.State, jobs *JobManager, interval time.Duration,
 // Start begins the polling loop. Blocks forever.
 func (p *Poller) Start() {
 	pollCount := 0
+	outcomeCheckCounter := 0
+	// Check outcomes every ~12 poll cycles (approximately once per hour with 5-min polls)
+	outcomeCheckInterval := 12
 
 	for {
 		pollCount++
@@ -95,6 +98,14 @@ func (p *Poller) Start() {
 		// Check deployment plan freshness
 		checkPlanStaleness(repos)
 
+		// Periodic outcome checking (~once per hour)
+		outcomeCheckCounter++
+		if outcomeCheckCounter >= outcomeCheckInterval {
+			outcomeCheckCounter = 0
+			slog.Info("running periodic outcome check")
+			CheckOutcomes(repos)
+		}
+
 		// Update check result for dashboard
 		p.state.SetCheckResult(&dashboard.CheckResult{Total: totalNew})
 
@@ -135,7 +146,7 @@ func ensureMonitoredSince(repo string, stats database.RepoStats) string {
 		since = time.Now().UTC().Format("2006-01-02T15:04:05Z")
 	}
 
-	database.SetRepoMemory(repo, "monitored_since", since)
+	database.SetRepoMemoryWithReason(repo, "monitored_since", since, "repo_added", "controller")
 	slog.Info("set monitored_since for repo", "repo", repo, "since", since)
 	return since
 }

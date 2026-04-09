@@ -344,12 +344,16 @@ func (s *Server) handleInternalResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store repo memory
+	// Store repo memory with reason
+	reason := fmt.Sprintf("investigation #%d", req.Issue)
 	for k, v := range req.RepoMemory {
 		if v != "" {
-			database.SetRepoMemory(req.Repo, k, v)
+			database.SetRepoMemoryWithReason(req.Repo, k, v, reason, "runner")
 		}
 	}
+
+	// Extract investigation findings from repro_details
+	extractAndStoreFindings(req.Repo, req.Issue, req.Verdict, req.Confidence, req.ReproDetails)
 
 	// Remove from pending queue and mark as processed BEFORE retry
 	database.RemovePending(req.Repo, req.Issue)
@@ -597,6 +601,57 @@ func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) 
 
 	slog.Info("received PR review result via callback", "repo", req.Repo, "pr", req.PRNumber, "verdict", req.Verdict)
 	json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+}
+
+// extractAndStoreFindings parses repro_details JSON to extract files_investigated
+// and stores findings in the investigation_findings table.
+func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproDetailsJSON string) {
+	if reproDetailsJSON == "" {
+		return
+	}
+	var details map[string]any
+	if err := json.Unmarshal([]byte(reproDetailsJSON), &details); err != nil {
+		return
+	}
+
+	// Get the files investigated
+	filesRaw, ok := details["files_investigated"]
+	if !ok {
+		return
+	}
+	filesSlice, ok := filesRaw.([]any)
+	if !ok || len(filesSlice) == 0 {
+		return
+	}
+
+	// Build a brief finding from the summary or method
+	finding := ""
+	if summary, ok := details["summary"].(string); ok && summary != "" {
+		finding = summary
+		if len(finding) > 500 {
+			finding = finding[:500]
+		}
+	} else {
+		finding = verdict
+	}
+
+	for _, f := range filesSlice {
+		filePath, ok := f.(string)
+		if !ok || filePath == "" {
+			continue
+		}
+		database.AddInvestigationFinding(database.InvestigationFinding{
+			Repo:        repo,
+			IssueNumber: issue,
+			FilePath:    filePath,
+			Finding:     finding,
+			Verdict:     verdict,
+			Confidence:  confidence,
+		})
+	}
+	if len(filesSlice) > 0 {
+		slog.Info("stored investigation findings", "repo", repo, "issue", issue, "files", len(filesSlice))
+	}
 }
 
 // ghGet makes an authenticated GET to the GitHub API.
