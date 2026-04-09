@@ -867,6 +867,13 @@ func DeduplicatePRReviews() (int64, error) {
 	return res.RowsAffected()
 }
 
+func DeletePRReview(id int64) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM pr_reviews WHERE id = ?", id)
+	return err
+}
+
 func MarkPRReviewPosted(id int64) error {
 	mu.Lock()
 	defer mu.Unlock()

@@ -394,6 +394,7 @@ func (s *Server) buildRouter() chi.Router {
 			r.Post("/rerun-all/*", s.handleRerunAll)
 			r.Post("/review-pr", s.handleReviewPR)
 			r.Post("/pr-reviews/{id}/post-comment", s.handlePostPRComment)
+			r.Delete("/pr-reviews/{id}", s.handleDeletePRReview)
 
 			// Admin
 			r.Route("/admin", func(r chi.Router) {

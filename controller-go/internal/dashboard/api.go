@@ -555,6 +555,21 @@ func (s *Server) handlePostPRComment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- DELETE /api/pr-reviews/{id} ---
+
+func (s *Server) handleDeletePRReview(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonError(w, "invalid review id", 400)
+		return
+	}
+	if err := database.DeletePRReview(id); err != nil {
+		jsonError(w, "failed to delete: "+err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"status": "deleted", "id": id})
+}
+
 // --- POST /api/internal/pr-result ---
 // Called by the runner pod to report PR review results directly.
 

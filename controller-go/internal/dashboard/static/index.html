@@ -45,7 +45,7 @@
   <!-- Hero -->
   <section class="section" style="text-align:center;padding:12px 0 4px;">
     <p style="color:var(--text-dim);font-size:13px;margin:0;">
-      OpinAI automatically reproduces bug reports by deploying your project, generating AI-powered test scripts, and verifying if the bug is real.
+      OpinAI automatically reproduces bug reports and reviews pull requests using AI-powered analysis.
     </p>
     <div id="heroStats" style="display:flex;justify-content:center;gap:24px;margin-top:8px;font-size:12px;color:var(--text-dim);"></div>
   </section>
@@ -54,8 +54,8 @@
   <section class="section">
     <div class="reproduce-bar">
       <input type="text" id="reproduceInput" class="reproduce-input"
-             placeholder="Paste issue URL (e.g. https://github.com/owner/repo/issues/42)">
-      <button class="btn btn-primary" onclick="reproduceFromUrl()">&#x1F9EA; Reproduce</button>
+             placeholder="Paste GitHub issue or PR URL...">
+      <button class="btn btn-primary" onclick="reproduceFromUrl()">&#x1F50D; Analyze</button>
     </div>
   </section>
 
@@ -822,19 +822,22 @@ async function rerunAll(repo) {
   }
 }
 
-function parseIssueUrl(url) {
-  // Match: https://github.com/owner/repo/issues/42
-  var m = url.match(/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)/);
-  if (m) return { repo: m[1], issue: parseInt(m[2]) };
+function parseGitHubUrl(url) {
+  // Match PR: https://github.com/owner/repo/pull/42
+  var prMatch = url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+  if (prMatch) return { repo: prMatch[1], number: parseInt(prMatch[2]), type: 'pr' };
+  // Match issue: https://github.com/owner/repo/issues/42
+  var issueMatch = url.match(/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)/);
+  if (issueMatch) return { repo: issueMatch[1], number: parseInt(issueMatch[2]), type: 'issue' };
   return null;
 }
 
 async function reproduceFromUrl() {
   var input = document.getElementById('reproduceInput');
   var url = input.value.trim();
-  if (!url) { showToast('Paste a GitHub issue URL first', 'error'); return; }
-  var parsed = parseIssueUrl(url);
-  if (!parsed) { showToast('Invalid issue URL format', 'error'); return; }
+  if (!url) { showToast('Paste a GitHub issue or PR URL first', 'error'); return; }
+  var parsed = parseGitHubUrl(url);
+  if (!parsed) { showToast('Invalid URL — expected a GitHub issue or PR link', 'error'); return; }
   // Check if repo is monitored
   try {
     var repos = await fetchJSON('/api/repos');
@@ -845,24 +848,46 @@ async function reproduceFromUrl() {
     }
   } catch(e) { /* proceed anyway, server will validate */ }
   input.value = '';
-  // Queue the issue and show it immediately
-  var rKey = parsed.repo + '#' + parsed.issue;
-  pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.issue };
-  var rRowId = 'issue-' + parsed.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + parsed.issue;
-  _autoExpandAfterRender.add(rRowId);
-  renderIssues();
-  try {
-    await fetchJSON('/api/reproduce', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ repo: parsed.repo, issue_number: parsed.issue })
-    });
-    showToast('Queued: ' + parsed.repo + '#' + parsed.issue, 'info');
-  } catch(e) {
-    showToast('Failed to queue: ' + (e.message || e), 'error');
-    delete pendingReRuns[rKey];
+
+  if (parsed.type === 'pr') {
+    // Trigger PR review
+    showToast('Queuing PR review: ' + parsed.repo + '#' + parsed.number + '...', 'info');
+    try {
+      var resp = await fetch(API + '/api/review-pr', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ repo: parsed.repo, pr_number: parsed.number })
+      });
+      var data = await resp.json();
+      if (!resp.ok) {
+        showToast('Failed: ' + (data.message || resp.status), 'error');
+        return;
+      }
+      showToast('PR review queued: ' + parsed.repo + '#' + parsed.number, 'success');
+      setTimeout(loadPRReviews, 3000);
+    } catch(e) {
+      showToast('Failed to queue PR review: ' + (e.message || e), 'error');
+    }
+  } else {
+    // Trigger issue reproduction
+    var rKey = parsed.repo + '#' + parsed.number;
+    pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.number };
+    var rRowId = 'issue-' + parsed.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + parsed.number;
+    _autoExpandAfterRender.add(rRowId);
+    renderIssues();
+    try {
+      await fetchJSON('/api/reproduce', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ repo: parsed.repo, issue_number: parsed.number })
+      });
+      showToast('Queued: ' + parsed.repo + '#' + parsed.number, 'info');
+    } catch(e) {
+      showToast('Failed to queue: ' + (e.message || e), 'error');
+      delete pendingReRuns[rKey];
+    }
+    loadIssuesImmediate();
   }
-  loadIssuesImmediate();
 }
 
 // Enter key on reproduce input
@@ -984,12 +1009,15 @@ function renderPRReviews() {
     var prUrl = pr.repo ? ('https://github.com/' + pr.repo + '/pull/' + pr.pr_number) : '#';
 
     var actions = '';
-    actions += '<button class="btn" onclick="event.stopPropagation(); setPRChatContext(\'' + escapeHtml(pr.repo) + '\', ' + pr.pr_number + ', \'' + escapeHtml(pr.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
+    actions += '<button class="btn" onclick="event.stopPropagation(); reReviewPR(\'' + escapeHtml(pr.repo) + '\', ' + pr.pr_number + ', this)" title="Re-review">&#x1F504; Re-review</button> ';
+    actions += '<button class="btn" onclick="event.stopPropagation(); copyPRReview(' + pr.id + ')" title="Copy review">&#x1F4CB; Copy</button> ';
     if (pr.posted) {
-      actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button>';
+      actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button> ';
     } else {
-      actions += '<button class="btn" id="pr-post-btn-' + pr.id + '" onclick="event.stopPropagation(); showPRPostPreview(' + pr.id + ')" title="Post to GitHub">&#x1F4DD; Post</button>';
+      actions += '<button class="btn" id="pr-post-btn-' + pr.id + '" onclick="event.stopPropagation(); showPRPostPreview(' + pr.id + ')" title="Post to GitHub">&#x1F4E4; Post</button> ';
     }
+    actions += '<button class="btn" onclick="event.stopPropagation(); setPRChatContext(\'' + escapeHtml(pr.repo) + '\', ' + pr.pr_number + ', \'' + escapeHtml(pr.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
+    actions += '<button class="btn" onclick="event.stopPropagation(); deletePRReview(' + pr.id + ', \'' + escapeHtml(pr.repo) + '\', ' + pr.pr_number + ')" title="Delete" style="color:var(--text-dim)">&#x1F5D1;&#xFE0F;</button>';
 
     html += '<tr class="expandable" onclick="togglePRExpand(\'' + rowId + '\')">' +
       '<td><a href="' + prUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(pr.pr_number + '') + '</a></td>' +
@@ -1065,6 +1093,63 @@ async function confirmPRPost() {
     showToast('Failed to post PR review', 'error');
     confirmBtn.disabled = false;
     confirmBtn.innerHTML = '&#x2705; Post to GitHub';
+  }
+}
+
+async function reReviewPR(repo, prNumber, btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin">&#x1F504;</span>'; }
+  showToast('Re-reviewing ' + repo + ' PR #' + prNumber + '...', 'info');
+  try {
+    var resp = await fetch(API + '/api/review-pr', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ repo: repo, pr_number: prNumber })
+    });
+    var data = await resp.json();
+    if (!resp.ok) {
+      showToast('Re-review failed: ' + (data.message || resp.status), 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F504; Re-review'; }
+      return;
+    }
+    showToast('PR review queued: ' + repo + '#' + prNumber, 'success');
+    setTimeout(loadPRReviews, 3000);
+  } catch(e) {
+    showToast('Failed to trigger re-review', 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F504; Re-review'; }
+  }
+}
+
+function copyPRReview(id) {
+  var review = null;
+  for (var i = 0; i < allPRReviews.length; i++) {
+    if (allPRReviews[i].id === id) { review = allPRReviews[i]; break; }
+  }
+  if (!review || !review.review_text) { showToast('No review text to copy', 'error'); return; }
+  navigator.clipboard.writeText(review.review_text).then(function() {
+    showToast('Review copied to clipboard', 'success');
+  }).catch(function() {
+    showToast('Failed to copy', 'error');
+  });
+}
+
+async function deletePRReview(id, repo, prNumber) {
+  if (!confirm('Delete review for ' + repo + ' PR #' + prNumber + '?')) return;
+  try {
+    var resp = await fetch(API + '/api/pr-reviews/' + id, { method: 'DELETE' });
+    if (!resp.ok) {
+      var data = await resp.json();
+      showToast('Delete failed: ' + (data.message || resp.status), 'error');
+      return;
+    }
+    showToast('Deleted review for ' + repo + ' PR #' + prNumber, 'info');
+    allPRReviews = allPRReviews.filter(function(r) { return r.id !== id; });
+    renderPRReviews();
+    if (allPRReviews.length === 0) {
+      document.getElementById('prReviewsSection').style.display = 'none';
+    }
+    loadStatus();
+  } catch(e) {
+    showToast('Failed to delete review', 'error');
   }
 }
 
