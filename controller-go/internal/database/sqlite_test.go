@@ -473,3 +473,85 @@ func TestMarkPRReviewPosted(t *testing.T) {
 		t.Error("should be posted after MarkPRReviewPosted")
 	}
 }
+
+func TestDeduplicatePRReviews(t *testing.T) {
+	setupTestDB(t)
+
+	// Insert duplicates: 3 reviews for PR 703, 2 for PR 709, 1 for PR 713
+	AddPRReview(PRReview{Repo: "owner/repo", PRNumber: 703, Verdict: "COMMENT", CreatedAt: "2026-01-01T00:00:00Z"})
+	AddPRReview(PRReview{Repo: "owner/repo", PRNumber: 703, Verdict: "APPROVE", CreatedAt: "2026-01-01T00:01:00Z"})
+	AddPRReview(PRReview{Repo: "owner/repo", PRNumber: 703, Verdict: "APPROVE", CreatedAt: "2026-01-01T00:02:00Z"})
+
+	AddPRReview(PRReview{Repo: "owner/repo", PRNumber: 709, Verdict: "CHANGES_REQUESTED", CreatedAt: "2026-01-02T00:00:00Z"})
+	AddPRReview(PRReview{Repo: "owner/repo", PRNumber: 709, Verdict: "CHANGES_REQUESTED", CreatedAt: "2026-01-02T00:01:00Z"})
+
+	AddPRReview(PRReview{Repo: "owner/repo", PRNumber: 713, Verdict: "APPROVE", CreatedAt: "2026-01-03T00:00:00Z"})
+
+	// Verify duplicates exist
+	reviews703, _ := GetPRReviewsByPR("owner/repo", 703)
+	if len(reviews703) != 3 {
+		t.Fatalf("expected 3 reviews for PR 703 before dedup, got %d", len(reviews703))
+	}
+
+	// Run dedup
+	removed, err := DeduplicatePRReviews()
+	if err != nil {
+		t.Fatalf("DeduplicatePRReviews: %v", err)
+	}
+	if removed != 3 {
+		t.Errorf("expected 3 removed, got %d", removed)
+	}
+
+	// Verify: 1 per PR
+	reviews703, _ = GetPRReviewsByPR("owner/repo", 703)
+	if len(reviews703) != 1 {
+		t.Errorf("expected 1 review for PR 703 after dedup, got %d", len(reviews703))
+	}
+	reviews709, _ := GetPRReviewsByPR("owner/repo", 709)
+	if len(reviews709) != 1 {
+		t.Errorf("expected 1 review for PR 709 after dedup, got %d", len(reviews709))
+	}
+	reviews713, _ := GetPRReviewsByPR("owner/repo", 713)
+	if len(reviews713) != 1 {
+		t.Errorf("expected 1 review for PR 713 after dedup, got %d", len(reviews713))
+	}
+
+	// The kept review should be the one with the highest ID (latest inserted)
+	if reviews703[0].Verdict != "APPROVE" {
+		t.Errorf("expected latest review (APPROVE) to be kept, got %q", reviews703[0].Verdict)
+	}
+
+	// Running dedup again should remove nothing
+	removed2, err := DeduplicatePRReviews()
+	if err != nil {
+		t.Fatalf("DeduplicatePRReviews (2nd run): %v", err)
+	}
+	if removed2 != 0 {
+		t.Errorf("expected 0 removed on 2nd run, got %d", removed2)
+	}
+}
+
+func TestGetTotalStatsIncludesPRReviews(t *testing.T) {
+	setupTestDB(t)
+
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 1, Verdict: "APPROVE", CreatedAt: "2026-01-01"})
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 2, Verdict: "CHANGES_REQUESTED", CreatedAt: "2026-01-02"})
+	AddPRReview(PRReview{Repo: "r/r", PRNumber: 3, Verdict: "COMMENT", CreatedAt: "2026-01-03"})
+
+	stats, err := GetTotalStats()
+	if err != nil {
+		t.Fatalf("GetTotalStats: %v", err)
+	}
+	if stats.PRsReviewed != 3 {
+		t.Errorf("PRsReviewed = %d, want 3", stats.PRsReviewed)
+	}
+	if stats.PRsApproved != 1 {
+		t.Errorf("PRsApproved = %d, want 1", stats.PRsApproved)
+	}
+	if stats.PRsChangesReq != 1 {
+		t.Errorf("PRsChangesReq = %d, want 1", stats.PRsChangesReq)
+	}
+	if stats.PRsCommented != 1 {
+		t.Errorf("PRsCommented = %d, want 1", stats.PRsCommented)
+	}
+}

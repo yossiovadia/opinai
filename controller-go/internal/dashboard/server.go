@@ -158,6 +158,9 @@ type ClearRecordedFunc func(repo string, issue int)
 // MarkRecordedFunc marks a job as recorded so the harvester skips it.
 type MarkRecordedFunc func(repo string, issue int)
 
+// MarkPRRecordedFunc marks a PR review job as recorded so the harvester skips it.
+type MarkPRRecordedFunc func(repo string, prNumber int)
+
 // RetryPendingFunc triggers a check for pending issues in a repo after a job completes.
 type RetryPendingFunc func(repo string)
 
@@ -221,7 +224,8 @@ type Server struct {
 	verifyFix VerifyFixFunc
 	rerun         RerunFunc
 	clearRecorded ClearRecordedFunc
-	markRecorded  MarkRecordedFunc
+	markRecorded    MarkRecordedFunc
+	markPRRecorded  MarkPRRecordedFunc
 	retryPending  RetryPendingFunc
 	listJobs      ListJobsFunc
 	sandbox       SandboxManagerIface
@@ -262,6 +266,11 @@ func (s *Server) SetClearRecordedCallback(fn ClearRecordedFunc) {
 // SetMarkRecordedCallback sets the function to mark a job as already recorded.
 func (s *Server) SetMarkRecordedCallback(fn MarkRecordedFunc) {
 	s.markRecorded = fn
+}
+
+// SetMarkPRRecordedCallback sets the function to mark a PR review job as recorded.
+func (s *Server) SetMarkPRRecordedCallback(fn MarkPRRecordedFunc) {
+	s.markPRRecorded = fn
 }
 
 // SetRetryPendingCallback sets the function to retry pending issues for a repo.

@@ -60,6 +60,13 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		os.Exit(1)
 	}
 
+	// Clean up duplicate PR reviews from prior dedup bugs
+	if n, err := database.DeduplicatePRReviews(); err != nil {
+		slog.Warn("failed to deduplicate PR reviews", "error", err)
+	} else if n > 0 {
+		slog.Info("cleaned up duplicate PR reviews", "removed", n)
+	}
+
 	// Initialize K8s client
 	k8sClient, err := initK8sClient()
 	if err != nil {
@@ -216,6 +223,9 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 		// Wire callbacks that need the poller
 		srv.SetMarkRecordedCallback(func(repo string, issue int) {
 			jobMgr.MarkRecorded(repo, issue)
+		})
+		srv.SetMarkPRRecordedCallback(func(repo string, prNumber int) {
+			jobMgr.MarkPRRecorded(repo, prNumber)
 		})
 		srv.SetRetryPendingCallback(func(repo string) {
 			poller.RetryPendingForRepo(repo)

@@ -21,15 +21,19 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(s.state.StartTime).Seconds()
 	dbStats, _ := database.GetTotalStats()
 	json.NewEncoder(w).Encode(map[string]any{
-		"uptime_seconds":  int(uptime),
-		"uptime_human":    FormatDuration(uptime),
-		"last_poll":       s.state.GetLastPoll(),
-		"poll_count":      s.state.GetPollCount(),
-		"repos_count":     len(s.state.GetRepos()),
-		"total_runs":      dbStats.TotalRuns,
-		"total_processed": dbStats.TotalProcessed,
-		"bugs_confirmed":  dbStats.BugsConfirmed,
-		"not_reproducible": dbStats.NotReproducible,
+		"uptime_seconds":       int(uptime),
+		"uptime_human":         FormatDuration(uptime),
+		"last_poll":            s.state.GetLastPoll(),
+		"poll_count":           s.state.GetPollCount(),
+		"repos_count":          len(s.state.GetRepos()),
+		"total_runs":           dbStats.TotalRuns,
+		"total_processed":      dbStats.TotalProcessed,
+		"bugs_confirmed":       dbStats.BugsConfirmed,
+		"not_reproducible":     dbStats.NotReproducible,
+		"prs_reviewed":         dbStats.PRsReviewed,
+		"prs_approved":         dbStats.PRsApproved,
+		"prs_changes_requested": dbStats.PRsChangesReq,
+		"prs_commented":        dbStats.PRsCommented,
 	})
 }
 
@@ -582,9 +586,8 @@ func (s *Server) handleInternalPRResult(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Mark as recorded so the log-scraping harvester skips this job
-	if s.markRecorded != nil {
-		// Use a synthetic issue number (negative PR number) to avoid collision
-		s.markRecorded(req.Repo, -req.PRNumber)
+	if s.markPRRecorded != nil {
+		s.markPRRecorded(req.Repo, req.PRNumber)
 	}
 
 	s.hub.Broadcast(WSEvent{

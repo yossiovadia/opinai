@@ -767,6 +767,15 @@ func (jm *JobManager) MarkRecorded(repo string, issue int) {
 	slog.Debug("marked job as recorded via callback", "job", name)
 }
 
+// MarkPRRecorded marks a PR review job as recorded so the harvester skips it.
+func (jm *JobManager) MarkPRRecorded(repo string, prNumber int) {
+	name := PRReviewJobName(repo, prNumber)
+	jm.mu.Lock()
+	jm.recorded[name] = true
+	jm.mu.Unlock()
+	slog.Debug("marked PR review job as recorded via callback", "job", name)
+}
+
 // harvestSingleJob extracts results from a single completed job.
 func (jm *JobManager) harvestSingleJob(job *batchv1.Job) {
 	name := job.Name

@@ -73,6 +73,16 @@
     </div>
   </section>
 
+  <!-- PR Reviews -->
+  <section class="section" id="prReviewsSection" style="display:none">
+    <div class="section-header">
+      <h2 class="section-title">PR Reviews</h2>
+    </div>
+    <div id="prReviewsContainer">
+      <div class="empty">Loading...</div>
+    </div>
+  </section>
+
 </main>
 
 <footer class="footer">
@@ -92,6 +102,22 @@
     <div class="modal-footer">
       <button class="btn" onclick="closePostModal()">Cancel</button>
       <button class="btn btn-post-confirm" id="postModalConfirm" onclick="confirmPost()">&#x2705; Post to GitHub</button>
+    </div>
+  </div>
+</div>
+
+<!-- PR Review post preview modal -->
+<div class="modal-overlay" id="prPostModal" style="display:none" onclick="if(event.target===this)closePRPostModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3>Review comment before posting to GitHub</h3>
+      <button class="chat-close" onclick="closePRPostModal()">&times;</button>
+    </div>
+    <div class="modal-meta" id="prPostModalMeta"></div>
+    <div class="modal-body expand-content" id="prPostModalBody"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closePRPostModal()">Cancel</button>
+      <button class="btn btn-post-confirm" id="prPostModalConfirm" onclick="confirmPRPost()">&#x2705; Post to GitHub</button>
     </div>
   </div>
 </div>
@@ -227,10 +253,17 @@ async function loadStatus() {
     document.getElementById('clusterName').textContent = 'Connected';
     // Update hero stats
     var hs = document.getElementById('heroStats');
-    if (hs) hs.innerHTML =
-      '<span>&#x1F534; ' + (data.bugs_confirmed || 0) + ' bugs confirmed</span>' +
-      '<span>&#x26A0;&#xFE0F; ' + (data.not_reproducible || 0) + ' not reproduced</span>' +
-      '<span>&#x1F4E6; ' + (data.repos_count || 0) + ' repos monitored</span>';
+    if (hs) {
+      var html =
+        '<span>&#x1F534; ' + (data.bugs_confirmed || 0) + ' bugs confirmed</span>' +
+        '<span>&#x26A0;&#xFE0F; ' + (data.not_reproducible || 0) + ' not reproduced</span>' +
+        '<span>&#x1F4E6; ' + (data.repos_count || 0) + ' repos monitored</span>';
+      if (data.prs_reviewed) {
+        html += '<span style="border-left:1px solid var(--border);padding-left:12px">&#x1F50D; ' + data.prs_reviewed + ' PRs reviewed</span>';
+        html += '<span>&#x2705; ' + (data.prs_approved || 0) + ' &#x1F7E0; ' + (data.prs_changes_requested || 0) + ' &#x1F535; ' + (data.prs_commented || 0) + '</span>';
+      }
+      hs.innerHTML = html;
+    }
   } catch(e) {
     document.getElementById('statusDot').className = 'status-dot red';
     document.getElementById('clusterName').textContent = 'Disconnected';
@@ -829,7 +862,7 @@ document.getElementById('reproduceInput').addEventListener('keydown', function(e
 
 async function refreshAll() {
   animateRefresh();
-  await Promise.all([loadStatus(), loadRepos(), _doLoadIssues()]);
+  await Promise.all([loadStatus(), loadRepos(), _doLoadIssues(), loadPRReviews()]);
   updateRunningCount();
 }
 
@@ -869,6 +902,159 @@ function filterRunning() {
       setTimeout(function() { tr.classList.remove('row-highlight'); }, 2000);
     }
   });
+}
+
+// =====================================================================
+// PR Reviews
+// =====================================================================
+var allPRReviews = [];
+var expandedPRRows = new Set();
+
+function prVerdictBadge(verdict) {
+  if (!verdict) return '<span class="verdict verdict-error">--</span>';
+  switch (verdict.toUpperCase()) {
+    case 'APPROVE': return '<span class="verdict" style="background:rgba(63,185,80,0.15);color:var(--green)">&#x2705; Approve</span>';
+    case 'CHANGES_REQUESTED': return '<span class="verdict" style="background:rgba(210,153,34,0.15);color:var(--yellow)">&#x1F7E0; Changes Requested</span>';
+    case 'COMMENT': return '<span class="verdict" style="background:rgba(88,166,255,0.15);color:var(--blue)">&#x1F4AC; Comment</span>';
+    default: return '<span class="verdict verdict-error">' + escapeHtml(verdict) + '</span>';
+  }
+}
+
+function prRiskBadge(risk) {
+  if (!risk) return '<span class="verdict verdict-error">--</span>';
+  switch (risk.toUpperCase()) {
+    case 'LOW': return '<span class="verdict" style="background:rgba(63,185,80,0.15);color:var(--green)">LOW</span>';
+    case 'MEDIUM': return '<span class="verdict" style="background:rgba(210,153,34,0.15);color:var(--yellow)">MEDIUM</span>';
+    case 'HIGH': return '<span class="verdict" style="background:rgba(210,153,34,0.15);color:#e3b341">HIGH</span>';
+    case 'CRITICAL': return '<span class="verdict" style="background:rgba(248,81,73,0.15);color:var(--red)">CRITICAL</span>';
+    default: return '<span class="verdict verdict-error">' + escapeHtml(risk) + '</span>';
+  }
+}
+
+async function loadPRReviews() {
+  try {
+    allPRReviews = await fetchJSON('/api/pr-reviews');
+    var section = document.getElementById('prReviewsSection');
+    if (allPRReviews && allPRReviews.length > 0) {
+      section.style.display = '';
+      renderPRReviews();
+    } else {
+      section.style.display = 'none';
+    }
+  } catch(e) {
+    document.getElementById('prReviewsContainer').innerHTML = '<div class="table-wrap"><div class="empty">Failed to load PR reviews</div></div>';
+  }
+}
+
+function togglePRExpand(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    el.style.display = '';
+    expandedPRRows.add(id);
+  } else {
+    el.style.display = 'none';
+    expandedPRRows.delete(id);
+  }
+}
+
+function renderPRReviews() {
+  var container = document.getElementById('prReviewsContainer');
+  if (!allPRReviews || !allPRReviews.length) {
+    container.innerHTML = '<div class="table-wrap"><div class="empty">No PR reviews yet</div></div>';
+    return;
+  }
+
+  var html = '<div class="table-wrap"><table>' +
+    '<thead><tr><th>PR</th><th>Repo</th><th>Title</th><th>Author</th><th>Verdict</th><th>Risk</th><th>Duration</th><th>Reviewed</th><th></th></tr></thead>' +
+    '<tbody>';
+
+  allPRReviews.forEach(function(pr) {
+    var rowId = 'pr-review-' + pr.id;
+    var prUrl = pr.repo ? ('https://github.com/' + pr.repo + '/pull/' + pr.pr_number) : '#';
+
+    var actions = '';
+    if (pr.posted) {
+      actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button>';
+    } else {
+      actions += '<button class="btn" id="pr-post-btn-' + pr.id + '" onclick="event.stopPropagation(); showPRPostPreview(' + pr.id + ')" title="Post to GitHub">&#x1F4DD; Post</button>';
+    }
+
+    html += '<tr class="expandable" onclick="togglePRExpand(\'' + rowId + '\')">' +
+      '<td><a href="' + prUrl + '" target="_blank" onclick="event.stopPropagation()">#' + escapeHtml(pr.pr_number + '') + '</a></td>' +
+      '<td><span class="badge badge-repo">' + escapeHtml(pr.repo) + '</span></td>' +
+      '<td class="td-title">' + escapeHtml(pr.title || '') + '</td>' +
+      '<td>' + escapeHtml(pr.author || '') + '</td>' +
+      '<td>' + prVerdictBadge(pr.verdict) + '</td>' +
+      '<td>' + prRiskBadge(pr.risk) + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + escapeHtml(pr.duration || '--') + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + timeAgo(pr.timestamp) + '</td>' +
+      '<td>' + actions + '</td>' +
+    '</tr>' +
+    '<tr class="expand-row" id="' + rowId + '" style="display:none">' +
+      '<td colspan="9"><div class="expand-content">' +
+        renderMarkdown(pr.review_text || '(no review text)') +
+      '</div></td>' +
+    '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
+
+  // Restore expanded state
+  expandedPRRows.forEach(function(id) {
+    var row = document.getElementById(id);
+    if (row) row.style.display = '';
+  });
+}
+
+var _pendingPRPostId = null;
+
+function showPRPostPreview(id) {
+  var review = null;
+  for (var i = 0; i < allPRReviews.length; i++) {
+    if (allPRReviews[i].id === id) { review = allPRReviews[i]; break; }
+  }
+  if (!review) return;
+  _pendingPRPostId = id;
+  document.getElementById('prPostModalMeta').innerHTML =
+    '<strong>' + escapeHtml(review.repo) + '#' + review.pr_number + '</strong>';
+  document.getElementById('prPostModalBody').innerHTML = renderMarkdown(review.review_text || '(no review text)');
+  document.getElementById('prPostModalConfirm').disabled = false;
+  document.getElementById('prPostModalConfirm').innerHTML = '&#x2705; Post to GitHub';
+  document.getElementById('prPostModal').style.display = '';
+}
+
+function closePRPostModal() {
+  document.getElementById('prPostModal').style.display = 'none';
+  _pendingPRPostId = null;
+}
+
+async function confirmPRPost() {
+  var id = _pendingPRPostId;
+  if (!id) return;
+  var confirmBtn = document.getElementById('prPostModalConfirm');
+  confirmBtn.disabled = true;
+  confirmBtn.innerHTML = '&#x23F3; Posting...';
+  try {
+    var resp = await fetch(API + '/api/pr-reviews/' + id + '/post-comment', { method: 'POST' });
+    var data = await resp.json();
+    if (data.status === 'posted') {
+      showToast('PR review posted to ' + data.repo + '#' + data.pr_number, 'success');
+      closePRPostModal();
+      var btn = document.getElementById('pr-post-btn-' + id);
+      if (btn) { btn.innerHTML = '&#x2705; Posted'; btn.disabled = true; btn.style.color = 'var(--green)'; btn.style.borderColor = 'var(--green)'; }
+      setTimeout(loadPRReviews, 1000);
+    } else {
+      showToast('Failed: ' + (data.message || 'unknown error'), 'error');
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = '&#x2705; Post to GitHub';
+    }
+  } catch(e) {
+    showToast('Failed to post PR review', 'error');
+    confirmBtn.disabled = false;
+    confirmBtn.innerHTML = '&#x2705; Post to GitHub';
+  }
 }
 
 // =====================================================================
@@ -1282,6 +1468,11 @@ function connectWebSocket() {
           break;
         case 'repo_update':
           loadRepos();
+          break;
+        case 'pr_review_completed':
+          loadPRReviews();
+          loadStatus();
+          if (msg.data) showToast('PR review: ' + (msg.data.repo || '') + '#' + (msg.data.pr_number || '') + ' — ' + (msg.data.verdict || 'done'), 'success');
           break;
         case 'sandbox_update':
           // admin page handles its own refresh

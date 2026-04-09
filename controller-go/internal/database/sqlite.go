@@ -323,10 +323,14 @@ func GetStats(repo string) (RepoStats, error) {
 }
 
 type TotalStats struct {
-	TotalRuns        int `json:"total_runs"`
-	TotalProcessed   int `json:"total_processed"`
-	BugsConfirmed    int `json:"bugs_confirmed"`
-	NotReproducible  int `json:"not_reproducible"`
+	TotalRuns          int `json:"total_runs"`
+	TotalProcessed     int `json:"total_processed"`
+	BugsConfirmed      int `json:"bugs_confirmed"`
+	NotReproducible    int `json:"not_reproducible"`
+	PRsReviewed        int `json:"prs_reviewed"`
+	PRsApproved        int `json:"prs_approved"`
+	PRsChangesReq      int `json:"prs_changes_requested"`
+	PRsCommented       int `json:"prs_commented"`
 }
 
 func GetTotalStats() (TotalStats, error) {
@@ -335,6 +339,10 @@ func GetTotalStats() (TotalStats, error) {
 	db.QueryRow("SELECT COUNT(*) FROM processed_issues").Scan(&s.TotalProcessed)
 	db.QueryRow("SELECT COUNT(*) FROM runs WHERE verdict = 'BUG_CONFIRMED'").Scan(&s.BugsConfirmed)
 	db.QueryRow("SELECT COUNT(*) FROM runs WHERE verdict = 'NOT_REPRODUCIBLE'").Scan(&s.NotReproducible)
+	db.QueryRow("SELECT COUNT(*) FROM pr_reviews").Scan(&s.PRsReviewed)
+	db.QueryRow("SELECT COUNT(*) FROM pr_reviews WHERE verdict = 'APPROVE'").Scan(&s.PRsApproved)
+	db.QueryRow("SELECT COUNT(*) FROM pr_reviews WHERE verdict = 'CHANGES_REQUESTED'").Scan(&s.PRsChangesReq)
+	db.QueryRow("SELECT COUNT(*) FROM pr_reviews WHERE verdict = 'COMMENT'").Scan(&s.PRsCommented)
 	return s, nil
 }
 
@@ -746,6 +754,19 @@ func GetPRReviewsByPR(repo string, prNumber int) ([]PRReview, error) {
 	}
 	defer rows.Close()
 	return scanPRReviews(rows)
+}
+
+// DeduplicatePRReviews removes duplicate PR reviews, keeping only the latest per (repo, pr_number).
+func DeduplicatePRReviews() (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(`DELETE FROM pr_reviews WHERE id NOT IN (
+		SELECT MAX(id) FROM pr_reviews GROUP BY repo, pr_number
+	)`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func MarkPRReviewPosted(id int64) error {
