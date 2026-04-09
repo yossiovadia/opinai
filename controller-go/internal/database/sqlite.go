@@ -138,6 +138,13 @@ func migrate() error {
 	)`)
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo ON pr_reviews(repo)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_pr_reviews_repo_pr ON pr_reviews(repo, pr_number)")
+	db.Exec(`CREATE TABLE IF NOT EXISTS pending_pr_reviews (
+		repo TEXT NOT NULL,
+		pr_number INTEGER NOT NULL,
+		title TEXT DEFAULT '',
+		created_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (repo, pr_number)
+	)`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS infra_deps (
 		name TEXT NOT NULL PRIMARY KEY,
 		namespace TEXT NOT NULL DEFAULT 'opinai-infra',
@@ -429,6 +436,60 @@ func GetAllPending() []PendingItem {
 	for rows.Next() {
 		var p PendingItem
 		rows.Scan(&p.Repo, &p.Issue, &p.Title)
+		items = append(items, p)
+	}
+	return items
+}
+
+// --- Pending PR Reviews ---
+
+type PendingPR struct {
+	Repo     string `json:"repo"`
+	PRNumber int    `json:"pr_number"`
+	Title    string `json:"title"`
+}
+
+func AddPendingPR(repo string, prNumber int, title string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec(
+		"INSERT OR IGNORE INTO pending_pr_reviews (repo, pr_number, title) VALUES (?, ?, ?)",
+		repo, prNumber, title,
+	)
+	return err
+}
+
+func DeletePendingPR(repo string, prNumber int) {
+	mu.Lock()
+	defer mu.Unlock()
+	db.Exec("DELETE FROM pending_pr_reviews WHERE repo = ? AND pr_number = ?", repo, prNumber)
+}
+
+func GetPendingPRs(repo string) []PendingPR {
+	rows, err := db.Query("SELECT repo, pr_number, title FROM pending_pr_reviews WHERE repo = ? ORDER BY created_at", repo)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var items []PendingPR
+	for rows.Next() {
+		var p PendingPR
+		rows.Scan(&p.Repo, &p.PRNumber, &p.Title)
+		items = append(items, p)
+	}
+	return items
+}
+
+func GetAllPendingPRs() []PendingPR {
+	rows, err := db.Query("SELECT repo, pr_number, title FROM pending_pr_reviews ORDER BY created_at")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var items []PendingPR
+	for rows.Next() {
+		var p PendingPR
+		rows.Scan(&p.Repo, &p.PRNumber, &p.Title)
 		items = append(items, p)
 	}
 	return items

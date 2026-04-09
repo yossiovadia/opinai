@@ -196,6 +196,23 @@ func (p *Poller) StartPendingProcessor() {
 			// Process one at a time, then re-check on next cycle
 			break
 		}
+
+		// Also process pending PR reviews
+		pendingPRs := database.GetAllPendingPRs()
+		for _, pr := range pendingPRs {
+			_, repoActive := p.jobs.countRunningJobs(pr.Repo)
+			if repoActive {
+				continue
+			}
+
+			slog.Info("pending processor: creating PR review job", "repo", pr.Repo, "pr", pr.PRNumber)
+			if err := p.jobs.CreatePRReviewJob(pr.Repo, pr.PRNumber, pr.Title); err != nil {
+				slog.Error("pending processor: failed to create PR review job", "repo", pr.Repo, "pr", pr.PRNumber, "error", err)
+			}
+			// Process one at a time, then re-check on next cycle
+			break
+		}
+
 		time.Sleep(10 * time.Second)
 	}
 }

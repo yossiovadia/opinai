@@ -358,6 +358,108 @@ func TestGetPRReviewsByPR(t *testing.T) {
 	}
 }
 
+func TestPendingPRTable(t *testing.T) {
+	setupTestDB(t)
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='pending_pr_reviews'").Scan(&name)
+	if err != nil {
+		t.Fatalf("pending_pr_reviews table not found: %v", err)
+	}
+}
+
+func TestAddPendingPR(t *testing.T) {
+	setupTestDB(t)
+	if err := AddPendingPR("owner/repo", 10, "Fix bug"); err != nil {
+		t.Fatalf("AddPendingPR: %v", err)
+	}
+	items := GetAllPendingPRs()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 pending PR, got %d", len(items))
+	}
+	if items[0].Repo != "owner/repo" || items[0].PRNumber != 10 || items[0].Title != "Fix bug" {
+		t.Errorf("unexpected item: %+v", items[0])
+	}
+}
+
+func TestAddPendingPRDuplicate(t *testing.T) {
+	setupTestDB(t)
+	AddPendingPR("owner/repo", 10, "Fix bug")
+	// Duplicate insert should be ignored (INSERT OR IGNORE)
+	if err := AddPendingPR("owner/repo", 10, "Updated title"); err != nil {
+		t.Fatalf("duplicate AddPendingPR: %v", err)
+	}
+	items := GetAllPendingPRs()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 pending PR after duplicate, got %d", len(items))
+	}
+	// Title should remain original since INSERT OR IGNORE
+	if items[0].Title != "Fix bug" {
+		t.Errorf("title = %q, want original 'Fix bug'", items[0].Title)
+	}
+}
+
+func TestDeletePendingPR(t *testing.T) {
+	setupTestDB(t)
+	AddPendingPR("owner/repo", 10, "Fix bug")
+	AddPendingPR("owner/repo", 11, "Add feature")
+	DeletePendingPR("owner/repo", 10)
+	items := GetAllPendingPRs()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 pending PR after delete, got %d", len(items))
+	}
+	if items[0].PRNumber != 11 {
+		t.Errorf("remaining PR number = %d, want 11", items[0].PRNumber)
+	}
+}
+
+func TestDeletePendingPRNonExistent(t *testing.T) {
+	setupTestDB(t)
+	// Should not panic or error on non-existent entry
+	DeletePendingPR("owner/repo", 999)
+}
+
+func TestGetPendingPRs(t *testing.T) {
+	setupTestDB(t)
+	AddPendingPR("owner/repo", 10, "Fix bug")
+	AddPendingPR("owner/repo", 11, "Add feature")
+	AddPendingPR("other/repo", 5, "Other PR")
+
+	items := GetPendingPRs("owner/repo")
+	if len(items) != 2 {
+		t.Fatalf("expected 2 pending PRs for owner/repo, got %d", len(items))
+	}
+
+	items2 := GetPendingPRs("other/repo")
+	if len(items2) != 1 {
+		t.Fatalf("expected 1 pending PR for other/repo, got %d", len(items2))
+	}
+
+	items3 := GetPendingPRs("nonexistent/repo")
+	if len(items3) != 0 {
+		t.Errorf("expected 0 pending PRs for nonexistent repo, got %d", len(items3))
+	}
+}
+
+func TestGetAllPendingPRs(t *testing.T) {
+	setupTestDB(t)
+	AddPendingPR("a/repo", 1, "PR 1")
+	AddPendingPR("b/repo", 2, "PR 2")
+	AddPendingPR("a/repo", 3, "PR 3")
+
+	items := GetAllPendingPRs()
+	if len(items) != 3 {
+		t.Fatalf("expected 3 total pending PRs, got %d", len(items))
+	}
+}
+
+func TestGetAllPendingPRsEmpty(t *testing.T) {
+	setupTestDB(t)
+	items := GetAllPendingPRs()
+	if len(items) != 0 {
+		t.Errorf("expected 0 pending PRs on empty table, got %d", len(items))
+	}
+}
+
 func TestMarkPRReviewPosted(t *testing.T) {
 	setupTestDB(t)
 	id, _ := AddPRReview(PRReview{Repo: "r/r", PRNumber: 1, CreatedAt: "2026-01-01"})

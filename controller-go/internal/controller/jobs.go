@@ -483,11 +483,13 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 	// Concurrency control: same limits as reproduction jobs
 	totalActive, repoActive := jm.countRunningJobs(repo)
 	if repoActive {
-		slog.Info("repo already has a running job — skipping PR review", "repo", repo, "pr", prNumber)
+		slog.Info("repo already has a running job — queueing PR review", "repo", repo, "pr", prNumber)
+		database.AddPendingPR(repo, prNumber, title)
 		return nil
 	}
 	if totalActive >= MaxConcurrentJobs {
-		slog.Info("max concurrent jobs reached — skipping PR review", "repo", repo, "pr", prNumber, "active", totalActive)
+		slog.Info("max concurrent jobs reached — queueing PR review", "repo", repo, "pr", prNumber, "active", totalActive)
+		database.AddPendingPR(repo, prNumber, title)
 		return nil
 	}
 
@@ -677,6 +679,9 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 	if err != nil {
 		return fmt.Errorf("create PR review job %s: %w", name, err)
 	}
+
+	// Successfully created — remove from pending queue if it was queued
+	database.DeletePendingPR(repo, prNumber)
 
 	jm.broadcast("pr_review_created", map[string]any{"repo": repo, "pr": prNumber})
 	slog.Info("created PR review job", "job", name, "repo", repo, "pr", prNumber, "title", title)
@@ -904,6 +909,18 @@ func (jm *JobManager) harvestPRReviewJob(job *batchv1.Job, repo, title, duration
 				author = strings.TrimSpace(strings.Trim(parts[1], " -"))
 			}
 		}
+	}
+
+	// Check if a review already exists (callback API is the primary path; harvester is fallback)
+	if existing, _ := database.GetPRReviewsByPR(repo, prNumber); len(existing) > 0 {
+		slog.Info("PR review already recorded via callback, skipping harvest", "job", name, "repo", repo, "pr", prNumber)
+		jm.mu.Lock()
+		jm.recorded[name] = true
+		jm.mu.Unlock()
+		if err := jm.DeleteJob(name); err != nil {
+			slog.Warn("failed to delete completed PR review job", "job", name, "error", err)
+		}
+		return
 	}
 
 	_, dbErr := database.AddPRReview(database.PRReview{

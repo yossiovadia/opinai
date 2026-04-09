@@ -278,9 +278,8 @@ func (s *Server) handlePullRequestWebhook(w http.ResponseWriter, body []byte) {
 	}
 
 	if err := s.reviewPR(repo, prNumber, prTitle); err != nil {
-		slog.Error("webhook: failed to create PR review job", "error", err)
-		jsonError(w, "failed to queue PR review: "+err.Error(), 500)
-		return
+		slog.Warn("webhook: PR review job creation failed, queueing as pending", "repo", repo, "pr", prNumber, "error", err)
+		database.AddPendingPR(repo, prNumber, prTitle)
 	}
 
 	json.NewEncoder(w).Encode(map[string]any{
