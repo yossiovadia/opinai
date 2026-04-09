@@ -66,8 +66,16 @@ func (s *Server) handleAdminReposAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	database.AddMonitoredRepo(req.Name)
-	s.state.UpdateRepo(req.Name, RepoStatus{ManualOnly: true})
+	s.state.UpdateRepo(req.Name, RepoStatus{ManualOnly: true, IsAnalyzing: true})
 	json.NewEncoder(w).Encode(map[string]any{"status": "added", "name": req.Name})
+
+	// Auto-trigger deep analysis in background
+	go func() {
+		slog.Info("auto-starting deep analysis for new repo", "repo", req.Name)
+		s.runDeepAnalysis(req.Name)
+		s.state.UpdateRepo(req.Name, RepoStatus{ManualOnly: true, IsAnalyzing: false})
+		slog.Info("deep analysis complete for new repo", "repo", req.Name)
+	}()
 }
 
 // --- PUT /api/admin/repos ---

@@ -38,10 +38,11 @@ type State struct {
 }
 
 type RepoStatus struct {
-	Pending    int    `json:"pending"`
-	Processed  int    `json:"processed"`
-	ManualOnly bool   `json:"manual_only"`
-	LastCheck  string `json:"last_check"`
+	Pending     int    `json:"pending"`
+	Processed   int    `json:"processed"`
+	ManualOnly  bool   `json:"manual_only"`
+	LastCheck   string `json:"last_check"`
+	IsAnalyzing bool   `json:"is_analyzing"`
 }
 
 type CheckResult struct {

@@ -165,6 +165,63 @@ waitLoop:
 	})
 }
 
+// runDeepAnalysis performs a full deep analysis of a repo (agent scan + deployment analysis).
+// Used by both the SSE stream handler and auto-analysis on repo add.
+func (s *Server) runDeepAnalysis(repo string) {
+	cloneDir, err := cloneRepoForAnalysis(repo)
+	if err != nil {
+		slog.Warn("deep analysis: clone failed", "repo", repo, "error", err)
+		return
+	}
+	defer os.RemoveAll(cloneDir)
+
+	analysis, err := agent.AnalyzeRepo(cloneDir, repo, 0)
+	if err != nil {
+		slog.Warn("deep analysis: agent failed", "repo", repo, "error", err)
+		return
+	}
+
+	flatMap := analysis.ToFlatMap()
+	for k, v := range flatMap {
+		if v != "" {
+			database.SetRepoMemoryWithReason(repo, k, v, "auto deep analysis on repo add", "controller")
+		}
+	}
+
+	files := fetchRepoDeployFiles(repo)
+	readme := fetchRepoReadme(repo)
+	clusterState := readClusterState()
+	profile := config.LoadRepoProfile(repo)
+	profileJSON, _ := json.Marshal(profile)
+
+	richAnalysis := ""
+	raKey := "rich_analysis"
+	if mem, _ := database.GetRepoMemory(repo, &raKey); len(mem) > 0 {
+		richAnalysis = mem["rich_analysis"]
+	}
+
+	planData, planErr := ai.AnalyzeDeployment(repo, readme, files, clusterState, string(profileJSON), richAnalysis, cloneDir)
+	if planErr == nil && planData != nil {
+		planBytes, _ := json.Marshal(planData)
+		database.SaveDeploymentPlan(repo, string(planBytes))
+		autoUpdateProfileFromPlan(repo, planData)
+
+		if rr, ok := planData["runtime_requirements"]; ok {
+			rrBytes, _ := json.Marshal(rr)
+			database.SetRepoMemoryWithReason(repo, "runtime_requirements", string(rrBytes), "auto deep analysis on repo add", "controller")
+		}
+		for _, key := range []string{"run_command", "build_command", "health_endpoint"} {
+			if v, ok := planData[key]; ok {
+				if str, ok := v.(string); ok && str != "" {
+					database.SetRepoMemoryWithReason(repo, key, str, "auto deep analysis on repo add", "controller")
+				}
+			}
+		}
+	}
+
+	slog.Info("deep analysis completed", "repo", repo, "endpoints", len(analysis.APISurface.Endpoints), "tool_calls", analysis.ToolCalls)
+}
+
 // handleAnalyzeStreamFallback is the original shallow analysis (README + deps only).
 func (s *Server) handleAnalyzeStreamFallback(w http.ResponseWriter, r *http.Request, repo string) {
 	writeSSE(w, "progress", map[string]string{
