@@ -8,6 +8,16 @@
 </head>
 <body>
 
+<nav class="opinai-nav">
+  <a href="/" class="nav-logo">&#x1F3B3; OpinAI</a>
+  <div class="nav-links">
+    <a href="/" class="nav-link active">Dashboard</a>
+    <a href="/intelligence" class="nav-link">Intelligence</a>
+    <a href="/memory" class="nav-link">Memory</a>
+    <a href="/admin" class="nav-link">Admin</a>
+  </div>
+</nav>
+
 <div class="refresh-bar" id="refreshBar"></div>
 
 <!-- Toast notifications -->
@@ -15,7 +25,6 @@
 
 <header class="header">
   <div class="header-left">
-    <div class="header-logo">&#x1F3B3; OpinAI</div>
     <div class="header-tagline">"That's just, like, your opinion, man."</div>
   </div>
   <div class="header-right">
@@ -28,7 +37,6 @@
     </span>
     <span>Uptime: <strong id="uptime">--</strong></span>
     <span>Polls: <strong id="pollCount">0</strong></span>
-    <a href="/admin" style="color:var(--text-dim);font-size:13px">&#x2699;&#xFE0F; Admin</a>
   </div>
 </header>
 
@@ -300,6 +308,7 @@ async function loadRepos() {
           '<div><span class="stat-value">' + (r.processed || 0) + '</span> <span class="stat-label">processed</span></div>' +
           (r.manual_only ? '' : '<div><span class="stat-value">' + (r.pending || 0) + '</span> <span class="stat-label">pending</span></div>') +
           '<div><a href="/memory?repo=' + encodeURIComponent(r.name) + '" style="text-decoration:none"><span class="stat-value">' + (r.memory_events || 0) + '</span> <span class="stat-label">memories</span></a></div>' +
+          '<div><a href="/intelligence?repo=' + encodeURIComponent(r.name) + '" style="text-decoration:none;color:var(--blue);font-size:12px">&#x1F9E0; intel</a></div>' +
         '</div>' +
         '<div class="card-footer">' +
           '<span>Last check: ' + timeAgo(r.last_check) + '</span>' +

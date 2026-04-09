@@ -6,8 +6,6 @@
   <title>OpinAI Admin</title>
   <link rel="stylesheet" href="/style.css">
   <style>
-    .admin-nav { padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--border); }
-    .admin-nav a { color: var(--blue); font-size: 13px; }
     .admin-grid { display: flex; flex-direction: column; gap: 20px; }
     .admin-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
     .admin-card h3 { font-size: 15px; margin-bottom: 12px; font-weight: 600; }
@@ -63,13 +61,19 @@
 </head>
 <body>
 
-<div class="admin-nav">
-  <a href="/">&larr; Back to Dashboard</a>
-</div>
+<nav class="opinai-nav">
+  <a href="/" class="nav-logo">&#x1F3B3; OpinAI</a>
+  <div class="nav-links">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/intelligence" class="nav-link">Intelligence</a>
+    <a href="/memory" class="nav-link">Memory</a>
+    <a href="/admin" class="nav-link active">Admin</a>
+  </div>
+</nav>
 
 <header class="header">
   <div class="header-left">
-    <div class="header-logo">&#x2699;&#xFE0F; OpinAI Admin</div>
+    <div class="header-logo">&#x2699;&#xFE0F; Admin</div>
   </div>
   <div class="header-right">
     <span id="adminPod">Pod: loading...</span>

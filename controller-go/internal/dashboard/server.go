@@ -339,6 +339,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/", serveFile("index.html", "text/html; charset=utf-8"))
 		r.Get("/admin", serveFile("admin.html", "text/html; charset=utf-8"))
 		r.Get("/memory", serveFile("memory.html", "text/html; charset=utf-8"))
+		r.Get("/intelligence", serveFile("intelligence.html", "text/html; charset=utf-8"))
 		r.Get("/style.css", serveFile("style.css", "text/css; charset=utf-8"))
 	}
 

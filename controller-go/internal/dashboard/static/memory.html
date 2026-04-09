@@ -260,6 +260,16 @@
 </head>
 <body>
 
+<nav class="opinai-nav">
+  <a href="/" class="nav-logo">&#x1F3B3; OpinAI</a>
+  <div class="nav-links">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/intelligence" class="nav-link">Intelligence</a>
+    <a href="/memory" class="nav-link active">Memory</a>
+    <a href="/admin" class="nav-link">Admin</a>
+  </div>
+</nav>
+
 <header class="header">
   <div class="header-left">
     <div class="header-logo">&#x1F9E0; Memory Journal</div>
@@ -269,15 +279,17 @@
     <select class="repo-select" id="repoSelect" onchange="loadRepo()">
       <option value="">Select a repo...</option>
     </select>
-    <a href="/" style="color:var(--text-dim);font-size:13px">Dashboard</a>
-    <a href="/admin" style="color:var(--text-dim);font-size:13px">Admin</a>
+    <a id="intelLink" href="/intelligence" class="btn" style="display:none;font-size:11px">&#x1F9E0; Intelligence</a>
+    <button id="reanalyzeBtn" class="btn btn-primary" style="display:none;font-size:11px" onclick="reanalyzeRepo()">&#x1F504; Re-analyze</button>
   </div>
 </header>
 
 <main class="main">
 
-  <div id="noRepo" class="empty">
-    Select a monitored repo to view its memory journal.
+  <div id="noRepo" class="empty" style="padding:60px 20px">
+    <div style="font-size:48px;margin-bottom:16px">&#x1F9E0;</div>
+    <div style="font-size:16px;font-weight:600;margin-bottom:8px">Memory Journal</div>
+    <div style="max-width:400px;margin:0 auto;line-height:1.6">Select a monitored repo to explore how OpinAI has learned about your project &mdash; every knowledge update, investigation finding, and outcome tracked over time.</div>
   </div>
 
   <div id="content" style="display:none">
@@ -380,6 +392,12 @@ function loadRepo() {
   }
   document.getElementById('noRepo').style.display = 'none';
   document.getElementById('content').style.display = '';
+
+  // Show intelligence + re-analyze buttons
+  var intelLink = document.getElementById('intelLink');
+  intelLink.style.display = '';
+  intelLink.href = '/intelligence?repo=' + encodeURIComponent(currentRepo);
+  document.getElementById('reanalyzeBtn').style.display = '';
 
   history.replaceState(null, '', '?repo=' + encodeURIComponent(currentRepo));
 
@@ -599,7 +617,7 @@ async function loadTrackRecord() {
     });
 
     if (summary.length === 0) {
-      cards.innerHTML = '<div class="stat-card" style="grid-column:1/-1"><div class="stat-card-value" style="color:var(--text-dim)">-</div><div class="stat-card-label">No outcomes recorded yet</div></div>';
+      cards.innerHTML = '<div class="stat-card" style="grid-column:1/-1;padding:32px"><div style="font-size:32px;margin-bottom:8px">&#x1F4CA;</div><div class="stat-card-label" style="font-size:14px;font-weight:600;margin-bottom:6px">No outcomes yet</div><div class="stat-card-label" style="text-transform:none;letter-spacing:0">Outcomes appear automatically as issues get resolved and PRs get merged. Use the Check Outcomes button in Admin to trigger a check.</div></div>';
     }
 
     const outcomes = data.outcomes || [];
@@ -691,6 +709,36 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+async function reanalyzeRepo() {
+  if (!currentRepo) return;
+  var btn = document.getElementById('reanalyzeBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin" style="display:inline-block">&#x1F504;</span> Analyzing...';
+  try {
+    var source = new EventSource(API + '/api/admin/analyze-stream?repo=' + encodeURIComponent(currentRepo));
+    source.addEventListener('done', function() {
+      source.close();
+      btn.disabled = false;
+      btn.innerHTML = '&#x1F504; Re-analyze';
+      loadRepo();
+    });
+    source.addEventListener('error', function() {
+      source.close();
+      btn.disabled = false;
+      btn.innerHTML = '&#x1F504; Re-analyze';
+    });
+    source.onerror = function() {
+      if (source.readyState === EventSource.CLOSED) {
+        btn.disabled = false;
+        btn.innerHTML = '&#x1F504; Re-analyze';
+      }
+    };
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '&#x1F504; Re-analyze';
+  }
 }
 
 init();

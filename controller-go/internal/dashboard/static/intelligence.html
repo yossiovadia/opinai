@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpinAI Intelligence</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .repo-select {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+      font-family: var(--font);
+      outline: none;
+      min-width: 220px;
+    }
+    .repo-select:focus { border-color: var(--blue); }
+
+    .intel-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Hero */
+    .intel-hero {
+      background: linear-gradient(135deg, rgba(88,166,255,0.06) 0%, rgba(63,185,80,0.04) 100%);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 40px;
+      margin-bottom: 28px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 40px;
+      align-items: center;
+      animation: fadeInUp 0.5s ease-out;
+    }
+
+    .intel-hero-name {
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .intel-hero-desc {
+      color: var(--text-dim);
+      font-size: 15px;
+      margin-bottom: 16px;
+      max-width: 600px;
+      line-height: 1.6;
+    }
+
+    .intel-hero-badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tech-badge {
+      padding: 4px 12px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 500;
+      background: rgba(88,166,255,0.1);
+      color: var(--blue);
+      border: 1px solid rgba(88,166,255,0.2);
+    }
+
+    /* Depth ring */
+    .depth-ring-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .depth-ring { width: 160px; height: 160px; }
+
+    .depth-ring-track { fill: none; stroke: var(--border); stroke-width: 8; }
+
+    .depth-ring-fill {
+      fill: none;
+      stroke-width: 8;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1.5s ease-out;
+    }
+
+    .depth-ring-text {
+      fill: var(--text);
+      font-size: 28px;
+      font-weight: 700;
+      text-anchor: middle;
+      dominant-baseline: central;
+    }
+
+    .depth-ring-sublabel {
+      fill: var(--text-dim);
+      font-size: 10px;
+      text-anchor: middle;
+    }
+
+    /* Stats */
+    .intel-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      margin-bottom: 36px;
+      animation: fadeInUp 0.5s ease-out 0.05s both;
+    }
+
+    .intel-stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .intel-stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      opacity: 0.6;
+    }
+
+    .intel-stat-card:nth-child(1)::before { background: var(--blue); }
+    .intel-stat-card:nth-child(2)::before { background: var(--blue); }
+    .intel-stat-card:nth-child(3)::before { background: var(--yellow); }
+    .intel-stat-card:nth-child(4)::before { background: var(--green); }
+
+    .intel-stat-value {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .intel-stat-label {
+      font-size: 12px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Section */
+    .intel-section {
+      margin-bottom: 40px;
+    }
+
+    .intel-section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .intel-section-title {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .intel-section-badge {
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(88,166,255,0.1);
+      color: var(--blue);
+    }
+
+    #trackSection { animation: fadeInUp 0.5s ease-out 0.1s both; }
+    #insightsSection { animation: fadeInUp 0.5s ease-out 0.15s both; }
+    #archSection { animation: fadeInUp 0.5s ease-out 0.2s both; }
+
+    @keyframes fadeInUp {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Track Record */
+    .track-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .track-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .track-ring { width: 100px; height: 100px; flex-shrink: 0; }
+
+    .track-ring-text {
+      fill: var(--text);
+      font-size: 22px;
+      font-weight: 700;
+      text-anchor: middle;
+      dominant-baseline: central;
+    }
+
+    .track-details { flex: 1; }
+
+    .track-label {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .track-stat-row {
+      display: flex;
+      gap: 16px;
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
+
+    .track-stat {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Streak banner */
+    .streak-banner {
+      background: linear-gradient(135deg, rgba(63,185,80,0.1) 0%, rgba(63,185,80,0.03) 100%);
+      border: 1px solid rgba(63,185,80,0.3);
+      border-radius: 12px;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .streak-icon { font-size: 28px; }
+    .streak-text { font-size: 14px; color: var(--green); font-weight: 600; }
+    .streak-sub { font-size: 12px; color: var(--text-dim); }
+
+    /* Timeline dots */
+    .timeline-dots {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+    }
+
+    .timeline-label {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .dots-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .dot {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      cursor: default;
+      transition: transform 0.15s;
+      position: relative;
+      font-weight: 600;
+    }
+
+    .dot:hover { transform: scale(1.4); z-index: 1; }
+    .dot-correct { background: rgba(63,185,80,0.2); color: var(--green); }
+    .dot-wrong { background: rgba(248,81,73,0.2); color: var(--red); }
+    .dot-pending { background: rgba(210,153,34,0.2); color: var(--yellow); }
+
+    .dot-tooltip {
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 400;
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s;
+      z-index: 10;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .dot:hover .dot-tooltip { opacity: 1; }
+
+    /* Insights */
+    .insights-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px;
+    }
+
+    .insight-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+    }
+
+    .insight-card:hover {
+      border-color: rgba(88,166,255,0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    }
+
+    .insight-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .insight-type {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .insight-type-bug { background: rgba(248,81,73,0.15); color: var(--red); }
+    .insight-type-review { background: rgba(88,166,255,0.15); color: var(--blue); }
+    .insight-type-arch { background: rgba(163,113,247,0.15); color: #a371f7; }
+
+    .insight-confirmed {
+      font-size: 11px;
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    .insight-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+
+    .insight-context {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+
+    .insight-desc {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .insight-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--blue);
+      margin-top: 10px;
+    }
+
+    /* Architecture */
+    .arch-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .arch-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    .arch-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .arch-panel-count {
+      color: var(--text-dim);
+      font-weight: 400;
+      font-size: 12px;
+    }
+
+    .endpoint-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      font-size: 13px;
+    }
+
+    .endpoint-item:last-child { border-bottom: none; }
+
+    .http-method {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      min-width: 44px;
+      text-align: center;
+    }
+
+    .method-get { background: rgba(63,185,80,0.15); color: var(--green); }
+    .method-post { background: rgba(88,166,255,0.15); color: var(--blue); }
+    .method-put { background: rgba(210,153,34,0.15); color: var(--yellow); }
+    .method-patch { background: rgba(210,153,34,0.15); color: var(--yellow); }
+    .method-delete { background: rgba(248,81,73,0.15); color: var(--red); }
+
+    .endpoint-path {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .bugarea-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+    }
+
+    .bugarea-item:last-child { border-bottom: none; }
+
+    .bugarea-file {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      color: var(--blue);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 250px;
+    }
+
+    .bugarea-count {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 8px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .heat-high { background: rgba(248,81,73,0.15); color: var(--red); }
+    .heat-medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
+    .heat-low { background: rgba(88,166,255,0.15); color: var(--blue); }
+
+    .profile-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(48,54,61,0.5);
+      font-size: 13px;
+    }
+
+    .profile-row:last-child { border-bottom: none; }
+
+    .profile-label {
+      color: var(--text-dim);
+      font-size: 12px;
+      min-width: 100px;
+      flex-shrink: 0;
+    }
+
+    .profile-value {
+      text-align: right;
+      word-break: break-word;
+    }
+
+    /* Empty states */
+    .intel-empty {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 48px;
+      text-align: center;
+    }
+
+    .intel-empty-icon { font-size: 48px; margin-bottom: 16px; }
+    .intel-empty-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+
+    .intel-empty-desc {
+      font-size: 13px;
+      color: var(--text-dim);
+      max-width: 420px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .intel-hero {
+        grid-template-columns: 1fr;
+        padding: 24px;
+        text-align: center;
+      }
+      .intel-hero-name { font-size: 22px; }
+      .intel-hero-badges { justify-content: center; }
+      .depth-ring-container { margin: 0 auto; }
+      .depth-ring { width: 120px; height: 120px; }
+      .insights-grid { grid-template-columns: 1fr; }
+      .arch-grid { grid-template-columns: 1fr; }
+      .intel-stats { grid-template-columns: repeat(2, 1fr); }
+      .intel-stat-value { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="opinai-nav">
+  <a href="/" class="nav-logo">&#x1F3B3; OpinAI</a>
+  <div class="nav-links">
+    <a href="/" class="nav-link">Dashboard</a>
+    <a href="/intelligence" class="nav-link active">Intelligence</a>
+    <a href="/memory" class="nav-link">Memory</a>
+    <a href="/admin" class="nav-link">Admin</a>
+  </div>
+</nav>
+
+<div class="intel-bar">
+  <select class="repo-select" id="repoSelect" onchange="loadRepo()">
+    <option value="">Select a repo to view intelligence...</option>
+  </select>
+</div>
+
+<main class="main" style="max-width:1100px">
+
+  <div id="noRepo" class="intel-empty" style="margin-top:40px">
+    <div class="intel-empty-icon">&#x1F9E0;</div>
+    <div class="intel-empty-title">Project Intelligence</div>
+    <div class="intel-empty-desc">
+      Select a monitored repo to see what OpinAI has learned &mdash; track record, architecture understanding, key insights, and more.
+    </div>
+  </div>
+
+  <div id="content" style="display:none">
+
+    <!-- Hero -->
+    <section class="intel-hero">
+      <div>
+        <h1 class="intel-hero-name" id="heroName"></h1>
+        <p class="intel-hero-desc" id="heroDesc">Loading...</p>
+        <div class="intel-hero-badges" id="heroBadges"></div>
+      </div>
+      <div class="depth-ring-container">
+        <svg class="depth-ring" viewBox="0 0 120 120">
+          <circle class="depth-ring-track" cx="60" cy="60" r="52"/>
+          <circle class="depth-ring-fill" id="depthRingFill" cx="60" cy="60" r="52"
+            stroke="var(--green)" stroke-dasharray="326.7" stroke-dashoffset="326.7"
+            transform="rotate(-90 60 60)"/>
+          <text class="depth-ring-text" x="60" y="54" id="depthText">0%</text>
+          <text class="depth-ring-sublabel" x="60" y="74">Knowledge</text>
+        </svg>
+      </div>
+    </section>
+
+    <!-- Stats -->
+    <div class="intel-stats">
+      <div class="intel-stat-card">
+        <div class="intel-stat-value" id="statInvestigations" style="color:var(--blue)">0</div>
+        <div class="intel-stat-label">Investigations</div>
+      </div>
+      <div class="intel-stat-card">
+        <div class="intel-stat-value" id="statPRReviews" style="color:var(--blue)">0</div>
+        <div class="intel-stat-label">PR Reviews</div>
+      </div>
+      <div class="intel-stat-card">
+        <div class="intel-stat-value" id="statFindings" style="color:var(--yellow)">0</div>
+        <div class="intel-stat-label">Findings</div>
+      </div>
+      <div class="intel-stat-card">
+        <div class="intel-stat-value" id="statKnowledge" style="color:var(--green)">0</div>
+        <div class="intel-stat-label">Knowledge Points</div>
+      </div>
+    </div>
+
+    <!-- Track Record -->
+    <section class="intel-section" id="trackSection">
+      <div class="intel-section-header">
+        <h2 class="intel-section-title">&#x1F3AF; Track Record</h2>
+        <span class="intel-section-badge" id="trackBadge"></span>
+      </div>
+      <div id="streakBanner"></div>
+      <div class="track-grid" id="trackGrid"></div>
+      <div id="timelineDots"></div>
+    </section>
+
+    <!-- Key Insights -->
+    <section class="intel-section" id="insightsSection">
+      <div class="intel-section-header">
+        <h2 class="intel-section-title">&#x1F4A1; Key Insights</h2>
+        <span class="intel-section-badge" id="insightsBadge"></span>
+      </div>
+      <div class="insights-grid" id="insightsGrid"></div>
+    </section>
+
+    <!-- Architecture Understanding -->
+    <section class="intel-section" id="archSection">
+      <div class="intel-section-header">
+        <h2 class="intel-section-title">&#x1F3D7;&#xFE0F; Architecture Understanding</h2>
+      </div>
+      <div class="arch-grid" id="archGrid"></div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+var API = '';
+var currentRepo = '';
+var allData = {};
+
+async function api(path) {
+  var token = localStorage.getItem('opinai_token') || '';
+  var resp = await fetch(API + path, {
+    headers: token ? { 'Authorization': 'Bearer ' + token } : {}
+  });
+  if (!resp.ok) throw new Error('API error: ' + resp.status);
+  return resp.json();
+}
+
+function esc(s) {
+  if (!s) return '';
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  var d = new Date(dateStr + (dateStr.includes('Z') ? '' : 'Z'));
+  var diff = Math.floor((Date.now() - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  if (diff < 604800) return Math.floor(diff / 86400) + 'd ago';
+  return d.toLocaleDateString();
+}
+
+function truncate(s, max) {
+  if (!s || s.length <= max) return s;
+  return s.substring(0, max) + '...';
+}
+
+function animateCounter(el, target) {
+  if (target === 0) { el.textContent = '0'; return; }
+  var duration = 1200;
+  var start = Date.now();
+  function tick() {
+    var elapsed = Date.now() - start;
+    var progress = Math.min(elapsed / duration, 1);
+    var eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(target * eased);
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function animateRing(el, textEl, pct) {
+  var circ = 326.7;
+  var target = circ * (1 - pct / 100);
+  el.style.transition = 'none';
+  el.setAttribute('stroke-dashoffset', circ);
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      el.style.transition = 'stroke-dashoffset 1.5s ease-out';
+      el.setAttribute('stroke-dashoffset', target);
+    });
+  });
+  // Animate text
+  if (pct === 0) { textEl.textContent = '0%'; return; }
+  var duration = 1500;
+  var start = Date.now();
+  function tick() {
+    var elapsed = Date.now() - start;
+    var progress = Math.min(elapsed / duration, 1);
+    var eased = 1 - Math.pow(1 - progress, 3);
+    textEl.textContent = Math.round(pct * eased) + '%';
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function getKV(knowledge, key) {
+  var entry = knowledge[key];
+  if (!entry) return '';
+  return typeof entry === 'object' ? (entry.value || '') : entry;
+}
+
+// =====================================================================
+// Init
+// =====================================================================
+
+async function init() {
+  try {
+    var repos = await api('/api/repos');
+    var sel = document.getElementById('repoSelect');
+    repos.forEach(function(r) {
+      var opt = document.createElement('option');
+      opt.value = r.name;
+      opt.textContent = r.name;
+      sel.appendChild(opt);
+    });
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('repo')) {
+      sel.value = params.get('repo');
+      loadRepo();
+    }
+  } catch(e) {
+    console.error('Failed to load repos:', e);
+  }
+}
+
+async function loadRepo() {
+  currentRepo = document.getElementById('repoSelect').value;
+  if (!currentRepo) {
+    document.getElementById('noRepo').style.display = '';
+    document.getElementById('content').style.display = 'none';
+    return;
+  }
+  document.getElementById('noRepo').style.display = 'none';
+  document.getElementById('content').style.display = '';
+  history.replaceState(null, '', '?repo=' + encodeURIComponent(currentRepo));
+
+  try {
+    var results = await Promise.all([
+      api('/api/admin/memory?repo=' + encodeURIComponent(currentRepo)),
+      api('/api/admin/memory/outcomes?repo=' + encodeURIComponent(currentRepo)),
+      api('/api/admin/memory/findings?repo=' + encodeURIComponent(currentRepo)),
+      api('/api/runs?repo=' + encodeURIComponent(currentRepo)),
+      api('/api/pr-reviews?repo=' + encodeURIComponent(currentRepo)).catch(function() { return []; })
+    ]);
+    allData = {
+      memory: results[0],
+      outcomes: results[1],
+      findings: results[2],
+      runs: results[3],
+      prReviews: results[4]
+    };
+    renderAll();
+  } catch(e) {
+    console.error('Failed to load intelligence data:', e);
+  }
+}
+
+function renderAll() {
+  renderHero();
+  renderStats();
+  renderTrackRecord();
+  renderInsights();
+  renderArchitecture();
+}
+
+// =====================================================================
+// Hero
+// =====================================================================
+
+function renderHero() {
+  var knowledge = (allData.memory && allData.memory.knowledge) || {};
+
+  document.getElementById('heroName').textContent = currentRepo;
+
+  var desc = getKV(knowledge, 'description');
+  document.getElementById('heroDesc').textContent = desc || 'No description yet \u2014 run an analysis to learn about this project.';
+
+  // Tech stack badges
+  var techStack = getKV(knowledge, 'tech_stack');
+  var badges = document.getElementById('heroBadges');
+  if (techStack) {
+    var techs = techStack.split(/[,;|]+/).map(function(t) { return t.trim(); }).filter(function(t) { return t; });
+    badges.innerHTML = techs.map(function(t) {
+      return '<span class="tech-badge">' + esc(t) + '</span>';
+    }).join('');
+  } else {
+    badges.innerHTML = '';
+  }
+
+  // Knowledge depth
+  var knownKeys = Object.keys(knowledge);
+  var depthPct = Math.min(100, Math.round((knownKeys.length / 15) * 100));
+
+  var ringEl = document.getElementById('depthRingFill');
+  if (depthPct >= 70) ringEl.setAttribute('stroke', 'var(--green)');
+  else if (depthPct >= 40) ringEl.setAttribute('stroke', 'var(--yellow)');
+  else ringEl.setAttribute('stroke', 'var(--blue)');
+
+  animateRing(ringEl, document.getElementById('depthText'), depthPct);
+}
+
+// =====================================================================
+// Stats
+// =====================================================================
+
+function renderStats() {
+  var runs = allData.runs || [];
+  var prReviews = allData.prReviews || [];
+  var findings = (allData.findings && allData.findings.findings) || [];
+  var knowledge = (allData.memory && allData.memory.knowledge) || {};
+
+  animateCounter(document.getElementById('statInvestigations'), runs.length);
+  animateCounter(document.getElementById('statPRReviews'), prReviews.length);
+  animateCounter(document.getElementById('statFindings'), findings.length);
+  animateCounter(document.getElementById('statKnowledge'), Object.keys(knowledge).length);
+}
+
+// =====================================================================
+// Track Record
+// =====================================================================
+
+function renderTrackRecord() {
+  var outcomes = allData.outcomes || {};
+  var summary = outcomes.summary || [];
+  var outcomeList = outcomes.outcomes || [];
+
+  var totalCorrect = 0, totalWrong = 0, totalPending = 0;
+  summary.forEach(function(s) {
+    totalCorrect += s.correct || 0;
+    totalWrong += s.wrong || 0;
+    totalPending += s.pending || 0;
+  });
+  var totalDecided = totalCorrect + totalWrong;
+  var overallPct = totalDecided >= 3 ? Math.round(100 * totalCorrect / totalDecided) : -1;
+
+  // Badge
+  var badge = document.getElementById('trackBadge');
+  if (overallPct >= 0) {
+    badge.textContent = overallPct + '% accuracy';
+    badge.style.background = overallPct >= 80 ? 'rgba(63,185,80,0.15)' : overallPct >= 60 ? 'rgba(210,153,34,0.15)' : 'rgba(248,81,73,0.15)';
+    badge.style.color = overallPct >= 80 ? 'var(--green)' : overallPct >= 60 ? 'var(--yellow)' : 'var(--red)';
+  } else if (totalPending > 0) {
+    badge.textContent = totalPending + ' pending';
+    badge.style.background = 'rgba(210,153,34,0.15)';
+    badge.style.color = 'var(--yellow)';
+  } else {
+    badge.textContent = 'Collecting data';
+    badge.style.background = 'rgba(88,166,255,0.1)';
+    badge.style.color = 'var(--blue)';
+  }
+
+  // Streak
+  var streak = 0;
+  var sortedOutcomes = outcomeList.slice().sort(function(a, b) {
+    return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+  });
+  for (var i = 0; i < sortedOutcomes.length; i++) {
+    if (sortedOutcomes[i].correct === true) streak++;
+    else break;
+  }
+
+  var streakEl = document.getElementById('streakBanner');
+  if (streak >= 3) {
+    streakEl.innerHTML = '<div class="streak-banner">' +
+      '<span class="streak-icon">&#x1F525;</span>' +
+      '<div><div class="streak-text">' + streak + ' correct in a row</div>' +
+      '<div class="streak-sub">Current accuracy streak</div></div></div>';
+  } else {
+    streakEl.innerHTML = '';
+  }
+
+  // Track cards
+  var trackGrid = document.getElementById('trackGrid');
+  if (summary.length === 0) {
+    trackGrid.innerHTML = '<div class="intel-empty" style="grid-column:1/-1;padding:32px">' +
+      '<div class="intel-empty-icon" style="font-size:36px">&#x1F4CA;</div>' +
+      '<div class="intel-empty-title">No outcomes tracked yet</div>' +
+      '<div class="intel-empty-desc">As OpinAI investigates issues and reviews PRs, outcomes will be tracked here to measure accuracy over time.</div></div>';
+    document.getElementById('timelineDots').innerHTML = '';
+    return;
+  }
+
+  var html = '';
+  summary.forEach(function(s) {
+    var total = s.correct + s.wrong;
+    var pct = total >= 3 ? Math.round(100 * s.correct / total) : -1;
+    var label = s.type === 'issue' ? 'Issue Verdicts' : 'PR Reviews';
+    var icon = s.type === 'issue' ? '&#x1F50D;' : '&#x1F4DD;';
+    var ringColor = pct >= 80 ? 'var(--green)' : pct >= 60 ? 'var(--yellow)' : pct >= 0 ? 'var(--red)' : 'var(--border)';
+    var displayPct = pct >= 0 ? pct : 0;
+    var circ = 226.2;
+    var offset = circ * (1 - displayPct / 100);
+
+    html += '<div class="track-card">' +
+      '<svg class="track-ring" viewBox="0 0 80 80">' +
+        '<circle cx="40" cy="40" r="36" fill="none" stroke="var(--border)" stroke-width="6"/>' +
+        '<circle cx="40" cy="40" r="36" fill="none" stroke="' + ringColor + '" stroke-width="6" ' +
+          'stroke-dasharray="' + circ + '" stroke-dashoffset="' + offset + '" ' +
+          'stroke-linecap="round" transform="rotate(-90 40 40)" style="transition:stroke-dashoffset 1.5s ease-out"/>' +
+        '<text class="track-ring-text" x="40" y="40">' + (pct >= 0 ? pct + '%' : '\u2014') + '</text>' +
+      '</svg>' +
+      '<div class="track-details">' +
+        '<div class="track-label">' + icon + ' ' + label + '</div>' +
+        '<div class="track-stat-row">' +
+          '<span class="track-stat"><span style="color:var(--green)">&#x2713;</span> ' + s.correct + ' correct</span>' +
+          '<span class="track-stat"><span style="color:var(--red)">&#x2717;</span> ' + s.wrong + ' wrong</span>' +
+          '<span class="track-stat"><span style="color:var(--yellow)">&#x23F3;</span> ' + s.pending + ' pending</span>' +
+        '</div>' +
+      '</div></div>';
+  });
+  trackGrid.innerHTML = html;
+
+  // Timeline dots
+  if (outcomeList.length > 0) {
+    var dotsHtml = '<div class="timeline-dots"><div class="timeline-label">Decision Timeline (newest first)</div><div class="dots-row">';
+    sortedOutcomes.forEach(function(o) {
+      var cls = o.correct === true ? 'dot-correct' : o.correct === false ? 'dot-wrong' : 'dot-pending';
+      var icon = o.correct === true ? '&#x2713;' : o.correct === false ? '&#x2717;' : '?';
+      var typeLabel = o.type === 'issue' ? 'Issue' : 'PR';
+      dotsHtml += '<div class="dot ' + cls + '">' + icon +
+        '<div class="dot-tooltip">' + typeLabel + ' #' + o.reference_number + ': ' + esc(o.opinai_verdict || '?') + '</div></div>';
+    });
+    dotsHtml += '</div></div>';
+    document.getElementById('timelineDots').innerHTML = dotsHtml;
+  } else {
+    document.getElementById('timelineDots').innerHTML = '';
+  }
+}
+
+// =====================================================================
+// Insights
+// =====================================================================
+
+function renderInsights() {
+  var findings = (allData.findings && allData.findings.findings) || [];
+  var prReviews = allData.prReviews || [];
+  var outcomes = (allData.outcomes && allData.outcomes.outcomes) || [];
+
+  var insights = [];
+
+  // Bug discoveries
+  findings.forEach(function(f) {
+    if (f.verdict === 'BUG_CONFIRMED' || f.confidence === 'HIGH') {
+      var confirmed = outcomes.some(function(o) {
+        return o.type === 'issue' && o.reference_number === f.issue_number && o.correct === true;
+      });
+      insights.push({
+        type: 'bug',
+        title: truncate(f.finding, 90),
+        desc: f.finding,
+        context: f.file_path + ' \u00B7 Issue #' + f.issue_number,
+        link: 'https://github.com/' + currentRepo + '/issues/' + f.issue_number,
+        linkText: '#' + f.issue_number,
+        confirmed: confirmed,
+        date: f.created_at,
+        priority: confirmed ? 10 : (f.confidence === 'HIGH' ? 5 : 2)
+      });
+    }
+  });
+
+  // PR review insights
+  prReviews.forEach(function(pr) {
+    if (pr.verdict === 'CHANGES_REQUESTED' || pr.risk === 'HIGH' || pr.risk === 'CRITICAL') {
+      var prOutcome = outcomes.find(function(o) {
+        return o.type === 'pr' && o.reference_number === pr.pr_number;
+      });
+      var confirmed = prOutcome && prOutcome.correct === true;
+      insights.push({
+        type: 'review',
+        title: truncate(pr.title || 'PR #' + pr.pr_number, 90),
+        desc: (pr.verdict === 'CHANGES_REQUESTED' ? 'Requested changes' : 'Flagged as ' + pr.risk + ' risk') +
+          (confirmed ? ' \u2014 confirmed by maintainer' : ''),
+        context: 'PR #' + pr.pr_number + (pr.author ? ' by ' + pr.author : ''),
+        link: 'https://github.com/' + currentRepo + '/pull/' + pr.pr_number,
+        linkText: 'PR #' + pr.pr_number,
+        confirmed: confirmed,
+        date: pr.timestamp,
+        priority: confirmed ? 10 : (pr.risk === 'CRITICAL' ? 6 : 3)
+      });
+    }
+  });
+
+  // Deduplicate by link
+  var seen = {};
+  insights = insights.filter(function(ins) {
+    if (seen[ins.link]) return false;
+    seen[ins.link] = true;
+    return true;
+  });
+
+  insights.sort(function(a, b) { return b.priority - a.priority; });
+  insights = insights.slice(0, 9);
+
+  var badge = document.getElementById('insightsBadge');
+  badge.textContent = insights.length + ' insight' + (insights.length !== 1 ? 's' : '');
+
+  var grid = document.getElementById('insightsGrid');
+  if (insights.length === 0) {
+    grid.innerHTML = '<div class="intel-empty" style="grid-column:1/-1;padding:32px">' +
+      '<div class="intel-empty-icon" style="font-size:36px">&#x1F4A1;</div>' +
+      '<div class="intel-empty-title">No key insights yet</div>' +
+      '<div class="intel-empty-desc">As OpinAI investigates issues and reviews PRs, significant findings will appear here as proof points.</div></div>';
+    return;
+  }
+
+  grid.innerHTML = insights.map(function(ins) {
+    var typeClass = ins.type === 'bug' ? 'insight-type-bug' :
+                    ins.type === 'review' ? 'insight-type-review' : 'insight-type-arch';
+    var typeLabel = ins.type === 'bug' ? 'Bug Discovery' :
+                    ins.type === 'review' ? 'PR Review' : 'Architecture';
+
+    return '<div class="insight-card">' +
+      '<div class="insight-header">' +
+        '<span class="insight-type ' + typeClass + '">' + typeLabel + '</span>' +
+        (ins.confirmed ? '<span class="insight-confirmed">&#x2713; Confirmed</span>' : '') +
+      '</div>' +
+      '<div class="insight-title">' + esc(ins.title) + '</div>' +
+      '<div class="insight-context">' + esc(ins.context) + ' \u00B7 ' + timeAgo(ins.date) + '</div>' +
+      '<div class="insight-desc">' + esc(truncate(ins.desc, 160)) + '</div>' +
+      '<a class="insight-link" href="' + ins.link + '" target="_blank">View ' + esc(ins.linkText) + ' &#x2192;</a>' +
+    '</div>';
+  }).join('');
+}
+
+// =====================================================================
+// Architecture
+// =====================================================================
+
+function renderArchitecture() {
+  var knowledge = (allData.memory && allData.memory.knowledge) || {};
+  var findings = (allData.findings && allData.findings.findings) || [];
+  var panels = [];
+
+  // 1. API Surface / Endpoints
+  var apiSurface = getKV(knowledge, 'api_surface');
+  if (apiSurface) {
+    var endpoints = parseEndpoints(apiSurface);
+    if (endpoints.length > 0) {
+      var epHtml = '<div class="arch-panel"><div class="arch-panel-title">&#x1F310; API Endpoints <span class="arch-panel-count">(' + endpoints.length + ')</span></div>';
+      endpoints.slice(0, 15).forEach(function(ep) {
+        var methodClass = 'method-' + (ep.method || 'get').toLowerCase();
+        epHtml += '<div class="endpoint-item">' +
+          '<span class="http-method ' + methodClass + '">' + esc(ep.method || 'GET') + '</span>' +
+          '<span class="endpoint-path">' + esc(ep.path) + '</span></div>';
+      });
+      if (endpoints.length > 15) {
+        epHtml += '<div style="font-size:12px;color:var(--text-dim);padding:8px 0;text-align:center">+ ' + (endpoints.length - 15) + ' more endpoints</div>';
+      }
+      epHtml += '</div>';
+      panels.push(epHtml);
+    }
+  }
+
+  // 2. Bug-prone areas
+  if (findings.length > 0) {
+    var fileMap = {};
+    findings.forEach(function(f) {
+      if (!fileMap[f.file_path]) fileMap[f.file_path] = 0;
+      fileMap[f.file_path]++;
+    });
+    var files = Object.keys(fileMap).sort(function(a, b) { return fileMap[b] - fileMap[a]; });
+
+    var bugHtml = '<div class="arch-panel"><div class="arch-panel-title">&#x1F525; Bug-Prone Areas <span class="arch-panel-count">(' + files.length + ' files)</span></div>';
+    files.slice(0, 10).forEach(function(file) {
+      var count = fileMap[file];
+      var heatClass = count >= 3 ? 'heat-high' : count >= 2 ? 'heat-medium' : 'heat-low';
+      bugHtml += '<div class="bugarea-item">' +
+        '<span class="bugarea-file" title="' + esc(file) + '">' + esc(file) + '</span>' +
+        '<span class="bugarea-count ' + heatClass + '">' + count + '</span></div>';
+    });
+    if (files.length > 10) {
+      bugHtml += '<div style="font-size:12px;color:var(--text-dim);padding:8px 0;text-align:center">+ ' + (files.length - 10) + ' more files</div>';
+    }
+    bugHtml += '</div>';
+    panels.push(bugHtml);
+  }
+
+  // 3. Project Profile
+  var profileKeys = [
+    { key: 'language', label: 'Language' },
+    { key: 'framework', label: 'Framework' },
+    { key: 'repo_type', label: 'Type' },
+    { key: 'deployment_type', label: 'Deployment' },
+    { key: 'build_command', label: 'Build', mono: true },
+    { key: 'run_command', label: 'Run', mono: true },
+    { key: 'health_endpoint', label: 'Health', mono: true },
+    { key: 'test_strategy', label: 'Test Strategy' },
+    { key: 'needs_cluster', label: 'Needs Cluster' }
+  ];
+
+  var profileHtml = '<div class="arch-panel"><div class="arch-panel-title">&#x1F4CB; Project Profile</div>';
+  var hasProfile = false;
+  profileKeys.forEach(function(pk) {
+    var val = getKV(knowledge, pk.key);
+    if (val) {
+      hasProfile = true;
+      var display;
+      if (pk.mono) {
+        display = '<code style="font-size:12px;background:rgba(110,118,129,0.2);padding:2px 6px;border-radius:4px">' + esc(truncate(val, 60)) + '</code>';
+      } else if (pk.key === 'needs_cluster') {
+        display = val === 'true'
+          ? '<span style="color:var(--yellow)">Yes</span>'
+          : '<span style="color:var(--green)">No</span>';
+      } else {
+        display = esc(truncate(val, 80));
+      }
+      profileHtml += '<div class="profile-row">' +
+        '<span class="profile-label">' + esc(pk.label) + '</span>' +
+        '<span class="profile-value">' + display + '</span></div>';
+    }
+  });
+
+  if (hasProfile) {
+    profileHtml += '</div>';
+    panels.push(profileHtml);
+  }
+
+  var grid = document.getElementById('archGrid');
+  if (panels.length === 0) {
+    grid.innerHTML = '<div class="intel-empty" style="grid-column:1/-1;padding:32px">' +
+      '<div class="intel-empty-icon" style="font-size:36px">&#x1F3D7;&#xFE0F;</div>' +
+      '<div class="intel-empty-title">No architecture data yet</div>' +
+      '<div class="intel-empty-desc">Run an analysis to discover endpoints, tech stack, and project structure.</div></div>';
+  } else {
+    grid.innerHTML = panels.join('');
+  }
+}
+
+function parseEndpoints(apiSurface) {
+  var endpoints = [];
+  try {
+    var parsed = JSON.parse(apiSurface);
+    if (Array.isArray(parsed)) {
+      parsed.forEach(function(ep) {
+        if (typeof ep === 'string') {
+          var parts = ep.trim().split(/\s+/);
+          if (parts.length >= 2 && /^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/i.test(parts[0])) {
+            endpoints.push({ method: parts[0].toUpperCase(), path: parts.slice(1).join(' ') });
+          } else {
+            endpoints.push({ method: 'GET', path: ep });
+          }
+        } else if (typeof ep === 'object' && ep) {
+          endpoints.push({
+            method: (ep.method || 'GET').toUpperCase(),
+            path: ep.path || ep.url || ep.endpoint || ep.route || ''
+          });
+        }
+      });
+    } else if (typeof parsed === 'object' && parsed) {
+      var arr = parsed.endpoints || parsed.routes || parsed.api || [];
+      if (Array.isArray(arr)) {
+        arr.forEach(function(ep) {
+          if (typeof ep === 'string') {
+            endpoints.push({ method: 'GET', path: ep });
+          } else if (typeof ep === 'object' && ep) {
+            endpoints.push({
+              method: (ep.method || 'GET').toUpperCase(),
+              path: ep.path || ep.url || ep.endpoint || ''
+            });
+          }
+        });
+      }
+    }
+  } catch(e) {
+    // Not JSON — try line-by-line parsing
+    apiSurface.split('\n').forEach(function(line) {
+      line = line.trim();
+      if (!line) return;
+      var m = line.match(/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(.+)/i);
+      if (m) {
+        endpoints.push({ method: m[1].toUpperCase(), path: m[2].trim() });
+      } else if (line.startsWith('/') || line.startsWith('http')) {
+        endpoints.push({ method: 'GET', path: line });
+      }
+    });
+  }
+  return endpoints;
+}
+
+init();
+</script>
+
+</body>
+</html>

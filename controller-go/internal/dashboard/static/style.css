@@ -1050,6 +1050,63 @@ tr:hover td {
   .reproduce-input { width: 100%; }
 }
 
+/* Navigation bar */
+.opinai-nav {
+  background: #010409;
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.nav-logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-logo:hover { text-decoration: none; color: var(--text); }
+
+.nav-links {
+  display: flex;
+  gap: 0;
+  height: 100%;
+  align-items: stretch;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 13px;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.nav-link:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: var(--text);
+  border-bottom-color: var(--blue);
+}
+
+@media (max-width: 768px) {
+  .opinai-nav { padding: 0 12px; height: 44px; }
+  .nav-logo { font-size: 16px; }
+  .nav-link { padding: 0 10px; font-size: 12px; }
+}
+
 /* Plain-language summary */
 .opinai-summary {
   background: rgba(196, 163, 90, 0.08);
