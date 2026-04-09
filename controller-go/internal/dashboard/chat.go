@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/config"
@@ -246,4 +247,43 @@ func (s *Server) handleClearChatHistory(w http.ResponseWriter, r *http.Request) 
 
 func envGet(key string) string {
 	return Env(key, "")
+}
+
+// buildSelfKnowledgePrompt constructs a system prompt with OpinAI's self-knowledge
+// for the "Ask About OpinAI" chat mode.
+func (s *Server) buildSelfKnowledgePrompt() string {
+	stats, _ := database.GetTotalStats()
+	repos := s.state.GetRepos()
+	repoNames := make([]string, 0, len(repos))
+	for name := range repos {
+		repoNames = append(repoNames, name)
+	}
+
+	provider := envGet("AI_PROVIDER")
+	if provider == "" {
+		provider = "anthropic (default)"
+	}
+	model := envGet("AI_MODEL")
+	if model == "" {
+		model = "claude-sonnet-4-20250514 (default)"
+	}
+	repoStr := strings.Join(repoNames, ", ")
+	if repoStr == "" {
+		repoStr = "(none configured)"
+	}
+
+	return prompts.Render("chat_about_system.txt", map[string]any{
+		"Uptime":          FormatDuration(time.Since(s.state.StartTime).Seconds()),
+		"RepoCount":       len(repoNames),
+		"RepoNames":       repoStr,
+		"TotalRuns":       stats.TotalRuns,
+		"BugsConfirmed":   stats.BugsConfirmed,
+		"NotReproducible": stats.NotReproducible,
+		"PRsReviewed":     stats.PRsReviewed,
+		"PRsApproved":     stats.PRsApproved,
+		"PRsChangesReq":   stats.PRsChangesReq,
+		"AIProvider":      provider,
+		"AIModel":         model,
+		"PendingCount":    len(database.GetAllPending()),
+	})
 }

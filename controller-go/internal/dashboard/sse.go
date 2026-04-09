@@ -406,14 +406,24 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	sseHeaders(w)
 
-	repo, issue := extractChatIssue(req.Context)
+	// Check for about mode (self-knowledge chat)
+	var repo string
+	var issue int
+	var systemCtx string
+	if mode, ok := req.Context["mode"].(string); ok && mode == "about" {
+		repo = "__opinai__"
+		issue = -999
+		systemCtx = s.buildSelfKnowledgePrompt()
+	} else {
+		repo, issue = extractChatIssue(req.Context)
+		systemCtx = buildChatContext(req.Context)
+	}
 
-	// Save user message (negative issue = PR chat)
+	// Save user message (negative issue = PR chat, -999 = about mode)
 	if repo != "" && issue != 0 {
 		database.AddChatMessage(repo, issue, "user", req.Message)
 	}
 
-	systemCtx := buildChatContext(req.Context)
 	prompt := systemCtx + "\n\nUser question: " + req.Message
 
 	cfg := ai.LoadConfig()

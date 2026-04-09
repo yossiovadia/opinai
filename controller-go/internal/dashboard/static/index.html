@@ -139,10 +139,14 @@
   <div class="chat-panel-header">
     <div class="chat-header-top">
       <div class="chat-panel-title">&#x1F3B3; Ask OpinAI</div>
-      <button class="chat-close-btn" onclick="toggleChat()">&times;</button>
+      <div style="display:flex;gap:4px;align-items:center">
+        <button id="chatAboutBtn" onclick="setAboutMode()" title="Ask about OpinAI" style="display:none;background:none;border:1px solid var(--border);border-radius:4px;cursor:pointer;font-size:14px;padding:2px 6px;color:var(--text-dim)">&#x2139;&#xFE0F;</button>
+        <button class="chat-close-btn" onclick="toggleChat()">&times;</button>
+      </div>
     </div>
     <div class="chat-header-sub">
       <span class="chat-context-label" id="chatContextLabel">General context</span>
+      <a class="chat-clear-link" id="chatBackLink" onclick="restorePreviousContext()" style="display:none;cursor:pointer">&larr; Back to issue</a>
       <a class="chat-clear-link" onclick="clearChatHistoryDB()">clear history</a>
     </div>
   </div>
@@ -1160,21 +1164,71 @@ var chatOpen = false;
 var chatContext = {};  // {repo, issue_number}
 var chatHistory = [];  // [{role: 'user'|'ai', content: '...'}]
 var chatBusy = false;
+var chatAboutMode = false;
+var previousChatContext = null;
 
 function toggleChat() {
   chatOpen = !chatOpen;
   document.getElementById('chatPanel').classList.toggle('chat-open', chatOpen);
   if (chatOpen) {
+    if (!chatContext.repo && !chatAboutMode) {
+      setAboutMode();
+      return;
+    }
     renderSuggestions();
     document.getElementById('chatInput').focus();
   }
 }
 
+async function setAboutMode() {
+  if (chatContext.repo) {
+    previousChatContext = Object.assign({}, chatContext);
+  }
+  chatAboutMode = true;
+  chatContext = { mode: 'about' };
+  document.getElementById('chatContextLabel').textContent = 'Ask about OpinAI';
+  document.getElementById('chatAboutBtn').style.display = 'none';
+  var backLink = document.getElementById('chatBackLink');
+  if (backLink) backLink.style.display = previousChatContext ? '' : 'none';
+  document.getElementById('chatInput').placeholder = 'Ask about OpinAI architecture, features, config...';
+  chatHistory = [];
+  try {
+    var msgs = await fetchJSON('/api/chat-history?repo=__opinai__&issue=-999');
+    if (msgs && msgs.length) {
+      chatHistory = msgs.map(function(m) { return { role: m.role, content: m.content }; });
+    }
+  } catch(e) { /* ignore */ }
+  renderChatMessages();
+  renderSuggestions();
+  if (!chatOpen) {
+    chatOpen = true;
+    document.getElementById('chatPanel').classList.add('chat-open');
+  }
+  document.getElementById('chatInput').focus();
+}
+
+function restorePreviousContext() {
+  if (!previousChatContext) return;
+  chatAboutMode = false;
+  document.getElementById('chatBackLink').style.display = 'none';
+  if (previousChatContext.pr_number) {
+    setPRChatContext(previousChatContext.repo, previousChatContext.pr_number, '');
+  } else if (previousChatContext.issue_number) {
+    setChatContext(previousChatContext.repo, previousChatContext.issue_number, '');
+  }
+  previousChatContext = null;
+}
+
 async function setChatContext(repo, issue, title) {
+  chatAboutMode = false;
+  previousChatContext = null;
   chatContext = { repo: repo, issue_number: issue };
   var label = repo + '#' + issue;
   if (title) label += ' — ' + title;
   document.getElementById('chatContextLabel').textContent = 'Discussing: ' + label;
+  document.getElementById('chatAboutBtn').style.display = '';
+  document.getElementById('chatBackLink').style.display = 'none';
+  document.getElementById('chatInput').placeholder = 'Ask about this issue...';
   // Load saved history from DB
   chatHistory = [];
   try {
@@ -1190,10 +1244,15 @@ async function setChatContext(repo, issue, title) {
 }
 
 async function setPRChatContext(repo, prNumber, title) {
+  chatAboutMode = false;
+  previousChatContext = null;
   chatContext = { repo: repo, pr_number: prNumber };
   var label = repo + ' PR #' + prNumber;
   if (title) label += ' — ' + title;
   document.getElementById('chatContextLabel').textContent = 'Discussing: ' + label;
+  document.getElementById('chatAboutBtn').style.display = '';
+  document.getElementById('chatBackLink').style.display = 'none';
+  document.getElementById('chatInput').placeholder = 'Ask about this PR...';
   chatHistory = [];
   try {
     var msgs = await fetchJSON('/api/chat-history?repo=' + encodeURIComponent(repo) + '&issue=' + (-prNumber));
@@ -1229,6 +1288,20 @@ function clearChatContext() {
 }
 
 async function clearChatHistoryDB() {
+  if (chatAboutMode) {
+    try {
+      await fetch(API + '/api/chat-history/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: '__opinai__', issue: -999 })
+      });
+    } catch(e) { /* ignore */ }
+    chatHistory = [];
+    renderChatMessages();
+    renderSuggestions();
+    showToast('Chat history cleared', 'info');
+    return;
+  }
   var issueKey = chatContext.issue_number || (chatContext.pr_number ? -chatContext.pr_number : 0);
   if (!chatContext.repo || !issueKey) {
     chatHistory = [];
@@ -1256,7 +1329,15 @@ function renderSuggestions() {
   if (chatHistory.length > 0) { container.innerHTML = ''; return; }
 
   var chips = [];
-  if (_dynamicSuggestions && _dynamicSuggestions.length > 0) {
+  if (chatAboutMode) {
+    chips = [
+      'How does OpinAI work?',
+      'Where is data stored?',
+      'What happens with concurrent issues?',
+      'How does PR review differ from issue reproduction?',
+      'What AI model is used?'
+    ];
+  } else if (_dynamicSuggestions && _dynamicSuggestions.length > 0) {
     chips = _dynamicSuggestions;
   } else if (chatContext.repo && chatContext.pr_number) {
     chips = [
@@ -1432,7 +1513,10 @@ function renderMarkdown(text) {
 function renderChatMessages() {
   var container = document.getElementById('chatMessages');
   if (!chatHistory.length) {
-    container.innerHTML = '<div class="empty" style="padding:20px;font-size:13px;">Ask me anything about your bugs and issues.</div>';
+    var emptyMsg = chatAboutMode
+      ? 'Ask me anything about how OpinAI works \u2014 architecture, features, configuration, and more.'
+      : 'Ask me anything about your bugs and issues.';
+    container.innerHTML = '<div class="empty" style="padding:20px;font-size:13px;">' + emptyMsg + '</div>';
     return;
   }
   var html = '';
