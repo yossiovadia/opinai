@@ -18,6 +18,46 @@ func buildChatContext(ctx map[string]any) string {
 	system := prompts.Render("chat_system.txt", nil) + "\n\n"
 
 	repo, _ := ctx["repo"].(string)
+
+	// Check for PR review context
+	prNum := 0
+	if n, ok := ctx["pr_number"].(float64); ok {
+		prNum = int(n)
+	}
+
+	if repo != "" && prNum > 0 {
+		system += fmt.Sprintf("Current PR: %s#%d (pull request review)\n\n", repo, prNum)
+
+		// Fetch the review from DB
+		reviews, _ := database.GetPRReviewsByPR(repo, prNum)
+		if len(reviews) > 0 {
+			r := reviews[0]
+			system += fmt.Sprintf("PR Title: %s\nAuthor: %s\nVerdict: %s\nRisk: %s\n\n", r.Title, r.Author, r.Verdict, r.Risk)
+			reviewText := r.ReviewText
+			if len(reviewText) > 4000 {
+				reviewText = reviewText[:4000]
+			}
+			system += fmt.Sprintf("Review:\n%s\n\n", reviewText)
+		}
+
+		mem, _ := database.GetRepoMemory(repo, nil)
+		if len(mem) > 0 {
+			system += "Project knowledge:\n"
+			for k, v := range mem {
+				system += fmt.Sprintf("- %s: %s\n", k, v)
+			}
+			system += "\n"
+		}
+
+		profile := config.LoadRepoProfile(repo)
+		if len(profile) > 0 {
+			b, _ := json.Marshal(profile)
+			system += "Project profile: " + string(b) + "\n\n"
+		}
+
+		return system
+	}
+
 	issueNum := 0
 	if n, ok := ctx["issue_number"].(float64); ok {
 		issueNum = int(n)
@@ -125,6 +165,10 @@ func buildChatContext(ctx map[string]any) string {
 
 func extractChatIssue(ctx map[string]any) (string, int) {
 	repo, _ := ctx["repo"].(string)
+	// PR chats use negative numbers for storage separation
+	if n, ok := ctx["pr_number"].(float64); ok && int(n) > 0 {
+		return repo, -int(n)
+	}
 	issue := 0
 	if n, ok := ctx["issue_number"].(float64); ok {
 		issue = int(n)
@@ -146,7 +190,7 @@ func (s *Server) handleChatFull(w http.ResponseWriter, r *http.Request) {
 	repo, issue := extractChatIssue(req.Context)
 
 	// Save user message
-	if repo != "" && issue > 0 {
+	if repo != "" && issue != 0 {
 		database.AddChatMessage(repo, issue, "user", req.Message)
 	}
 
@@ -158,7 +202,7 @@ func (s *Server) handleChatFull(w http.ResponseWriter, r *http.Request) {
 	reply = ai.Sanitize(reply)
 
 	// Save AI response
-	if repo != "" && issue > 0 {
+	if repo != "" && issue != 0 {
 		database.AddChatMessage(repo, issue, "ai", reply)
 	}
 

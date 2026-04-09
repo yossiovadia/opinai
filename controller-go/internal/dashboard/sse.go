@@ -351,8 +351,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	repo, issue := extractChatIssue(req.Context)
 
-	// Save user message
-	if repo != "" && issue > 0 {
+	// Save user message (negative issue = PR chat)
+	if repo != "" && issue != 0 {
 		database.AddChatMessage(repo, issue, "user", req.Message)
 	}
 
@@ -414,8 +414,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		writeSSE(w, "done", map[string]string{"message": ""})
 	}
 
-	// Save AI response
-	if repo != "" && issue > 0 && fullReply.Len() > 0 {
+	// Save AI response (negative issue = PR chat)
+	if repo != "" && issue != 0 && fullReply.Len() > 0 {
 		database.AddChatMessage(repo, issue, "ai", ai.Sanitize(fullReply.String()))
 	}
 }

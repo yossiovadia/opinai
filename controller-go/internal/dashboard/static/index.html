@@ -974,6 +974,7 @@ function renderPRReviews() {
     var prUrl = pr.repo ? ('https://github.com/' + pr.repo + '/pull/' + pr.pr_number) : '#';
 
     var actions = '';
+    actions += '<button class="btn" onclick="event.stopPropagation(); setPRChatContext(\'' + escapeHtml(pr.repo) + '\', ' + pr.pr_number + ', \'' + escapeHtml(pr.title || '').replace(/'/g, "\\'") + '\')" title="Ask OpinAI">&#x1F3B3;</button> ';
     if (pr.posted) {
       actions += '<button class="btn" disabled style="color:var(--green);border-color:var(--green)">&#x2705; Posted</button>';
     } else {
@@ -1093,6 +1094,24 @@ async function setChatContext(repo, issue, title) {
   if (!chatOpen) toggleChat();
 }
 
+async function setPRChatContext(repo, prNumber, title) {
+  chatContext = { repo: repo, pr_number: prNumber };
+  var label = repo + ' PR #' + prNumber;
+  if (title) label += ' — ' + title;
+  document.getElementById('chatContextLabel').textContent = 'Discussing: ' + label;
+  chatHistory = [];
+  try {
+    var msgs = await fetchJSON('/api/chat-history?repo=' + encodeURIComponent(repo) + '&issue=' + (-prNumber));
+    if (msgs && msgs.length) {
+      chatHistory = msgs.map(function(m) { return { role: m.role, content: m.content }; });
+    }
+  } catch(e) { /* ignore */ }
+  _dynamicSuggestions = null;
+  renderChatMessages();
+  renderSuggestions();
+  if (!chatOpen) toggleChat();
+}
+
 function clearChatContext() {
   chatContext = {};
   chatHistory = [];
@@ -1102,7 +1121,8 @@ function clearChatContext() {
 }
 
 async function clearChatHistoryDB() {
-  if (!chatContext.repo || !chatContext.issue_number) {
+  var issueKey = chatContext.issue_number || (chatContext.pr_number ? -chatContext.pr_number : 0);
+  if (!chatContext.repo || !issueKey) {
     chatHistory = [];
     renderChatMessages();
     renderSuggestions();
@@ -1112,7 +1132,7 @@ async function clearChatHistoryDB() {
     await fetch(API + '/api/chat-history/clear', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: chatContext.repo, issue: chatContext.issue_number })
+      body: JSON.stringify({ repo: chatContext.repo, issue: issueKey })
     });
   } catch(e) { /* ignore */ }
   chatHistory = [];
@@ -1130,6 +1150,14 @@ function renderSuggestions() {
   var chips = [];
   if (_dynamicSuggestions && _dynamicSuggestions.length > 0) {
     chips = _dynamicSuggestions;
+  } else if (chatContext.repo && chatContext.pr_number) {
+    chips = [
+      'Summarize the key changes in this PR',
+      'Are there any security concerns?',
+      'What edge cases might be missing?',
+      'Suggest improvements to this PR',
+      'Does this PR follow project conventions?'
+    ];
   } else if (chatContext.repo && chatContext.issue_number) {
     chips = [
       'Is this a real bug or user error?',
