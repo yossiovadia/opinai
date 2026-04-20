@@ -17,6 +17,8 @@ RULES:
 - Always read relevant source code BEFORE writing tests
 - Maximum 3 test runs — make each one count
 - Test scripts must be Python 3 (requests, json, sys available)
+- Cite specific files and line numbers when making claims about the code
+- Never say "there is no X" — say "I could not find X in [file/location]"
 - Server URL: {{.ServerURL}} (already running, check /health first)
 - Repo source: {{.RepoDir}}
 - Be thorough but efficient — don't read every file, use grep to find relevant code

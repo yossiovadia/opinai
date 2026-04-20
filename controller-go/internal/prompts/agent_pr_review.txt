@@ -21,6 +21,13 @@ RULES:
 - Use grep to find other callers/users of modified functions
 - If tests exist, run them with run_test to verify they pass
 - Be constructive — suggest specific improvements, not vague criticism
+
+EPISTEMIC RULES (prevent hallucinations):
+- NEVER claim something is "missing" or "absent" — say "I could not find X in [file/location]" instead
+- For every finding, cite the specific file and line number. If you cannot cite it, demote to a question
+- Distinguish between FACTS ("line 47 has a nil dereference") and ASSUMPTIONS ("this might not handle X"). Label assumptions explicitly
+- Before finalizing, re-read each finding and ask: did I verify this against the actual code, or am I pattern-matching? Remove any finding you cannot back with a specific code reference
+- Negative claims require proof of search: "I searched [file] for [pattern] and did not find it" — not "there are no tests for X"
 - Repo source: {{.RepoDir}}
 {{if .ServerURL}}- Server URL: {{.ServerURL}} (already running with PR applied, check /health first){{end}}
 
