@@ -67,7 +67,15 @@ func extractAndStoreLearnings(repo, taskType, report string) {
 			continue
 		}
 		if len(l.Value) > 150 {
-			l.Value = l.Value[:150]
+			condensed, cerr := ai.Call(fmt.Sprintf(
+				"Condense this architectural insight into under 150 characters. Plain text only, no markdown. Return ONLY the condensed text, nothing else.\n\nOriginal: %s", l.Value), 256)
+			if cerr == nil && len(strings.TrimSpace(condensed)) > 0 && len(strings.TrimSpace(condensed)) <= 150 {
+				l.Value = strings.TrimSpace(condensed)
+			} else {
+				slog.Warn("condensing failed, dropping oversized finding", "key", l.Key, "len", len(l.Value))
+				skipped++
+				continue
+			}
 		}
 		if err := postRepoMemory(controllerURL, repo, l.Key, l.Value); err != nil {
 			slog.Warn("failed to store learning", "key", l.Key, "error", err)
