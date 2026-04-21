@@ -58,7 +58,8 @@ spec:
               memory: 512Mi
       volumes:
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: opinai-data
         - name: gcp-credentials
           secret:
             secretName: opinai-gcp-credentials
