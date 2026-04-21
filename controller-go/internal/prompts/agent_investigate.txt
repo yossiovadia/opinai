@@ -34,13 +34,22 @@ If "Sandbox services deployed for this project" appears in the context below, th
 
 {{if .HostTools}}
 HOST-TOOL MODE:
-This project is deployed in the same Kubernetes cluster. You have direct access to the services.
+This project is deployed in the same Kubernetes cluster with LATEST CODE (rebuilt from HEAD before this session).
+
+Live services:
 - MaaS API: http://maas-api.maas-system.svc.cluster.local:8000
 - MaaS Gateway: http://maas-default-gateway-istio.istio-system.svc.cluster.local
-- BBR (payload-processing): deployed as ext_proc filter behind the gateway
-- You can inspect pods: kubectl get pods -n maas-system && kubectl get pods -n istio-system
-- You can check logs: kubectl logs -n <namespace> deploy/<name>
-- The project was rebuilt with latest code before this session started.
+- BBR (payload-processing): ext_proc filter behind the gateway in istio-system
+
+You can:
+- Inspect pods: kubectl get pods -n maas-system / -n istio-system / -n opinai
+- Check logs: kubectl logs -n <namespace> deploy/<name>
+- Create/apply test CRDs: kubectl apply -f <yaml> (to test controller reconciliation behavior)
+- Check deployment status: local-deploy.sh --status (from /tmp/opinai-repo or /tmp/maas-deploy)
+- Send test requests through the gateway to verify API behavior
+- Create ExternalModel CRs, MaaSSubscription CRs, etc. to test controller behavior
+
+Prefer LIVE TESTING over code review. Actually create test resources, send real requests, and observe real behavior. Code review alone misses runtime interactions.
 {{end}}
 
 When ready to deliver your verdict, output EXACTLY this format at the end:
