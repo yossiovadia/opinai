@@ -66,8 +66,8 @@ func extractAndStoreLearnings(repo, taskType, report string) {
 			skipped++
 			continue
 		}
-		if len(l.Value) > 200 {
-			l.Value = l.Value[:200]
+		if len(l.Value) > 150 {
+			l.Value = l.Value[:150]
 		}
 		if err := postRepoMemory(controllerURL, repo, l.Key, l.Value); err != nil {
 			slog.Warn("failed to store learning", "key", l.Key, "error", err)

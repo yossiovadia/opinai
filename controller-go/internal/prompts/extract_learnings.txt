@@ -16,24 +16,31 @@ Task type: {{.TaskType}}
 Extract specific, actionable architectural facts from the report above. Each learning must be a single concrete insight about the codebase that would help a future AI analyst understand the system without re-reading the full report.
 
 GOOD examples (specific, architectural, actionable):
-- "ExternalModel and LLMInferenceService share HTTPRoute naming convention, no cross-kind uniqueness check exists"
-- "PostgreSQL connection pool defaults to 10; under concurrent load the pool exhausts before the 30s timeout"
-- "Webhook handler assumes JSON content-type but does not validate; XML payloads cause silent 200 with nil parsing"
+- "ExternalModel and LLMInferenceService share HTTPRoute naming, no cross-kind uniqueness check"
+- "PostgreSQL pool defaults to 10; exhausts before 30s timeout under concurrent load"
+- "Webhook handler assumes JSON content-type but no validation; XML causes silent 200"
+- "WithName on nemoGuardBase returns *nemoGuardBase not concrete type; factory pattern differs between request/response guards"
 
-BAD examples (vague, raw report fragments, summaries):
+BAD examples (vague, raw, or decorated):
 - "The code has several issues with error handling" (too vague)
 - "## Analysis Results: The PR modifies 3 files..." (raw report header)
 - "This is a well-structured codebase with good test coverage" (summary fluff)
+- "**FACT:** In request_guard.go:59, return p.WithName(name)..." (markdown formatting — strip **FACT:**, bold, etc)
+- "@coderabbitai already flagged the factory..." (referencing external tools — strip)
+- "The `nemoAllowedJSON()` helper is reused from..." (trivial observation, not architectural)
 
 Rules:
-- Each value must be a SINGLE concrete architectural fact, not a summary or report fragment
-- NEVER copy report headers, section titles, or summary paragraphs
+- Each value must be a SINGLE concrete architectural fact — plain text, no markdown formatting
+- NEVER use bold (**), headers (#), backtick code refs (`foo`), or @mentions in values
+- NEVER copy report headers, section titles, summary paragraphs, or external tool references (coderabbit, etc)
 - NEVER store code snippets, file contents, or raw error messages
-- Keep each value under 200 characters — if you can't say it concisely, it's not distilled enough
-- Focus on: resource naming conflicts, shared state gotchas, API contract assumptions, missing validations, concurrency risks, deployment ordering dependencies
+- NEVER store trivial observations ("test helper reused", "good code structure", "11 test cases")
+- Keep each value under 150 characters — if you can't say it concisely, it's not distilled enough
+- Focus on: resource naming conflicts, shared state gotchas, API contract assumptions, missing validations, concurrency risks, type-safety gaps, deployment ordering dependencies
 - Compare against existing memory — use action "skip" if already known, "update" if refining
 - Prefix keys with a category: gotcha_, pattern_, integration_, architecture_, test_
-- Aim for 0-5 learnings maximum, 0 is perfectly fine for routine PRs
+- Aim for 0-3 learnings maximum, 0 is perfectly fine for routine PRs
+- Quality threshold: would this insight prevent a real bug or save >30 min of investigation? If not, skip it
 - If the report reveals NOTHING new beyond existing memory, return {"learnings": []} — preferred over low-quality entries
 
 Respond with ONLY a JSON object in this exact format, no other text:
