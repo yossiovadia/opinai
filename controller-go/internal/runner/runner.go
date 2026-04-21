@@ -1429,19 +1429,24 @@ func classifyIssue(title, body, repoContext string) (bool, string, string) {
 		}
 	}
 
-	prompt := fmt.Sprintf(`Given this issue, classify whether reproducing the bug requires a RUNNING SERVER (API behavior, HTTP responses, timing, concurrency, runtime errors, integration failures) or CODE REVIEW ONLY (logic bugs, missing null checks, wrong conditions, config parsing, type errors, documentation).
+	hostToolHint := ""
+	if os.Getenv("OPINAI_HOST_TOOLS") == "true" {
+		hostToolHint = "\n\nIMPORTANT: This project is ALREADY DEPLOYED and running in the local cluster. Deployment is FREE (no setup cost). Prefer NEEDS_DEPLOYMENT when the bug COULD be validated by testing against live services, even if code review alone might suffice. Only use CODE_REVIEW for pure logic/typo/documentation bugs that have zero runtime behavior to verify."
+	}
+
+	prompt := fmt.Sprintf(`Given this issue, classify whether reproducing the bug requires a RUNNING SERVER (API behavior, HTTP responses, timing, concurrency, runtime errors, integration failures, route conflicts, CRD behavior, controller reconciliation) or CODE REVIEW ONLY (logic bugs, missing null checks, wrong conditions, config parsing, type errors, documentation).
 
 Reply with exactly one line:
 NEEDS_DEPLOYMENT [option-id]: <brief reason>
 or
 CODE_REVIEW: <brief reason>
 
-If deployment is needed and deployment options are listed below, include the best option id in brackets. If no options are listed, omit the brackets.%s
+If deployment is needed and deployment options are listed below, include the best option id in brackets. If no options are listed, omit the brackets.%s%s
 
 Issue Title: %s
 
 Issue Description:
-%s%s`, optionsCtx, title, truncStr(body, 800), ctx)
+%s%s`, optionsCtx, hostToolHint, title, truncStr(body, 800), ctx)
 
 	reply, err := ai.Call(prompt, 128)
 	if err != nil {
