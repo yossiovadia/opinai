@@ -82,6 +82,15 @@ func Run() {
 		slog.Info("forcing code review due to hardware limitations")
 	}
 
+	// If host-tool mode: force live testing (deployment is free, already running)
+	if os.Getenv("OPINAI_HOST_TOOLS") == "true" && feasibilityReason == "" {
+		if !needsDeployment {
+			slog.Info("host-tool mode: overriding classifier — forcing live testing (deployment is free)")
+			needsDeployment = true
+			classificationReason = "host-tool mode: live deployment available, forcing live testing"
+		}
+	}
+
 	// Step 2: Start server, use sandbox, or deploy from plan
 	serverURL := ""
 	verifyFix := os.Getenv("OPINAI_VERIFY_FIX") == "true"
