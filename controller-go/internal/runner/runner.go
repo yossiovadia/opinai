@@ -82,12 +82,21 @@ func Run() {
 		slog.Info("forcing code review due to hardware limitations")
 	}
 
-	// If host-tool mode: force live testing (deployment is free, already running)
+	// If host-tool mode: bias toward live testing, but respect classifier for trivial issues
+	// (typos, docs, comments, string changes). The classifier prompt already has the hint.
 	if os.Getenv("OPINAI_HOST_TOOLS") == "true" && feasibilityReason == "" {
 		if !needsDeployment {
-			slog.Info("host-tool mode: overriding classifier — forcing live testing (deployment is free)")
-			needsDeployment = true
-			classificationReason = "host-tool mode: live deployment available, forcing live testing"
+			lower := strings.ToLower(classificationReason)
+			isTrivial := strings.Contains(lower, "typo") || strings.Contains(lower, "documentation") ||
+				strings.Contains(lower, "comment") || strings.Contains(lower, "string") ||
+				strings.Contains(lower, "message text") || strings.Contains(lower, "log message")
+			if !isTrivial {
+				slog.Info("host-tool mode: overriding classifier — live testing preferred (deployment is free)", "original_reason", classificationReason)
+				needsDeployment = true
+				classificationReason = "host-tool mode: live deployment available, overriding code-review"
+			} else {
+				slog.Info("host-tool mode: keeping code-review for trivial issue", "reason", classificationReason)
+			}
 		}
 	}
 
