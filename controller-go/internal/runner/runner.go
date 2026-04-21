@@ -90,12 +90,17 @@ func Run() {
 			isTrivial := strings.Contains(lower, "typo") || strings.Contains(lower, "documentation") ||
 				strings.Contains(lower, "comment") || strings.Contains(lower, "string") ||
 				strings.Contains(lower, "message text") || strings.Contains(lower, "log message")
-			if !isTrivial {
+			isFeatureRequest := strings.Contains(lower, "feature") || strings.Contains(lower, "enhancement") ||
+				strings.Contains(lower, "request") || strings.Contains(lower, "improvement") ||
+				strings.Contains(lower, "add support") || strings.Contains(lower, "new capability")
+			if isTrivial {
+				slog.Info("host-tool mode: keeping code-review for trivial issue", "reason", classificationReason)
+			} else if isFeatureRequest {
+				slog.Info("host-tool mode: keeping code-review for feature request/enhancement", "reason", classificationReason)
+			} else {
 				slog.Info("host-tool mode: overriding classifier — live testing preferred (deployment is free)", "original_reason", classificationReason)
 				needsDeployment = true
 				classificationReason = "host-tool mode: live deployment available, overriding code-review"
-			} else {
-				slog.Info("host-tool mode: keeping code-review for trivial issue", "reason", classificationReason)
 			}
 		}
 	}
