@@ -1431,7 +1431,7 @@ func classifyIssue(title, body, repoContext string) (bool, string, string) {
 
 	hostToolHint := ""
 	if os.Getenv("OPINAI_HOST_TOOLS") == "true" {
-		hostToolHint = "\n\nIMPORTANT: This project is ALREADY DEPLOYED and running in the local cluster. Deployment is FREE (no setup cost). Prefer NEEDS_DEPLOYMENT when the bug COULD be validated by testing against live services, even if code review alone might suffice. Only use CODE_REVIEW for pure logic/typo/documentation bugs that have zero runtime behavior to verify."
+		hostToolHint = "\n\nIMPORTANT: This project is ALREADY DEPLOYED and running in the local cluster. Deployment is FREE (zero setup cost). You MUST choose NEEDS_DEPLOYMENT unless the bug is PURELY about documentation, typos, or comments. If the bug involves ANY runtime behavior (API responses, controller reconciliation, CRD handling, route conflicts, validation, admission control, database operations) — choose NEEDS_DEPLOYMENT. Live testing catches issues that code review misses. Even 'logic bugs' in controllers can be proven by creating test resources and observing behavior."
 	}
 
 	prompt := fmt.Sprintf(`Given this issue, classify whether reproducing the bug requires a RUNNING SERVER (API behavior, HTTP responses, timing, concurrency, runtime errors, integration failures, route conflicts, CRD behavior, controller reconciliation) or CODE REVIEW ONLY (logic bugs, missing null checks, wrong conditions, config parsing, type errors, documentation).
