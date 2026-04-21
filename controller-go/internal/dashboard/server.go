@@ -412,6 +412,7 @@ func (s *Server) buildRouter() chi.Router {
 				r.Get("/db-runs", s.handleAdminDBRuns)
 				r.Get("/db-memory", s.handleAdminDBMemory)
 				r.Get("/repo-memory/*", s.handleAdminRepoMemory)
+				r.Post("/repo-memory/*", s.handleAdminRepoMemorySet)
 				r.Get("/deployment-plan/*", s.handleAdminGetPlan)
 				r.Put("/deployment-plan/*", s.handleAdminUpdatePlan)
 				r.Post("/analyze-deployment", s.handleAdminAnalyze)

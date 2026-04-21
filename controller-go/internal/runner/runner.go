@@ -577,6 +577,20 @@ func Run() {
 		"suggested_questions": suggestedQs, "repro_details": string(reproJSON),
 		"repo_memory": collectedRepoMemory,
 	})
+
+	go func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			extractAndStoreLearnings(repo, "issue_reproduction", comment)
+		}()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			slog.Warn("learnings extraction timed out")
+		}
+	}()
+
 	slog.Info("reproduction complete", "repo", repo, "issue", issueNumber)
 }
 
@@ -734,6 +748,19 @@ func RunPRReview() {
 		prNumber, prTitle, prAuthor, result.Verdict, result.Risk,
 		os.Getenv("AI_MODEL"), reviewText,
 	)
+
+	go func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			extractAndStoreLearnings(repo, "pr_review", report)
+		}()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			slog.Warn("learnings extraction timed out")
+		}
+	}()
 
 	// Post result to controller
 	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, report, "", result.SuggestedQuestions)

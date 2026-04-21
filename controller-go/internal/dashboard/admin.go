@@ -272,6 +272,33 @@ func (s *Server) handleAdminRepoMemory(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(memory)
 }
 
+// --- POST /api/admin/repo-memory/{repo} ---
+
+func (s *Server) handleAdminRepoMemorySet(w http.ResponseWriter, r *http.Request) {
+	repo := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if repo == "" {
+		jsonError(w, "repo required", 400)
+		return
+	}
+	var body struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "invalid JSON: "+err.Error(), 400)
+		return
+	}
+	if body.Key == "" {
+		jsonError(w, "key required", 400)
+		return
+	}
+	if err := database.SetRepoMemoryWithReason(repo, body.Key, body.Value, "learnings extraction", "ai-learnings"); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 // --- GET /api/admin/deployment-plan/{repo} ---
 
 func (s *Server) handleAdminGetPlan(w http.ResponseWriter, r *http.Request) {
