@@ -13,19 +13,28 @@ Task type: {{.TaskType}}
 
 ## Instructions
 
-Extract concise, reusable learnings from the report above. Each learning should capture an architectural pattern, gotcha, common bug pattern, or integration point that would help future analyses of the same repository.
+Extract specific, actionable architectural facts from the report above. Each learning must be a single concrete insight about the codebase that would help a future AI analyst understand the system without re-reading the full report.
+
+GOOD examples (specific, architectural, actionable):
+- "ExternalModel and LLMInferenceService share HTTPRoute naming convention, no cross-kind uniqueness check exists"
+- "PostgreSQL connection pool defaults to 10; under concurrent load the pool exhausts before the 30s timeout"
+- "Webhook handler assumes JSON content-type but does not validate; XML payloads cause silent 200 with nil parsing"
+
+BAD examples (vague, raw report fragments, summaries):
+- "The code has several issues with error handling" (too vague)
+- "## Analysis Results: The PR modifies 3 files..." (raw report header)
+- "This is a well-structured codebase with good test coverage" (summary fluff)
 
 Rules:
+- Each value must be a SINGLE concrete architectural fact, not a summary or report fragment
+- NEVER copy report headers, section titles, or summary paragraphs
 - NEVER store code snippets, file contents, or raw error messages
-- Only store architectural patterns, gotchas, common bug patterns, integration points
-- Keep each value under 500 characters
-- Compare against the existing memory above — if a learning already exists, use action "skip"
-- If a learning refines or updates an existing one, use action "update" and use the same key
+- Keep each value under 200 characters — if you can't say it concisely, it's not distilled enough
+- Focus on: resource naming conflicts, shared state gotchas, API contract assumptions, missing validations, concurrency risks, deployment ordering dependencies
+- Compare against existing memory — use action "skip" if already known, "update" if refining
 - Prefix keys with a category: gotcha_, pattern_, integration_, architecture_, test_
-- Be selective — only extract insights that would genuinely help analyze future issues or PRs
-- Aim for 0-5 learnings maximum, fewer is better than noisy
-- If the report reveals NOTHING new or valuable beyond what's already in existing memory, return {"learnings": []} — an empty array is perfectly fine and preferred over low-quality entries
-- Routine PR reviews with no surprises should typically produce 0 learnings
+- Aim for 0-5 learnings maximum, 0 is perfectly fine for routine PRs
+- If the report reveals NOTHING new beyond existing memory, return {"learnings": []} — preferred over low-quality entries
 
 Respond with ONLY a JSON object in this exact format, no other text:
 
