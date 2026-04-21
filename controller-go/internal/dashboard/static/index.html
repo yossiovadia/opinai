@@ -166,8 +166,8 @@ let allRuns = [];
 var pendingReRuns = {}; // key: "repo#issue" → {timestamp, repo, issue}
 var _autoExpandAfterRender = new Set(); // rowIds to auto-expand after next render
 
-async function fetchJSON(url) {
-  const resp = await fetch(API + url);
+async function fetchJSON(url, opts) {
+  const resp = await fetch(API + url, opts);
   if (!resp.ok) throw new Error(resp.statusText);
   return resp.json();
 }
