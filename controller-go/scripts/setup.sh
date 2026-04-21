@@ -95,6 +95,14 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # MaaS CRDs (for live testing against deployed models-as-a-service)
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # KServe CRDs
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["*"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
 EOF
 
 # Bind ClusterRole to ServiceAccount
