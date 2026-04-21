@@ -163,7 +163,8 @@ const API = '';
 const REFRESH_INTERVAL = 30000;
 let activeRepoFilter = null;
 let allRuns = [];
-var pendingReRuns = {}; // key: "repo#issue" → {timestamp, repo, issue}
+var pendingReRuns = {};
+var _lastIssueData = null; // key: "repo#issue" → {timestamp, repo, issue}
 var _autoExpandAfterRender = new Set(); // rowIds to auto-expand after next render
 
 async function fetchJSON(url, opts) {
@@ -411,7 +412,7 @@ function mergeIssues() {
         delete pendingReRuns[pk];
       } else {
         // Still waiting — override display
-        entry.status = 'Re-running';
+        entry.status = pr.isNew ? 'Running' : 'Re-running';
         entry.verdict = '';
         entry.confidence = '';
       }
@@ -420,7 +421,7 @@ function mergeIssues() {
       map[pk] = {
         repo: pr.repo || '', issue: pr.issue || '', title: '',
         category: '', verdict: '', confidence: '',
-        status: 'Re-running', duration: '', timestamp: new Date(pr.timestamp).toISOString(),
+        status: pr.isNew ? 'Running' : 'Re-running', duration: '', timestamp: new Date(pr.timestamp).toISOString(),
         posted: false, report: '', runId: null, logs: ''
       };
     }
@@ -439,6 +440,7 @@ function mergeIssues() {
 function statusBadge(status) {
   switch (status) {
     case 'Re-running': return '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Re-running...</span>';
+    case 'Running': return '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running...</span>';
     case 'Running': return '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running</span>';
     case 'Done': return '<span class="verdict verdict-ok">&#x2705; Done</span>';
     case 'Failed': return '<span class="verdict verdict-bug">&#x274C; Failed</span>';
@@ -480,6 +482,7 @@ function renderIssues() {
   _logStreams = {};
 
   var items = mergeIssues();
+  _lastIssueData = items;
   if (activeRepoFilter) items = items.filter(function(r) { return r.repo === activeRepoFilter; });
   var container = document.getElementById('issuesContainer');
 
@@ -875,7 +878,8 @@ async function reproduceFromUrl() {
   } else {
     // Trigger issue reproduction
     var rKey = parsed.repo + '#' + parsed.number;
-    pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.number };
+    var isNew = !_lastIssueData || !_lastIssueData.find(function(r) { return (r.repo || '') + '#' + (r.issue || '') === rKey; });
+    pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.number, isNew: isNew };
     var rRowId = 'issue-' + parsed.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + parsed.number;
     _autoExpandAfterRender.add(rRowId);
     renderIssues();
