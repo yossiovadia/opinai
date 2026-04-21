@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
 )
 
@@ -813,7 +814,28 @@ func extractAndStoreFindingsFromPRReview(repo string, prNumber int, verdict, rev
 		if pf, ok := fileFindings[filePath]; ok {
 			finding = pf
 		} else {
-			finding = truncStr(reviewText, 500)
+			continue // skip files with no specific finding
+		}
+
+		// Condense oversized findings via AI instead of truncating
+		if len(finding) > 150 {
+			prompt := fmt.Sprintf(
+				"Condense this code review finding into a single architectural insight under 150 characters. "+
+					"Plain text only — no markdown, no bold, no backticks, no @mentions. "+
+					"Return ONLY the condensed text, nothing else.\n\nOriginal: %s", finding)
+			condensed, cerr := ai.Call(prompt, 256)
+			if cerr == nil {
+				condensed = strings.TrimSpace(condensed)
+				if len(condensed) > 0 && len(condensed) <= 150 {
+					finding = condensed
+				} else {
+					slog.Warn("condensing still too long, dropping", "file", filePath, "len", len(condensed))
+					continue
+				}
+			} else {
+				slog.Warn("condensing failed, dropping finding", "file", filePath, "error", cerr)
+				continue
+			}
 		}
 
 		database.AddInvestigationFinding(database.InvestigationFinding{
