@@ -17,6 +17,13 @@ RUN curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/sta
     && chmod +x kubectl && mv kubectl /usr/local/bin/
 # helm
 RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+# docker CLI (for host-tool mode — rebuilds into local Kind clusters)
+RUN curl -fsSL https://download.docker.com/linux/static/stable/$(uname -m)/docker-27.5.1.tgz \
+    | tar xz --strip-components=1 -C /usr/local/bin docker/docker
+# kind CLI (for loading images into Kind clusters)
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -Lo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-${ARCH}" && \
+    chmod +x /usr/local/bin/kind
 COPY --from=builder /opinai-go /app/opinai
 RUN ln -s /app/opinai /app/opinai-go
 EXPOSE 8080 8443

@@ -97,7 +97,22 @@ func Run() {
 	}
 
 	if !skipDeployment {
-		serverURL = os.Getenv("SERVER_URL")
+		hostTools := os.Getenv("OPINAI_HOST_TOOLS") == "true"
+		if hostTools && os.Getenv("SERVER_URL") == "" {
+			slog.Info("host-tool mode — using live deployment in cluster")
+			if url := hostToolDeploy(); url != "" {
+				serverURL = url
+				os.Setenv("SERVER_URL", serverURL)
+			} else {
+				serverURL = "http://maas-default-gateway-istio.istio-system.svc.cluster.local"
+				os.Setenv("SERVER_URL", serverURL)
+				slog.Info("using existing MaaS deployment", "server_url", serverURL)
+			}
+		}
+
+		if serverURL == "" {
+			serverURL = os.Getenv("SERVER_URL")
+		}
 		sandboxNS := os.Getenv("OPINAI_SANDBOX_NAMESPACE")
 		sandboxEndpoints := os.Getenv("OPINAI_SANDBOX_ENDPOINTS")
 		deploymentPlan := os.Getenv("OPINAI_DEPLOYMENT_PLAN")

@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opinai-controller
+  namespace: opinai
+  labels:
+    app: opinai-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opinai-controller
+  template:
+    metadata:
+      labels:
+        app: opinai-controller
+    spec:
+      serviceAccountName: opinai-controller
+      containers:
+        - name: controller
+          image: opinai-controller:latest
+          imagePullPolicy: Never
+          args: ["--mode=controller"]
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8443
+              name: https
+          envFrom:
+            - secretRef:
+                name: opinai-credentials
+            - configMapRef:
+                name: opinai-config
+                optional: true
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPINAI_IMAGE
+              value: "opinai-runner-python:latest"
+            - name: OPINAI_DB_PATH
+              value: "/data/opinai.db"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: gcp-credentials
+              mountPath: /var/run/secrets/gcp
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: gcp-credentials
+          secret:
+            secretName: opinai-gcp-credentials
+            optional: true

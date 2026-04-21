@@ -231,6 +231,8 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 		time.Sleep(2 * time.Second)
 	}
 
+	needsHostTools := repoNeedsHostTools(repo)
+
 	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
 	backoff := int32(0)
 	ttl := int32(3600)
@@ -329,6 +331,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 	env = append(env, secretEnvVar("AI_REGION", "opinai-credentials", "AI_REGION")...)
 	env = append(env, secretEnvVar("AI_MODEL", "opinai-credentials", "AI_MODEL")...)
 	env = append(env, profileEnvs...)
+	env = append(env, hostToolEnvVars(needsHostTools)...)
 	// Add infra dependency connection info as env vars
 	for dep, connInfo := range infraConnections {
 		envName := "OPINAI_INFRA_" + strings.ToUpper(dep)
@@ -373,17 +376,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "opinai-controller",
 					RestartPolicy:      corev1.RestartPolicyNever,
-					Volumes: []corev1.Volume{
-						{
-							Name: "gcp-credentials",
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: "opinai-gcp-credentials",
-									Optional:   boolPtr(true),
-								},
-							},
-						},
-					},
+					Volumes: hostToolVolumes(needsHostTools),
 					Containers: []corev1.Container{
 						{
 							Name:            "runner",
@@ -400,9 +393,7 @@ func (jm *JobManager) createJob(repo string, issueNumber int, issueTitle string,
 									Optional:             boolPtr(true),
 								}},
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "gcp-credentials", MountPath: "/var/run/secrets/gcp", ReadOnly: true},
-							},
+							VolumeMounts: hostToolVolumeMounts(needsHostTools),
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    mustParseQuantity(planRes.CPUReq),
@@ -504,6 +495,8 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 		jm.client.BatchV1().Jobs(jm.namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &bg})
 		time.Sleep(2 * time.Second)
 	}
+
+	needsHostTools := repoNeedsHostTools(repo)
 
 	repoSafe := strings.ToLower(strings.ReplaceAll(repo, "/", "-"))
 	backoff := int32(0)
@@ -628,6 +621,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 	env = append(env, secretEnvVar("AI_REGION", "opinai-credentials", "AI_REGION")...)
 	env = append(env, secretEnvVar("AI_MODEL", "opinai-credentials", "AI_MODEL")...)
 	env = append(env, collectProfileEnvVars()...)
+	env = append(env, hostToolEnvVars(needsHostTools)...)
 
 	planRes := extractPlanResources("")
 	if imgSel.CPUReq != "" {
@@ -666,17 +660,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 				Spec: corev1.PodSpec{
 					ServiceAccountName: "opinai-controller",
 					RestartPolicy:      corev1.RestartPolicyNever,
-					Volumes: []corev1.Volume{
-						{
-							Name: "gcp-credentials",
-							VolumeSource: corev1.VolumeSource{
-								Secret: &corev1.SecretVolumeSource{
-									SecretName: "opinai-gcp-credentials",
-									Optional:   boolPtr(true),
-								},
-							},
-						},
-					},
+					Volumes: hostToolVolumes(needsHostTools),
 					Containers: []corev1.Container{
 						{
 							Name:            "runner",
@@ -693,9 +677,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 									Optional:             boolPtr(true),
 								}},
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "gcp-credentials", MountPath: "/var/run/secrets/gcp", ReadOnly: true},
-							},
+							VolumeMounts: hostToolVolumeMounts(needsHostTools),
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceCPU:    mustParseQuantity(planRes.CPUReq),

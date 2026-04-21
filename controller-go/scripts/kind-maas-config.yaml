@@ -1,0 +1,20 @@
+# Kind cluster config for maas-local with Docker socket access.
+# Use with: kind create cluster --name maas-local --config kind-maas-config.yaml
+# Then run local-deploy.sh which skips cluster creation if it already exists.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 8080
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 8443
+    protocol: TCP
+  - containerPort: 30080
+    hostPort: 9081
+    protocol: TCP
+  extraMounts:
+  - hostPath: /var/run/docker.sock
+    containerPath: /var/run/docker.sock

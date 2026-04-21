@@ -32,6 +32,17 @@ If "Sandbox services deployed for this project" appears in the context below, th
 
 {{.RepoContext}}
 
+{{if .HostTools}}
+HOST-TOOL MODE:
+This project is deployed in the same Kubernetes cluster. You have direct access to the services.
+- MaaS API: http://maas-api.maas-system.svc.cluster.local:8000
+- MaaS Gateway: http://maas-default-gateway-istio.istio-system.svc.cluster.local
+- BBR (payload-processing): deployed as ext_proc filter behind the gateway
+- You can inspect pods: kubectl get pods -n maas-system && kubectl get pods -n istio-system
+- You can check logs: kubectl logs -n <namespace> deploy/<name>
+- The project was rebuilt with latest code before this session started.
+{{end}}
+
 When ready to deliver your verdict, output EXACTLY this format at the end:
 
 ===VERDICT===

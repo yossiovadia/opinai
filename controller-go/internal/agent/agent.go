@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
@@ -37,10 +38,12 @@ func Investigate(title, body, serverURL, repoDir, repoContext string, maxIter in
 	}
 
 	// Build system prompt
-	systemPrompt := prompts.Render("agent_investigate.txt", map[string]string{
-		"ServerURL":  serverURL,
-		"RepoDir":    repoDir,
+	hostTools := os.Getenv("OPINAI_HOST_TOOLS") == "true"
+	systemPrompt := prompts.Render("agent_investigate.txt", map[string]any{
+		"ServerURL":   serverURL,
+		"RepoDir":     repoDir,
 		"RepoContext": repoContext,
+		"HostTools":   hostTools,
 	})
 
 	// Build user message with the bug report
