@@ -17,6 +17,7 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/version"
 )
 
 // --- GET /api/admin/repos ---
@@ -158,13 +159,18 @@ func (s *Server) handleAdminSettingsUpdate(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAdminSystem(w http.ResponseWriter, r *http.Request) {
 	uptime := time.Since(s.state.StartTime).Seconds()
 	hostname, _ := os.Hostname()
+	vInfo := version.Info()
 	json.NewEncoder(w).Encode(map[string]any{
-		"namespace":      Env("NAMESPACE", "opinai"),
-		"pod_name":       hostname,
-		"uptime_human":   FormatDuration(uptime),
-		"uptime_seconds": int(uptime),
-		"image":          "opinai-controller-go:latest",
-		"go_version":     runtime.Version(),
+		"namespace":        Env("NAMESPACE", "opinai"),
+		"pod_name":         hostname,
+		"uptime_human":     FormatDuration(uptime),
+		"uptime_seconds":   int(uptime),
+		"image":            "opinai-controller-go:latest",
+		"go_version":       runtime.Version(),
+		"git_commit":       vInfo["git_commit"],
+		"build_time":       vInfo["build_time"],
+		"runner_image":     vInfo["runner_image"],
+		"controller_image": vInfo["controller_image"],
 	})
 }
 

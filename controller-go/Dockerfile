@@ -4,7 +4,12 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /opinai-go ./cmd/opinai
+ARG GIT_COMMIT=""
+ARG BUILD_TIME=""
+RUN CGO_ENABLED=0 go build -ldflags="-s -w \
+  -X github.com/yossiovadia/opinai/controller-go/internal/version.GitCommit=${GIT_COMMIT} \
+  -X github.com/yossiovadia/opinai/controller-go/internal/version.BuildTime=${BUILD_TIME}" \
+  -o /opinai-go ./cmd/opinai
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl jq git bash openssl

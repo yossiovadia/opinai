@@ -134,6 +134,11 @@
       </div>
     </div>
     <div class="admin-status" style="margin-top:8px;">Namespace: <strong id="sysNamespace">--</strong> &nbsp; Pod: <strong id="sysPod">--</strong> &nbsp; Uptime: <strong id="sysUptime">--</strong></div>
+    <div class="admin-status" style="margin-top:4px;font-size:11px;color:var(--text-dim)">
+      Git: <strong id="sysGitCommit">--</strong> &nbsp;
+      Built: <strong id="sysBuildTime">--</strong> &nbsp;
+      Runner: <code id="sysRunnerImage" style="font-size:11px">--</code>
+    </div>
   </div>
 
   <!-- 5. Sandboxes -->
@@ -394,6 +399,9 @@ async function loadSystem() {
   document.getElementById('sysUptime').textContent = s.uptime_human;
   document.getElementById('adminPod').textContent = 'Pod: ' + s.pod_name;
   document.getElementById('adminUptime').textContent = 'Uptime: ' + s.uptime_human;
+  document.getElementById('sysGitCommit').textContent = s.git_commit || '--';
+  document.getElementById('sysBuildTime').textContent = s.build_time || '--';
+  document.getElementById('sysRunnerImage').textContent = s.runner_image || '(not set)';
 }
 
 // --- Logs ---
