@@ -41,6 +41,8 @@ spec:
               value: "opinai-runner-python:latest"
             - name: OPINAI_DB_PATH
               value: "/data/opinai.db"
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: "/var/run/secrets/gcp/credentials.json"
           volumeMounts:
             - name: data
               mountPath: /data
