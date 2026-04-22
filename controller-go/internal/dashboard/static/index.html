@@ -391,11 +391,12 @@ function mergeIssues() {
       map[key] = {
         repo: j.repo || '', issue: j.issue || '', title: '',
         category: '', verdict: '', confidence: '',
-        status: jobStatus, duration: j.duration || '', timestamp: j.created || '',
+        status: jobStatus, duration: j.duration || '', timestamp: j.created || j.created_at || '',
         posted: false, report: '', runId: null,
-        logs: j.logs || ''
+        logs: j.logs || '', jobType: j.type || ''
       };
     }
+    if (j.type) map[key].jobType = j.type;
   });
 
   // Apply pending re-run overrides
@@ -529,7 +530,8 @@ function renderIssues() {
     // Build expanded content: live logs for active rows, report for completed
     var expandInner;
     if (isActive) {
-      expandInner = '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x23F3; Starting reproduction...</span></div>';
+      var startMsg = r.jobType === 'pr-review' ? 'Starting PR review...' : 'Starting reproduction...';
+      expandInner = '<div class="live-logs" id="logs-' + rowId + '"><span style="color:var(--text-dim)">&#x23F3; ' + startMsg + '</span></div>';
     } else {
       expandInner = renderSummary(r) + renderReproDetails(r) + renderMarkdown(expandContent);
     }

@@ -106,6 +106,7 @@ type JobInfo struct {
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 	PodName   string `json:"pod_name"`
+	Type      string `json:"type"`
 }
 
 // ListJobs returns all opinai-runner jobs with their current status.
@@ -166,6 +167,7 @@ func (jm *JobManager) ListJobs() []JobInfo {
 			Status:    status,
 			CreatedAt: createdAt,
 			PodName:   podName,
+			Type:      labels["opinai/type"],
 		})
 	}
 	return result

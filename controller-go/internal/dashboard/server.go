@@ -178,6 +178,7 @@ type JobInfo struct {
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 	PodName   string `json:"pod_name"`
+	Type      string `json:"type"`
 }
 
 // ListJobsFunc returns active reproduction jobs.

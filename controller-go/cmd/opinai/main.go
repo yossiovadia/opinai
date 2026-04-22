@@ -167,7 +167,7 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			for i, j := range jobs {
 				result[i] = dashboard.JobInfo{
 					Repo: j.Repo, Issue: j.Issue, Status: j.Status,
-					CreatedAt: j.CreatedAt, PodName: j.PodName,
+					CreatedAt: j.CreatedAt, PodName: j.PodName, Type: j.Type,
 				}
 			}
 			return result
