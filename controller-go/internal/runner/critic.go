@@ -118,6 +118,80 @@ func runCritic(repo, taskType, reviewOutput string) (*CriticResult, error) {
 	return &result, nil
 }
 
+const criticScoreThreshold = 7
+const criticMaxRetries = 2
+
+// criticLoop runs the critic evaluation and, if the score is below threshold,
+// rewrites the review with critic feedback and re-evaluates. Returns the
+// (possibly improved) output and the final critic result.
+// Falls back to the original output on any error.
+func criticLoop(repo, taskType, reviewOutput string) (string, *CriticResult) {
+	output := reviewOutput
+	var lastResult *CriticResult
+
+	for attempt := 0; attempt <= criticMaxRetries; attempt++ {
+		result, err := runCritic(repo, taskType, output)
+		if err != nil {
+			slog.Warn("critic evaluation failed", "attempt", attempt, "error", err)
+			return output, lastResult
+		}
+		lastResult = result
+
+		if result.Score >= criticScoreThreshold {
+			if attempt > 0 {
+				slog.Info("critic loop: review improved to passing score",
+					"attempt", attempt, "score", result.Score)
+			}
+			return output, result
+		}
+
+		if attempt == criticMaxRetries {
+			slog.Warn("critic loop: max retries reached, posting as-is",
+				"score", result.Score, "attempts", attempt+1)
+			return output, result
+		}
+
+		slog.Info("critic loop: score below threshold, rewriting",
+			"score", result.Score, "attempt", attempt+1)
+
+		improved, err := reanalyzeWithFeedback(taskType, output, result)
+		if err != nil {
+			slog.Warn("critic rewrite failed, using original", "error", err)
+			return output, result
+		}
+		output = improved
+	}
+
+	return output, lastResult
+}
+
+// reanalyzeWithFeedback calls AI to produce an improved review based on critic feedback.
+func reanalyzeWithFeedback(taskType, originalOutput string, critic *CriticResult) (string, error) {
+	weaknessesJSON, _ := json.Marshal(critic.Weaknesses)
+	suggestionsJSON, _ := json.Marshal(critic.RewriteSuggestions)
+
+	prompt := prompts.Render("critic_rewrite.txt", map[string]string{
+		"TaskType":           taskType,
+		"OriginalReview":     truncStr(originalOutput, 6000),
+		"Weaknesses":         string(weaknessesJSON),
+		"RewriteSuggestions": string(suggestionsJSON),
+		"CriticScore":        fmt.Sprintf("%d", critic.Score),
+	})
+
+	response, err := ai.Call(prompt, 4096)
+	if err != nil {
+		return "", fmt.Errorf("rewrite AI call failed: %w", err)
+	}
+
+	response = strings.TrimSpace(response)
+	if response == "" {
+		return "", fmt.Errorf("empty rewrite response")
+	}
+
+	slog.Info("critic rewrite produced improved review", "original_len", len(originalOutput), "improved_len", len(response))
+	return response, nil
+}
+
 // fetchMetaLearningsContext fetches existing meta-learnings from the controller
 // and formats them as context for the critic prompt.
 func fetchMetaLearningsContext(controllerURL, repo string) string {
