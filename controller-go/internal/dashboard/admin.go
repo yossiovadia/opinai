@@ -940,6 +940,20 @@ func (s *Server) handleAdminMemoryFindings(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (s *Server) handleAdminDeleteFindings(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		jsonError(w, "repo query parameter required", 400)
+		return
+	}
+	if err := database.DeleteFindingsForRepo(repo); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	slog.Info("deleted findings", "repo", repo)
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "repo": repo})
+}
+
 func ghGetDashboard(path string) ([]byte, int, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	req, _ := http.NewRequest("GET", "https://api.github.com"+path, nil)

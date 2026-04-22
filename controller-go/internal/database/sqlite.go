@@ -1160,6 +1160,11 @@ func GetFindingsForRepo(repo string, limit int) ([]InvestigationFinding, error) 
 	return findings, rows.Err()
 }
 
+func DeleteFindingsForRepo(repo string) error {
+	_, err := db.Exec("DELETE FROM investigation_findings WHERE repo = ?", repo)
+	return err
+}
+
 // --- Outcomes ---
 
 type Outcome struct {

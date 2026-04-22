@@ -431,6 +431,7 @@ func (s *Server) buildRouter() chi.Router {
 				r.Get("/memory/events", s.handleAdminMemoryEvents)
 				r.Get("/memory/outcomes", s.handleAdminMemoryOutcomes)
 				r.Get("/memory/findings", s.handleAdminMemoryFindings)
+				r.Delete("/memory/findings", s.handleAdminDeleteFindings)
 			})
 		})
 	})
