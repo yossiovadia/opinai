@@ -177,7 +177,36 @@
     </div>
   </div>
 
-  <!-- 8. Logs (collapsible) -->
+  <!-- 8. Self-Improvement (collapsible) -->
+  <div class="admin-card">
+    <div class="collapsible-header" onclick="toggleSection('selfimprove')">
+      <h3>&#x1F9E0; Self-Improvement</h3>
+      <span class="collapsible-arrow" id="arrow-selfimprove">&#x25B6;</span>
+    </div>
+    <div class="collapsible-body" id="body-selfimprove">
+      <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:12px;color:var(--text-dim)">Repo:</label>
+        <select id="siRepoSelect" onchange="loadSelfImprovement()" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;"></select>
+        <span id="siSummary" style="font-size:13px;color:var(--text-dim)"></span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <h4 style="font-size:13px;margin-bottom:8px;">Critic Score Trend</h4>
+          <div id="siScoreChart" style="min-height:60px;"><div class="empty">No scores yet</div></div>
+        </div>
+        <div>
+          <h4 style="font-size:13px;margin-bottom:8px;">Meta-Learnings</h4>
+          <div id="siLearnings" style="max-height:300px;overflow-y:auto;"><div class="empty">No learnings yet</div></div>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <h4 style="font-size:13px;margin-bottom:8px;">Recent Critic Scores</h4>
+        <div id="siScoresTable" style="overflow-x:auto;"><div class="empty">No scores yet</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. Logs (collapsible) -->
   <div class="admin-card">
     <div class="collapsible-header" onclick="toggleSection('logs')">
       <h3>&#x1F4DC; Controller Logs</h3>
@@ -216,6 +245,7 @@ function toggleSection(id) {
     if (id === 'memory') loadMemory();
     else if (id === 'db') { loadDbStats(); loadDbRuns(); }
     else if (id === 'logs') loadLogs();
+    else if (id === 'selfimprove') initSelfImprovement();
   }
 }
 
@@ -736,6 +766,108 @@ async function cleanupSandboxes() {
   var data = await fetchJSON('/api/admin/sandboxes/cleanup', { method: 'POST' });
   alert('Cleaned ' + (data.cleaned || 0) + ' sandbox(es)');
   loadSandboxes();
+}
+
+// --- Self-Improvement ---
+var siInitialized = false;
+
+async function initSelfImprovement() {
+  if (siInitialized) return;
+  siInitialized = true;
+  // Populate repo dropdown from loaded repos
+  var select = document.getElementById('siRepoSelect');
+  select.innerHTML = '<option value="">(all repos)</option>';
+  try {
+    var repos = await fetchJSON('/api/admin/repos');
+    repos.forEach(function(r) {
+      var opt = document.createElement('option');
+      opt.value = r.name;
+      opt.textContent = r.name;
+      select.appendChild(opt);
+    });
+  } catch(e) {}
+  loadSelfImprovement();
+}
+
+async function loadSelfImprovement() {
+  var repo = document.getElementById('siRepoSelect').value;
+  var qs = repo ? '?repo=' + encodeURIComponent(repo) : '';
+  try {
+    var data = await fetchJSON('/api/admin/self-improvement' + qs);
+    // Summary
+    var summary = document.getElementById('siSummary');
+    var avgStr = data.average_critic_score ? data.average_critic_score.toFixed(1) : '—';
+    summary.textContent = data.meta_learnings_count + ' learnings | Avg score: ' + avgStr + '/10';
+
+    // Score chart (simple ASCII bar chart)
+    var chartDiv = document.getElementById('siScoreChart');
+    if (data.recent_scores && data.recent_scores.length > 0) {
+      var html = '<div style="display:flex;align-items:flex-end;gap:4px;height:50px;">';
+      data.recent_scores.slice().reverse().forEach(function(s) {
+        var pct = Math.max(10, s.score * 10);
+        var color = s.score >= 7 ? 'var(--green)' : s.score >= 5 ? 'var(--yellow)' : 'var(--red)';
+        html += '<div title="#' + s.issue_number + ' (' + s.task_type + '): ' + s.score + '/10" style="width:20px;height:' + pct + '%;background:' + color + ';border-radius:3px 3px 0 0;cursor:help;"></div>';
+      });
+      html += '</div>';
+      chartDiv.innerHTML = html;
+    } else {
+      chartDiv.innerHTML = '<div class="empty">No scores yet</div>';
+    }
+
+    // Meta-learnings list
+    var learnDiv = document.getElementById('siLearnings');
+    if (data.meta_learnings && data.meta_learnings.length > 0) {
+      var html = '';
+      data.meta_learnings.forEach(function(ml) {
+        var scopeBadge = ml.scope === 'general'
+          ? '<span style="background:rgba(88,166,255,0.2);color:var(--blue);padding:1px 6px;border-radius:3px;font-size:10px;">general</span>'
+          : '<span style="background:rgba(63,185,80,0.2);color:var(--green);padding:1px 6px;border-radius:3px;font-size:10px;">repo</span>';
+        html += '<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+          '<span>' + scopeBadge + ' <strong>' + escapeHtml(ml.key) + '</strong></span>' +
+          '<button class="btn btn-danger" style="font-size:10px;padding:2px 6px;" onclick="deleteMetaLearning(' + ml.id + ')">×</button>' +
+          '</div>' +
+          '<div style="color:var(--text-dim);margin-top:2px;">' + escapeHtml(ml.value) + '</div>' +
+          '<div style="color:var(--text-dim);font-size:10px;margin-top:2px;">Applied: ' + ml.times_applied + 'x | Score at creation: ' + ml.score_at_creation + '</div>' +
+          '</div>';
+      });
+      learnDiv.innerHTML = html;
+    } else {
+      learnDiv.innerHTML = '<div class="empty">No learnings yet</div>';
+    }
+
+    // Scores table
+    var tableDiv = document.getElementById('siScoresTable');
+    if (data.recent_scores && data.recent_scores.length > 0) {
+      var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">' +
+        '<tr style="color:var(--text-dim);"><th style="text-align:left;padding:4px;">Issue</th><th>Type</th><th>Score</th><th>Strengths</th><th>Weaknesses</th><th>Date</th></tr>';
+      data.recent_scores.forEach(function(s) {
+        var scoreColor = s.score >= 7 ? 'var(--green)' : s.score >= 5 ? 'var(--yellow)' : 'var(--red)';
+        var strengths = ''; try { strengths = JSON.parse(s.strengths).join(', '); } catch(e) { strengths = s.strengths; }
+        var weaknesses = ''; try { weaknesses = JSON.parse(s.weaknesses).join(', '); } catch(e) { weaknesses = s.weaknesses; }
+        html += '<tr style="border-top:1px solid var(--border);">' +
+          '<td style="padding:4px;">#' + s.issue_number + '</td>' +
+          '<td style="padding:4px;text-align:center;">' + escapeHtml(s.task_type) + '</td>' +
+          '<td style="padding:4px;text-align:center;color:' + scoreColor + ';font-weight:600;">' + s.score + '/10</td>' +
+          '<td style="padding:4px;color:var(--green);max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="' + escapeHtml(strengths) + '">' + escapeHtml(strengths).substring(0,60) + '</td>' +
+          '<td style="padding:4px;color:var(--red);max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="' + escapeHtml(weaknesses) + '">' + escapeHtml(weaknesses).substring(0,60) + '</td>' +
+          '<td style="padding:4px;color:var(--text-dim);">' + (s.created_at || '').substring(0,10) + '</td>' +
+          '</tr>';
+      });
+      html += '</table>';
+      tableDiv.innerHTML = html;
+    } else {
+      tableDiv.innerHTML = '<div class="empty">No scores yet</div>';
+    }
+  } catch(e) {
+    console.error('Failed to load self-improvement data:', e);
+  }
+}
+
+async function deleteMetaLearning(id) {
+  if (!confirm('Delete this meta-learning?')) return;
+  await fetchJSON('/api/admin/meta-learnings/' + id, { method: 'DELETE' });
+  loadSelfImprovement();
 }
 
 // --- Init ---
