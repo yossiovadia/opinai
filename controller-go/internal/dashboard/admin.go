@@ -940,54 +940,6 @@ func (s *Server) handleAdminMemoryFindings(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (s *Server) handleAdminMetaLearnings(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	if repo == "" {
-		jsonError(w, "repo query parameter required", 400)
-		return
-	}
-	learnings, err := database.GetMetaLearnings(repo, 50)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if learnings == nil {
-		learnings = []database.MetaLearning{}
-	}
-	json.NewEncoder(w).Encode(map[string]any{"meta_learnings": learnings})
-}
-
-func (s *Server) handleAdminDeleteMetaLearnings(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	if repo == "" {
-		jsonError(w, "repo query parameter required", 400)
-		return
-	}
-	if err := database.DeleteMetaLearningsForRepo(repo); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	slog.Info("deleted meta-learnings", "repo", repo)
-	json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "repo": repo})
-}
-
-func (s *Server) handleAdminCriticScores(w http.ResponseWriter, r *http.Request) {
-	repo := r.URL.Query().Get("repo")
-	if repo == "" {
-		jsonError(w, "repo query parameter required", 400)
-		return
-	}
-	scores, err := database.GetCriticScores(repo, 20)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	if scores == nil {
-		scores = []database.CriticScore{}
-	}
-	json.NewEncoder(w).Encode(map[string]any{"critic_scores": scores})
-}
-
 func (s *Server) handleAdminDeleteFindings(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 	if repo == "" {

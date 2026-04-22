@@ -17,7 +17,6 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/controller"
-	"github.com/yossiovadia/opinai/controller-go/internal/database"
 	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 )
 
@@ -350,14 +349,6 @@ func Run() {
 	} else {
 		stateCtx = "\n\nThis is an OPEN issue. Reproduce the bug and confirm or deny it.\n"
 	}
-	// Inject meta-learnings from previous critic evaluations
-	metaLearningsCtx, mlIDs := buildMetaLearningsContext(repo)
-	if metaLearningsCtx != "" {
-		richCtx += "\n\n" + metaLearningsCtx
-		database.IncrementTimesApplied(mlIDs)
-		slog.Info("injected meta-learnings into investigation", "count", len(mlIDs))
-	}
-
 	agentRepoCtx := richCtx + stateCtx + allEndpointsCtx
 
 	// Include issue comments in the body passed to the agent
@@ -623,12 +614,6 @@ func Run() {
 		}
 	}()
 
-	// Run critic evaluation (async, don't block)
-	go func() {
-		defer func() { recover() }()
-		runCritic(repo, atoi(issueNumber), "issue_reproduction", comment)
-	}()
-
 	slog.Info("reproduction complete", "repo", repo, "issue", issueNumber)
 }
 
@@ -738,14 +723,6 @@ func RunPRReview() {
 		}
 	}
 
-	// Inject meta-learnings from previous critic evaluations
-	metaLearningsCtx, mlIDs := buildMetaLearningsContext(repo)
-	if metaLearningsCtx != "" {
-		richCtx += "\n\n" + metaLearningsCtx
-		database.IncrementTimesApplied(mlIDs)
-		slog.Info("injected meta-learnings into PR review", "count", len(mlIDs))
-	}
-
 	slog.Info("starting PR review agent", "changed_files", len(changedFilesSummary), "diff_bytes", len(truncatedDiff), "existing_comments", len(existingCommentsCtx) > 0)
 
 	// Run agent investigation
@@ -806,12 +783,6 @@ func RunPRReview() {
 		case <-time.After(30 * time.Second):
 			slog.Warn("learnings extraction timed out")
 		}
-	}()
-
-	// Run critic evaluation (async, don't block)
-	go func() {
-		defer func() { recover() }()
-		runCritic(repo, prNumber, "pr_review", report)
 	}()
 
 	// Post result to controller
