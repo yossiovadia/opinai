@@ -203,6 +203,35 @@ func migrate() error {
 	// Backfill legacy memory events that have reason="set" / source="unknown"
 	db.Exec(`UPDATE memory_events SET reason = 'initial analysis', source = 'repo_analysis' WHERE reason = 'set' AND source = 'unknown'`)
 
+	// --- Self-improvement system tables ---
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS meta_learnings (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL DEFAULT '',
+		scope TEXT NOT NULL DEFAULT 'repo',
+		key TEXT NOT NULL,
+		value TEXT NOT NULL,
+		source_issue INTEGER DEFAULT 0,
+		score_at_creation INTEGER DEFAULT 0,
+		times_applied INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meta_learnings_repo ON meta_learnings(repo)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meta_learnings_scope ON meta_learnings(scope)")
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS critic_scores (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL,
+		issue_number INTEGER NOT NULL,
+		task_type TEXT NOT NULL,
+		score INTEGER NOT NULL,
+		strengths TEXT DEFAULT '',
+		weaknesses TEXT DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_critic_scores_repo ON critic_scores(repo)")
+
 	return nil
 }
 
@@ -666,7 +695,7 @@ func UpdateDeploymentPlanStatus(repo, status string) error {
 func DeleteRepoData(repo string) error {
 	mu.Lock()
 	defer mu.Unlock()
-	for _, table := range []string{"deployment_plans", "repo_memory", "processed_issues", "memory_events", "investigation_findings", "outcomes"} {
+	for _, table := range []string{"deployment_plans", "repo_memory", "processed_issues", "memory_events", "investigation_findings", "outcomes", "meta_learnings", "critic_scores"} {
 		if _, err := db.Exec("DELETE FROM "+table+" WHERE repo = ?", repo); err != nil {
 			return err
 		}
@@ -1291,4 +1320,205 @@ func GetOutcomeSummary(repo string) ([]OutcomeSummary, error) {
 		result = append(result, *s)
 	}
 	return result, nil
+}
+
+// --- Meta-Learnings ---
+
+// MetaLearning represents a self-improvement learning extracted by the critic.
+type MetaLearning struct {
+	ID              int64  `json:"id"`
+	Repo            string `json:"repo"`
+	Scope           string `json:"scope"`
+	Key             string `json:"key"`
+	Value           string `json:"value"`
+	SourceIssue     int    `json:"source_issue"`
+	ScoreAtCreation int    `json:"score_at_creation"`
+	TimesApplied    int    `json:"times_applied"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+// AddMetaLearning stores a new meta-learning from the critic.
+func AddMetaLearning(ml MetaLearning) (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(
+		`INSERT INTO meta_learnings (repo, scope, key, value, source_issue, score_at_creation, times_applied)
+		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		ml.Repo, ml.Scope, ml.Key, ml.Value, ml.SourceIssue, ml.ScoreAtCreation,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetMetaLearnings returns meta-learnings for a specific repo, newest first.
+func GetMetaLearnings(repo string, limit int) ([]MetaLearning, error) {
+	rows, err := db.Query(
+		`SELECT id, repo, scope, key, value, source_issue, score_at_creation, times_applied, created_at, updated_at
+		 FROM meta_learnings WHERE repo = ? ORDER BY id DESC LIMIT ?`,
+		repo, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetaLearnings(rows)
+}
+
+// GetGeneralMetaLearnings returns meta-learnings with scope='general', newest first.
+func GetGeneralMetaLearnings(limit int) ([]MetaLearning, error) {
+	rows, err := db.Query(
+		`SELECT id, repo, scope, key, value, source_issue, score_at_creation, times_applied, created_at, updated_at
+		 FROM meta_learnings WHERE scope = 'general' ORDER BY id DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetaLearnings(rows)
+}
+
+// GetAllMetaLearningsForRepo returns both repo-specific and general learnings.
+func GetAllMetaLearningsForRepo(repo string, limit int) ([]MetaLearning, error) {
+	rows, err := db.Query(
+		`SELECT id, repo, scope, key, value, source_issue, score_at_creation, times_applied, created_at, updated_at
+		 FROM meta_learnings WHERE repo = ? OR scope = 'general' ORDER BY id DESC LIMIT ?`,
+		repo, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetaLearnings(rows)
+}
+
+// IncrementTimesApplied increments the times_applied counter for a meta-learning.
+func IncrementTimesApplied(id int64) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec(
+		"UPDATE meta_learnings SET times_applied = times_applied + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		id,
+	)
+	return err
+}
+
+// DeleteMetaLearning removes a single meta-learning by ID.
+func DeleteMetaLearning(id int64) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM meta_learnings WHERE id = ?", id)
+	return err
+}
+
+// DeleteMetaLearningsForRepo removes all meta-learnings for a repo.
+func DeleteMetaLearningsForRepo(repo string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec("DELETE FROM meta_learnings WHERE repo = ?", repo)
+	return err
+}
+
+// CountMetaLearnings returns the count of meta-learnings for a repo (including general).
+func CountMetaLearnings(repo string) int {
+	var count int
+	if repo != "" {
+		db.QueryRow("SELECT COUNT(*) FROM meta_learnings WHERE repo = ? OR scope = 'general'", repo).Scan(&count)
+	} else {
+		db.QueryRow("SELECT COUNT(*) FROM meta_learnings").Scan(&count)
+	}
+	return count
+}
+
+func scanMetaLearnings(rows *sql.Rows) ([]MetaLearning, error) {
+	var result []MetaLearning
+	for rows.Next() {
+		var ml MetaLearning
+		err := rows.Scan(&ml.ID, &ml.Repo, &ml.Scope, &ml.Key, &ml.Value,
+			&ml.SourceIssue, &ml.ScoreAtCreation, &ml.TimesApplied, &ml.CreatedAt, &ml.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ml)
+	}
+	return result, rows.Err()
+}
+
+// --- Critic Scores ---
+
+// CriticScore represents a critic evaluation score for a review.
+type CriticScore struct {
+	ID          int64  `json:"id"`
+	Repo        string `json:"repo"`
+	IssueNumber int    `json:"issue_number"`
+	TaskType    string `json:"task_type"`
+	Score       int    `json:"score"`
+	Strengths   string `json:"strengths"`
+	Weaknesses  string `json:"weaknesses"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// AddCriticScore stores a critic evaluation score.
+func AddCriticScore(cs CriticScore) (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(
+		`INSERT INTO critic_scores (repo, issue_number, task_type, score, strengths, weaknesses)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		cs.Repo, cs.IssueNumber, cs.TaskType, cs.Score, cs.Strengths, cs.Weaknesses,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetCriticScores returns critic scores for a repo, newest first.
+func GetCriticScores(repo string, limit int) ([]CriticScore, error) {
+	var rows *sql.Rows
+	var err error
+	if repo != "" {
+		rows, err = db.Query(
+			`SELECT id, repo, issue_number, task_type, score, strengths, weaknesses, created_at
+			 FROM critic_scores WHERE repo = ? ORDER BY id DESC LIMIT ?`,
+			repo, limit,
+		)
+	} else {
+		rows, err = db.Query(
+			`SELECT id, repo, issue_number, task_type, score, strengths, weaknesses, created_at
+			 FROM critic_scores ORDER BY id DESC LIMIT ?`,
+			limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []CriticScore
+	for rows.Next() {
+		var cs CriticScore
+		err := rows.Scan(&cs.ID, &cs.Repo, &cs.IssueNumber, &cs.TaskType, &cs.Score,
+			&cs.Strengths, &cs.Weaknesses, &cs.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, cs)
+	}
+	return result, rows.Err()
+}
+
+// GetAverageCriticScore returns the average critic score for a repo.
+func GetAverageCriticScore(repo string, limit int) float64 {
+	var avg float64
+	db.QueryRow(
+		`SELECT COALESCE(AVG(score), 0) FROM (
+			SELECT score FROM critic_scores WHERE repo = ? ORDER BY id DESC LIMIT ?
+		)`,
+		repo, limit,
+	).Scan(&avg)
+	return avg
 }
