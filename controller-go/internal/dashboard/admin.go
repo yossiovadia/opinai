@@ -954,6 +954,196 @@ func (s *Server) handleAdminDeleteFindings(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "repo": repo})
 }
 
+// --- Meta-Learnings API ---
+
+// GET /api/admin/meta-learnings?repo=X
+func (s *Server) handleAdminMetaLearnings(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	learnings, err := database.GetAllMetaLearningsForRepo(repo, 100)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if learnings == nil {
+		learnings = []database.MetaLearning{}
+	}
+	json.NewEncoder(w).Encode(learnings)
+}
+
+// POST /api/admin/meta-learnings
+func (s *Server) handleAdminMetaLearningAdd(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo            string `json:"repo"`
+		Scope           string `json:"scope"`
+		Key             string `json:"key"`
+		Value           string `json:"value"`
+		SourceIssue     int    `json:"source_issue"`
+		ScoreAtCreation int    `json:"score_at_creation"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid JSON: "+err.Error(), 400)
+		return
+	}
+	if req.Key == "" || req.Value == "" {
+		jsonError(w, "key and value required", 400)
+		return
+	}
+	if req.Scope == "" {
+		req.Scope = "repo"
+	}
+	id, err := database.AddMetaLearning(database.MetaLearning{
+		Repo:            req.Repo,
+		Scope:           req.Scope,
+		Key:             req.Key,
+		Value:           req.Value,
+		SourceIssue:     req.SourceIssue,
+		ScoreAtCreation: req.ScoreAtCreation,
+	})
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	slog.Info("added meta-learning", "id", id, "repo", req.Repo, "key", req.Key, "scope", req.Scope)
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "id": id})
+}
+
+// DELETE /api/admin/meta-learnings?repo=X
+func (s *Server) handleAdminMetaLearningDeleteRepo(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		jsonError(w, "repo query parameter required", 400)
+		return
+	}
+	if err := database.DeleteMetaLearningsForRepo(repo); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	slog.Info("deleted meta-learnings for repo", "repo", repo)
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "repo": repo})
+}
+
+// DELETE /api/admin/meta-learnings/{id}
+func (s *Server) handleAdminMetaLearningDelete(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id := int64(0)
+	fmt.Sscanf(idStr, "%d", &id)
+	if id == 0 {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	if err := database.DeleteMetaLearning(id); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+// POST /api/admin/meta-learnings/apply — increment times_applied
+func (s *Server) handleAdminMetaLearningApply(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == 0 {
+		jsonError(w, "id required", 400)
+		return
+	}
+	if err := database.IncrementTimesApplied(req.ID); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// --- Critic Scores API ---
+
+// GET /api/admin/critic-scores?repo=X
+func (s *Server) handleAdminCriticScores(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	limit := intQuery(r, "limit", 20)
+	scores, err := database.GetCriticScores(repo, limit)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if scores == nil {
+		scores = []database.CriticScore{}
+	}
+
+	// Include average for context
+	avg := 0.0
+	if repo != "" {
+		avg = database.GetAverageCriticScore(repo, 10)
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"scores":  scores,
+		"average": avg,
+	})
+}
+
+// POST /api/admin/critic-scores — store a critic score (called by runner)
+func (s *Server) handleAdminCriticScoreAdd(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Repo        string `json:"repo"`
+		IssueNumber int    `json:"issue_number"`
+		TaskType    string `json:"task_type"`
+		Score       int    `json:"score"`
+		Strengths   string `json:"strengths"`
+		Weaknesses  string `json:"weaknesses"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid JSON: "+err.Error(), 400)
+		return
+	}
+	id, err := database.AddCriticScore(database.CriticScore{
+		Repo:        req.Repo,
+		IssueNumber: req.IssueNumber,
+		TaskType:    req.TaskType,
+		Score:       req.Score,
+		Strengths:   req.Strengths,
+		Weaknesses:  req.Weaknesses,
+	})
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	slog.Info("stored critic score", "id", id, "repo", req.Repo, "score", req.Score)
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "id": id})
+}
+
+// GET /api/admin/self-improvement?repo=X — dashboard summary endpoint
+func (s *Server) handleAdminSelfImprovement(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+
+	// Meta-learnings count per repo
+	metaCount := database.CountMetaLearnings(repo)
+
+	// Average critic score (last 10)
+	avg := 0.0
+	if repo != "" {
+		avg = database.GetAverageCriticScore(repo, 10)
+	}
+
+	// Recent scores
+	scores, _ := database.GetCriticScores(repo, 10)
+	if scores == nil {
+		scores = []database.CriticScore{}
+	}
+
+	// All meta-learnings
+	learnings, _ := database.GetAllMetaLearningsForRepo(repo, 50)
+	if learnings == nil {
+		learnings = []database.MetaLearning{}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"meta_learnings_count": metaCount,
+		"average_critic_score": avg,
+		"recent_scores":        scores,
+		"meta_learnings":       learnings,
+	})
+}
+
 func ghGetDashboard(path string) ([]byte, int, error) {
 	token := os.Getenv("GITHUB_TOKEN")
 	req, _ := http.NewRequest("GET", "https://api.github.com"+path, nil)
