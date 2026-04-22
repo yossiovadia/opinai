@@ -100,6 +100,7 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Repo        string `json:"repo"`
 		IssueNumber int    `json:"issue_number"`
+		IsPR        bool   `json:"is_pr"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		jsonError(w, "invalid request", 400)
@@ -128,6 +129,27 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Controller not ready", 503)
 		return
 	}
+	// Route to PR review or issue reproduction based on is_pr flag
+	if req.IsPR {
+		if s.reviewPR == nil {
+			jsonError(w, "PR review not configured", 503)
+			return
+		}
+		// Fetch PR title from GitHub for better tracking
+		prTitle := fmt.Sprintf("PR #%d", req.IssueNumber)
+		if err := s.reviewPR(req.Repo, req.IssueNumber, prTitle); err != nil {
+			slog.Warn("PR review job creation failed, queueing as pending", "repo", req.Repo, "pr", req.IssueNumber, "error", err)
+			database.AddPendingPR(req.Repo, req.IssueNumber, prTitle)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":       "queued",
+			"repo":         req.Repo,
+			"issue_number": req.IssueNumber,
+			"type":         "pr_review",
+		})
+		return
+	}
+
 	// Queue the issue and return immediately — processing happens in background
 	database.AddPending(req.Repo, req.IssueNumber, "")
 	s.hub.Broadcast(WSEvent{
@@ -657,6 +679,7 @@ func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproD
 	// near relevant descriptions. Build a map of file -> contextual sentence.
 	fileFindings := extractPerFileFindings(summary, filesSlice)
 
+	stored := 0
 	for _, f := range filesSlice {
 		filePath, ok := f.(string)
 		if !ok || filePath == "" {
@@ -666,10 +689,29 @@ func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproD
 		finding := ""
 		if pf, ok := fileFindings[filePath]; ok {
 			finding = pf
-		} else if summary != "" {
-			finding = truncStr(summary, 500)
 		} else {
-			finding = verdict
+			continue // skip files with no specific finding
+		}
+
+		// Condense oversized findings via AI
+		if len(finding) > 150 {
+			prompt := fmt.Sprintf(
+				"Condense this bug investigation finding into a single architectural insight under 150 characters. "+
+					"Plain text only — no markdown, no bold, no backticks, no @mentions. "+
+					"Return ONLY the condensed text, nothing else.\n\nOriginal: %s", finding)
+			condensed, cerr := ai.Call(prompt, 256)
+			if cerr == nil {
+				condensed = strings.TrimSpace(condensed)
+				if len(condensed) > 0 && len(condensed) <= 150 {
+					finding = condensed
+				} else {
+					slog.Warn("condensing still too long, dropping", "file", filePath, "len", len(condensed))
+					continue
+				}
+			} else {
+				slog.Warn("condensing failed, dropping finding", "file", filePath, "error", cerr)
+				continue
+			}
 		}
 
 		database.AddInvestigationFinding(database.InvestigationFinding{
@@ -680,9 +722,10 @@ func extractAndStoreFindings(repo string, issue int, verdict, confidence, reproD
 			Verdict:     verdict,
 			Confidence:  confidence,
 		})
+		stored++
 	}
-	if len(filesSlice) > 0 {
-		slog.Info("stored investigation findings", "repo", repo, "issue", issue, "files", len(filesSlice))
+	if stored > 0 {
+		slog.Info("stored investigation findings", "repo", repo, "issue", issue, "files", stored)
 	}
 }
 
