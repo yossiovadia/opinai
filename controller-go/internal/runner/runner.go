@@ -643,7 +643,10 @@ func Run() {
 		os.Getenv("AI_MODEL"), formatResultsSection(resultsTable), verdictText, truncStr(testOutput, 5000),
 	)
 
-	postComment(repo, atoi(issueNumber), comment)
+	// Run critic loop — may improve the comment before posting
+	finalComment, _ := criticLoop(repo, "issue_reproduction", comment)
+
+	postComment(repo, atoi(issueNumber), finalComment)
 	emitRepoMemory(map[string]string{
 		"last_analyzed_issue": issueNumber,
 		"last_verdict":       vr.Verdict,
@@ -652,7 +655,7 @@ func Run() {
 	postResult(map[string]any{
 		"repo": repo, "issue": atoi(issueNumber), "title": title,
 		"category": category, "verdict": vr.Verdict, "confidence": vr.Confidence,
-		"duration": "", "report": comment,
+		"duration": "", "report": finalComment,
 		"suggested_questions": suggestedQs, "repro_details": string(reproJSON),
 		"repo_memory": collectedRepoMemory,
 	})
@@ -661,18 +664,12 @@ func Run() {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			extractAndStoreLearnings(repo, "issue_reproduction", comment)
-			// Run critic evaluation after learnings extraction
-			if criticResult, err := runCritic(repo, "issue_reproduction", comment); err != nil {
-				slog.Warn("critic evaluation failed", "error", err)
-			} else {
-				slog.Info("critic evaluation complete", "repo", repo, "score", criticResult.Score)
-			}
+			extractAndStoreLearnings(repo, "issue_reproduction", finalComment)
 		}()
 		select {
 		case <-done:
-		case <-time.After(60 * time.Second):
-			slog.Warn("learnings/critic extraction timed out")
+		case <-time.After(30 * time.Second):
+			slog.Warn("learnings extraction timed out")
 		}
 	}()
 
@@ -806,20 +803,6 @@ func RunPRReview() {
 		reviewText = "(Agent produced no review output)"
 	}
 
-	// Emit markers for log-based harvesting
-	fmt.Printf("--- OPINAI PR AUTHOR: %s ---\n", prAuthor)
-	fmt.Printf("--- OPINAI PR VERDICT: %s ---\n", result.Verdict)
-	fmt.Printf("--- OPINAI PR RISK: %s ---\n", result.Risk)
-	fmt.Println("--- OPINAI PR REVIEW ---")
-	fmt.Println(reviewText)
-	fmt.Println("--- END PR REVIEW ---")
-
-	if result.SuggestedQuestions != "" {
-		fmt.Println("--- OPINAI SUGGESTED_QUESTIONS ---")
-		fmt.Println(result.SuggestedQuestions)
-		fmt.Println("--- END SUGGESTED_QUESTIONS ---")
-	}
-
 	slog.Info("PR review complete", "verdict", result.Verdict, "risk", result.Risk,
 		"iterations", result.Iterations, "tool_calls", result.ToolCalls)
 
@@ -837,27 +820,38 @@ func RunPRReview() {
 		os.Getenv("AI_MODEL"), reviewText,
 	)
 
+	// Run critic loop — may improve the report before posting
+	finalReport, _ := criticLoop(repo, "pr_review", report)
+
+	// Emit markers for log-based harvesting (use final version)
+	fmt.Printf("--- OPINAI PR AUTHOR: %s ---\n", prAuthor)
+	fmt.Printf("--- OPINAI PR VERDICT: %s ---\n", result.Verdict)
+	fmt.Printf("--- OPINAI PR RISK: %s ---\n", result.Risk)
+	fmt.Println("--- OPINAI PR REVIEW ---")
+	fmt.Println(finalReport)
+	fmt.Println("--- END PR REVIEW ---")
+
+	if result.SuggestedQuestions != "" {
+		fmt.Println("--- OPINAI SUGGESTED_QUESTIONS ---")
+		fmt.Println(result.SuggestedQuestions)
+		fmt.Println("--- END SUGGESTED_QUESTIONS ---")
+	}
+
 	go func() {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			extractAndStoreLearnings(repo, "pr_review", report)
-			// Run critic evaluation after learnings extraction
-			if criticResult, err := runCritic(repo, "pr_review", report); err != nil {
-				slog.Warn("critic evaluation failed", "error", err)
-			} else {
-				slog.Info("critic evaluation complete", "repo", repo, "score", criticResult.Score)
-			}
+			extractAndStoreLearnings(repo, "pr_review", finalReport)
 		}()
 		select {
 		case <-done:
-		case <-time.After(60 * time.Second):
-			slog.Warn("learnings/critic extraction timed out")
+		case <-time.After(30 * time.Second):
+			slog.Warn("learnings extraction timed out")
 		}
 	}()
 
 	// Post result to controller
-	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, report, "", result.SuggestedQuestions)
+	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, finalReport, "", result.SuggestedQuestions)
 }
 
 func emitPRResult(repo string, prNumber int, title, author, verdict, risk, report, duration, suggestedQuestions string) {
