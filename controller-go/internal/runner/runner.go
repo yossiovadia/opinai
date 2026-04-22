@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -25,6 +26,59 @@ var setupRetryInfo string
 var pendingInstallCmd string // saved only after server health confirmed
 var selectedDeployOption string // set by deployFromPlan for repro_details
 var collectedRepoMemory = map[string]string{} // accumulated for postResult
+
+// fetchAndFormatMetaLearnings fetches meta-learnings from the controller and formats
+// them as context to inject into agent prompts. Also increments times_applied for each.
+func fetchAndFormatMetaLearnings(repo string) string {
+	controllerURL := os.Getenv("OPINAI_CONTROLLER_URL")
+	if controllerURL == "" {
+		return ""
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(controllerURL + "/api/admin/meta-learnings?repo=" + repo)
+	if err != nil {
+		slog.Debug("failed to fetch meta-learnings for prompt injection", "error", err)
+		return ""
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != 200 {
+		return ""
+	}
+
+	var learnings []struct {
+		ID    int64  `json:"id"`
+		Key   string `json:"key"`
+		Value string `json:"value"`
+		Scope string `json:"scope"`
+	}
+	if json.Unmarshal(body, &learnings) != nil || len(learnings) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n\n## Lessons from Previous Reviews\n\n")
+	sb.WriteString("These are patterns and blind spots identified by the critic in previous reviews. Apply them where relevant:\n\n")
+	for _, l := range learnings {
+		sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", l.Scope, l.Key, l.Value))
+		// Increment times_applied in background
+		go func(id int64) {
+			payload, _ := json.Marshal(map[string]int64{"id": id})
+			resp, err := client.Post(
+				controllerURL+"/api/admin/meta-learnings/apply",
+				"application/json",
+				strings.NewReader(string(payload)),
+			)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}(l.ID)
+	}
+
+	slog.Info("injected meta-learnings into prompt", "count", len(learnings))
+	return sb.String()
+}
 
 // Run executes the full reproduction flow. Called when --mode=runner.
 func Run() {
@@ -349,7 +403,9 @@ func Run() {
 	} else {
 		stateCtx = "\n\nThis is an OPEN issue. Reproduce the bug and confirm or deny it.\n"
 	}
-	agentRepoCtx := richCtx + stateCtx + allEndpointsCtx
+	// Inject meta-learnings from previous critic evaluations
+	metaLearningsCtx := fetchAndFormatMetaLearnings(repo)
+	agentRepoCtx := richCtx + stateCtx + allEndpointsCtx + metaLearningsCtx
 
 	// Include issue comments in the body passed to the agent
 	issueBody := body
@@ -606,11 +662,17 @@ func Run() {
 		go func() {
 			defer close(done)
 			extractAndStoreLearnings(repo, "issue_reproduction", comment)
+			// Run critic evaluation after learnings extraction
+			if criticResult, err := runCritic(repo, "issue_reproduction", comment); err != nil {
+				slog.Warn("critic evaluation failed", "error", err)
+			} else {
+				slog.Info("critic evaluation complete", "repo", repo, "score", criticResult.Score)
+			}
 		}()
 		select {
 		case <-done:
-		case <-time.After(30 * time.Second):
-			slog.Warn("learnings extraction timed out")
+		case <-time.After(60 * time.Second):
+			slog.Warn("learnings/critic extraction timed out")
 		}
 	}()
 
@@ -676,6 +738,9 @@ func RunPRReview() {
 	// Build repo context
 	repoCtx := os.Getenv("OPINAI_REPO_CONTEXT")
 	richCtx := formatRichRepoContext(repoCtx)
+
+	// Inject meta-learnings from previous critic evaluations
+	richCtx += fetchAndFormatMetaLearnings(repo)
 
 	// Build changed files summary for the agent
 	changedFilesSummary := ""
@@ -777,11 +842,17 @@ func RunPRReview() {
 		go func() {
 			defer close(done)
 			extractAndStoreLearnings(repo, "pr_review", report)
+			// Run critic evaluation after learnings extraction
+			if criticResult, err := runCritic(repo, "pr_review", report); err != nil {
+				slog.Warn("critic evaluation failed", "error", err)
+			} else {
+				slog.Info("critic evaluation complete", "repo", repo, "score", criticResult.Score)
+			}
 		}()
 		select {
 		case <-done:
-		case <-time.After(30 * time.Second):
-			slog.Warn("learnings extraction timed out")
+		case <-time.After(60 * time.Second):
+			slog.Warn("learnings/critic extraction timed out")
 		}
 	}()
 
