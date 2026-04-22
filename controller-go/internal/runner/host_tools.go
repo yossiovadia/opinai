@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -79,9 +80,10 @@ func hostToolDeploy() string {
 	defer cancel()
 
 	// Step 1: docker build
+	platform := "linux/" + runtime.GOARCH
 	buildCmd := exec.CommandContext(ctx, "docker", "build",
-		"--build-arg", "BUILDPLATFORM=linux/amd64",
-		"--build-arg", "TARGETPLATFORM=linux/amd64",
+		"--build-arg", "BUILDPLATFORM="+platform,
+		"--build-arg", "TARGETPLATFORM="+platform,
 		"-t", target.image,
 		"-f", target.dockerfile,
 		".")
