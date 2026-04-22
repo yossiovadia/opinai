@@ -80,6 +80,8 @@ func hostToolDeploy() string {
 
 	// Step 1: docker build
 	buildCmd := exec.CommandContext(ctx, "docker", "build",
+		"--build-arg", "BUILDPLATFORM=linux/amd64",
+		"--build-arg", "TARGETPLATFORM=linux/amd64",
 		"-t", target.image,
 		"-f", target.dockerfile,
 		".")
