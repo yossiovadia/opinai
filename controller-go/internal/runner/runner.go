@@ -820,6 +820,12 @@ func RunPRReview() {
 	slog.Info("PR review complete", "verdict", result.Verdict, "risk", result.Risk,
 		"iterations", result.Iterations, "tool_calls", result.ToolCalls)
 
+	// Dual-branch analysis: if base != main/master, check upstream status
+	upstreamCtx := ""
+	if prBaseRef != "" && prBaseRef != "main" && prBaseRef != "master" {
+		upstreamCtx = checkUpstreamStatus(repo, cloneDir, prBaseRef, prDiff, reviewText, result.FilesRead)
+	}
+
 	// Build structured report for the dashboard
 	report := fmt.Sprintf(
 		"## OpinAI PR Review\n\n"+
@@ -828,10 +834,11 @@ func RunPRReview() {
 			"**Author:** @%s\n"+
 			"**Verdict:** %s\n"+
 			"**Risk:** %s\n"+
+			"**Base branch:** %s\n"+
 			"**Analysis:** AI-powered (model: %s)\n\n"+
-			"%s",
+			"%s%s",
 		prNumber, prTitle, prAuthor, result.Verdict, result.Risk,
-		os.Getenv("AI_MODEL"), reviewText,
+		prBaseRef, os.Getenv("AI_MODEL"), reviewText, upstreamCtx,
 	)
 
 	// Run critic loop — may improve the report before posting
@@ -866,6 +873,125 @@ func RunPRReview() {
 
 	// Post result to controller
 	emitPRResult(repo, prNumber, prTitle, prAuthor, result.Verdict, result.Risk, finalReport, "", result.SuggestedQuestions)
+}
+
+// checkUpstreamStatus checks whether issues found on the base branch are already
+// fixed on main/master. Returns a markdown section to append to the report, or
+// empty string if not applicable.
+func checkUpstreamStatus(repo, cloneDir, baseRef, prDiff, reviewText string, filesRead []string) string {
+	// Collect the changed files from the diff to compare on main
+	relevantFiles := filesRead
+	if len(relevantFiles) == 0 {
+		return ""
+	}
+	// Cap to avoid reading too many files
+	if len(relevantFiles) > 10 {
+		relevantFiles = relevantFiles[:10]
+	}
+
+	slog.Info("dual-branch: checking upstream status on main", "base", baseRef, "files", len(relevantFiles))
+
+	// Fetch main branch
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer fetchCancel()
+	fetchCmd := exec.CommandContext(fetchCtx, "git", "fetch", "origin", "main")
+	fetchCmd.Dir = cloneDir
+	fetchCmd.Stdout = os.Stderr
+	fetchCmd.Stderr = os.Stderr
+	if err := fetchCmd.Run(); err != nil {
+		// Try master
+		fetchCmd2 := exec.CommandContext(fetchCtx, "git", "fetch", "origin", "master")
+		fetchCmd2.Dir = cloneDir
+		fetchCmd2.Stdout = os.Stderr
+		fetchCmd2.Stderr = os.Stderr
+		if err2 := fetchCmd2.Run(); err2 != nil {
+			slog.Warn("dual-branch: failed to fetch main/master", "error", err)
+			return ""
+		}
+	}
+
+	// Save current HEAD so we can restore after
+	headCmd := exec.Command("git", "rev-parse", "HEAD")
+	headCmd.Dir = cloneDir
+	headOut, err := headCmd.Output()
+	if err != nil {
+		return ""
+	}
+	currentHead := strings.TrimSpace(string(headOut))
+
+	// Checkout FETCH_HEAD (main)
+	coCmd := exec.Command("git", "checkout", "FETCH_HEAD")
+	coCmd.Dir = cloneDir
+	coCmd.Stdout = os.Stderr
+	coCmd.Stderr = os.Stderr
+	if err := coCmd.Run(); err != nil {
+		slog.Warn("dual-branch: failed to checkout main", "error", err)
+		return ""
+	}
+
+	// Read the relevant files on main
+	var mainFileContents strings.Builder
+	for _, f := range relevantFiles {
+		fullPath := cloneDir + "/" + f
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			mainFileContents.WriteString(fmt.Sprintf("### %s\n(file not found on main — may be new)\n\n", f))
+			continue
+		}
+		text := string(content)
+		if len(text) > 3000 {
+			text = text[:3000] + "\n... (truncated)"
+		}
+		mainFileContents.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n", f, text))
+	}
+
+	// Restore original checkout
+	restoreCmd := exec.Command("git", "checkout", currentHead)
+	restoreCmd.Dir = cloneDir
+	restoreCmd.Stdout = os.Stderr
+	restoreCmd.Stderr = os.Stderr
+	restoreCmd.Run()
+
+	if mainFileContents.Len() == 0 {
+		return ""
+	}
+
+	// Ask AI to compare
+	prompt := fmt.Sprintf(`You are comparing the state of files between two branches of %s.
+
+The PR targets branch "%s" (not main). A review of this PR produced the following analysis:
+
+%s
+
+Below are the same files as they appear on the main branch:
+
+%s
+
+Your task: determine whether the issues, bugs, or vulnerabilities identified in the review above are ALREADY FIXED on main.
+
+Respond with a concise section (3-5 sentences max) in this format:
+
+## Upstream Status (main branch)
+
+[Your finding: Are the issues from this PR already addressed on main? Is this PR a valid backport? Are there version differences that matter?]
+
+If the review found no bugs or issues, just say "No issues to compare across branches." and stop.
+Do NOT repeat the full review. Only comment on the upstream delta.`,
+		repo, baseRef, truncStr(reviewText, 4000), mainFileContents.String())
+
+	response, err := ai.Call(prompt, 1024)
+	if err != nil {
+		slog.Warn("dual-branch: AI comparison failed", "error", err)
+		return ""
+	}
+
+	response = strings.TrimSpace(response)
+	if response == "" {
+		return ""
+	}
+
+	slog.Info("dual-branch: upstream check complete", "base", baseRef)
+	return "\n\n" + response + "\n"
 }
 
 func emitPRResult(repo string, prNumber int, title, author, verdict, risk, report, duration, suggestedQuestions string) {
