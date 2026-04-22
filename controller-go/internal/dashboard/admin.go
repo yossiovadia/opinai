@@ -17,6 +17,7 @@ import (
 	"github.com/yossiovadia/opinai/controller-go/internal/ai"
 	"github.com/yossiovadia/opinai/controller-go/internal/config"
 	"github.com/yossiovadia/opinai/controller-go/internal/database"
+	"github.com/yossiovadia/opinai/controller-go/internal/prompts"
 	"github.com/yossiovadia/opinai/controller-go/internal/version"
 )
 
@@ -959,7 +960,16 @@ func (s *Server) handleAdminDeleteFindings(w http.ResponseWriter, r *http.Reques
 // GET /api/admin/meta-learnings?repo=X
 func (s *Server) handleAdminMetaLearnings(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
-	learnings, err := database.GetAllMetaLearningsForRepo(repo, 100)
+	categories := r.URL.Query().Get("categories")
+
+	var learnings []database.MetaLearning
+	var err error
+	if categories != "" {
+		cats := strings.Split(categories, ",")
+		learnings, err = database.GetMetaLearningsByCategories(repo, cats, 100)
+	} else {
+		learnings, err = database.GetAllMetaLearningsForRepo(repo, 100)
+	}
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -977,6 +987,7 @@ func (s *Server) handleAdminMetaLearningAdd(w http.ResponseWriter, r *http.Reque
 		Scope           string `json:"scope"`
 		Key             string `json:"key"`
 		Value           string `json:"value"`
+		Category        string `json:"category"`
 		SourceIssue     int    `json:"source_issue"`
 		ScoreAtCreation int    `json:"score_at_creation"`
 	}
@@ -996,6 +1007,7 @@ func (s *Server) handleAdminMetaLearningAdd(w http.ResponseWriter, r *http.Reque
 		Scope:           req.Scope,
 		Key:             req.Key,
 		Value:           req.Value,
+		Category:        req.Category,
 		SourceIssue:     req.SourceIssue,
 		ScoreAtCreation: req.ScoreAtCreation,
 	})
@@ -1052,6 +1064,209 @@ func (s *Server) handleAdminMetaLearningApply(w http.ResponseWriter, r *http.Req
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// PUT /api/admin/meta-learnings/{id}
+func (s *Server) handleAdminMetaLearningUpdate(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id := int64(0)
+	fmt.Sscanf(idStr, "%d", &id)
+	if id == 0 {
+		jsonError(w, "invalid id", 400)
+		return
+	}
+	var req struct {
+		Key      string `json:"key"`
+		Value    string `json:"value"`
+		Category string `json:"category"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid JSON: "+err.Error(), 400)
+		return
+	}
+	if req.Key == "" || req.Value == "" {
+		jsonError(w, "key and value required", 400)
+		return
+	}
+	if err := database.UpdateMetaLearning(id, req.Key, req.Value, req.Category); err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// POST /api/admin/curate?repo=X
+func (s *Server) handleAdminCurate(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		jsonError(w, "repo query parameter required", 400)
+		return
+	}
+
+	learnings, err := database.GetAllMetaLearningsForRepo(repo, 200)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if len(learnings) == 0 {
+		json.NewEncoder(w).Encode(map[string]string{"status": "no learnings to curate"})
+		return
+	}
+
+	cfg := ai.LoadConfig()
+	if !cfg.Available() {
+		jsonError(w, "no AI provider configured", 500)
+		return
+	}
+
+	reviewCount := database.CountCriticScores(repo)
+	if reviewCount < 10 {
+		reviewCount = 10
+	}
+
+	var sb strings.Builder
+	for _, l := range learnings {
+		sb.WriteString(fmt.Sprintf("- ID=%d | key=%s | scope=%s | category=%s | times_applied=%d | score_at_creation=%d | created=%s\n  value: %s\n\n",
+			l.ID, l.Key, l.Scope, l.Category, l.TimesApplied, l.ScoreAtCreation, l.CreatedAt, l.Value))
+	}
+
+	prompt := prompts.Render("curator.txt", map[string]string{
+		"Repo":                repo,
+		"Learnings":           sb.String(),
+		"ReviewCount":         fmt.Sprintf("%d", reviewCount),
+		"MaxRepoLearnings":    "25",
+		"MaxGeneralLearnings": "15",
+		"MinReviewsForPrune":  "10",
+	})
+
+	response, err := ai.Call(prompt, 4096)
+	if err != nil {
+		jsonError(w, "AI call failed: "+err.Error(), 500)
+		return
+	}
+
+	response = strings.TrimSpace(response)
+	if strings.HasPrefix(response, "```") {
+		lines := strings.Split(response, "\n")
+		var clean []string
+		for _, l := range lines {
+			if !strings.HasPrefix(strings.TrimSpace(l), "```") {
+				clean = append(clean, l)
+			}
+		}
+		response = strings.Join(clean, "\n")
+	}
+	if idx := strings.Index(response, "{"); idx > 0 {
+		response = response[idx:]
+	}
+	if idx := strings.LastIndex(response, "}"); idx >= 0 && idx < len(response)-1 {
+		response = response[:idx+1]
+	}
+
+	var result struct {
+		Curated []struct {
+			Action   string  `json:"action"`
+			ID       int64   `json:"id,omitempty"`
+			MergeIDs []int64 `json:"merge_ids,omitempty"`
+			Key      string  `json:"key,omitempty"`
+			Value    string  `json:"value,omitempty"`
+			Scope    string  `json:"scope,omitempty"`
+			Category string  `json:"category,omitempty"`
+		} `json:"curated"`
+	}
+	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		jsonError(w, "failed to parse curator response: "+err.Error(), 500)
+		return
+	}
+
+	var deleteIDs []int64
+	kept, merged, rewritten, deleted := 0, 0, 0, 0
+
+	for _, c := range result.Curated {
+		switch c.Action {
+		case "keep":
+			if c.ID > 0 && c.Category != "" {
+				database.UpdateMetaLearning(c.ID, c.Key, c.Value, c.Category)
+			}
+			kept++
+		case "merge":
+			deleteIDs = append(deleteIDs, c.MergeIDs...)
+			database.AddMetaLearning(database.MetaLearning{
+				Repo:     repo,
+				Key:      c.Key,
+				Value:    c.Value,
+				Scope:    c.Scope,
+				Category: c.Category,
+			})
+			merged++
+		case "rewrite":
+			if c.ID > 0 {
+				database.UpdateMetaLearning(c.ID, c.Key, c.Value, c.Category)
+			}
+			rewritten++
+		case "delete":
+			if c.ID > 0 {
+				deleteIDs = append(deleteIDs, c.ID)
+			}
+			deleted++
+		}
+	}
+
+	if len(deleteIDs) > 0 {
+		database.BulkDeleteMetaLearnings(deleteIDs)
+	}
+
+	after := kept + merged + rewritten
+	database.AddCuratorRun(database.CuratorRun{
+		Repo:            repo,
+		LearningsBefore: len(learnings),
+		LearningsAfter:  after,
+		Kept:            kept,
+		Merged:          merged,
+		Rewritten:       rewritten,
+		Deleted:         deleted,
+	})
+
+	slog.Info("manual curation complete", "repo", repo, "before", len(learnings), "after", after)
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":           "curated",
+		"learnings_before": len(learnings),
+		"learnings_after":  after,
+		"kept":             kept,
+		"merged":           merged,
+		"rewritten":        rewritten,
+		"deleted":          deleted,
+	})
+}
+
+// GET /api/admin/curator-runs?repo=X
+func (s *Server) handleAdminCuratorRuns(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	limit := intQuery(r, "limit", 10)
+	runs, err := database.GetCuratorRuns(repo, limit)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if runs == nil {
+		runs = []database.CuratorRun{}
+	}
+	json.NewEncoder(w).Encode(runs)
+}
+
+// POST /api/admin/curator-runs
+func (s *Server) handleAdminCuratorRunAdd(w http.ResponseWriter, r *http.Request) {
+	var req database.CuratorRun
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid JSON: "+err.Error(), 400)
+		return
+	}
+	id, err := database.AddCuratorRun(req)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "id": id})
 }
 
 // --- Critic Scores API ---
@@ -1115,32 +1330,36 @@ func (s *Server) handleAdminCriticScoreAdd(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleAdminSelfImprovement(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 
-	// Meta-learnings count per repo
 	metaCount := database.CountMetaLearnings(repo)
+	criticCount := database.CountCriticScores(repo)
 
-	// Average critic score (last 10)
 	avg := 0.0
 	if repo != "" {
 		avg = database.GetAverageCriticScore(repo, 10)
 	}
 
-	// Recent scores
 	scores, _ := database.GetCriticScores(repo, 10)
 	if scores == nil {
 		scores = []database.CriticScore{}
 	}
 
-	// All meta-learnings
 	learnings, _ := database.GetAllMetaLearningsForRepo(repo, 50)
 	if learnings == nil {
 		learnings = []database.MetaLearning{}
 	}
 
+	curatorRuns, _ := database.GetCuratorRuns(repo, 5)
+	if curatorRuns == nil {
+		curatorRuns = []database.CuratorRun{}
+	}
+
 	json.NewEncoder(w).Encode(map[string]any{
 		"meta_learnings_count": metaCount,
+		"critic_score_count":   criticCount,
 		"average_critic_score": avg,
 		"recent_scores":        scores,
 		"meta_learnings":       learnings,
+		"curator_runs":         curatorRuns,
 	})
 }
 

@@ -142,12 +142,14 @@ func criticLoop(repo, taskType, reviewOutput string) (string, *CriticResult) {
 				slog.Info("critic loop: review improved to passing score",
 					"attempt", attempt, "score", result.Score)
 			}
+			go triggerCuratorCheck(repo)
 			return output, result
 		}
 
 		if attempt == criticMaxRetries {
 			slog.Warn("critic loop: max retries reached, posting as-is",
 				"score", result.Score, "attempts", attempt+1)
+			go triggerCuratorCheck(repo)
 			return output, result
 		}
 
@@ -157,12 +159,21 @@ func criticLoop(repo, taskType, reviewOutput string) (string, *CriticResult) {
 		improved, err := reanalyzeWithFeedback(taskType, output, result)
 		if err != nil {
 			slog.Warn("critic rewrite failed, using original", "error", err)
+			go triggerCuratorCheck(repo)
 			return output, result
 		}
 		output = improved
 	}
 
 	return output, lastResult
+}
+
+func triggerCuratorCheck(repo string) {
+	controllerURL := os.Getenv("OPINAI_CONTROLLER_URL")
+	if controllerURL == "" {
+		return
+	}
+	checkAndRunCurator(controllerURL, repo)
 }
 
 // reanalyzeWithFeedback calls AI to produce an improved review based on critic feedback.

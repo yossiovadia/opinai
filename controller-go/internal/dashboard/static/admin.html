@@ -203,6 +203,18 @@
         <h4 style="font-size:13px;margin-bottom:8px;">Recent Critic Scores</h4>
         <div id="siScoresTable" style="overflow-x:auto;"><div class="empty">No scores yet</div></div>
       </div>
+      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+          <h4 style="font-size:13px;margin:0;">Curator</h4>
+          <button class="btn btn-primary" id="curateBtn" onclick="triggerCurate()" style="font-size:11px;padding:4px 12px;">Curate Now</button>
+          <span id="curateStatus" style="font-size:12px;color:var(--text-dim);"></span>
+        </div>
+        <div id="curateResults" style="display:none;margin-bottom:12px;padding:10px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;">
+          <div id="curateResultsContent"></div>
+        </div>
+        <h4 style="font-size:13px;margin-bottom:8px;">Curation History</h4>
+        <div id="curatorRunsTable" style="overflow-x:auto;"><div class="empty">No curation runs yet</div></div>
+      </div>
     </div>
   </div>
 
@@ -797,7 +809,7 @@ async function loadSelfImprovement() {
     // Summary
     var summary = document.getElementById('siSummary');
     var avgStr = data.average_critic_score ? data.average_critic_score.toFixed(1) : '—';
-    summary.textContent = data.meta_learnings_count + ' learnings | Avg score: ' + avgStr + '/10';
+    summary.textContent = data.meta_learnings_count + ' learnings | ' + (data.critic_score_count || 0) + ' reviews | Avg score: ' + avgStr + '/10';
 
     // Score chart (simple ASCII bar chart)
     var chartDiv = document.getElementById('siScoreChart');
@@ -822,9 +834,11 @@ async function loadSelfImprovement() {
         var scopeBadge = ml.scope === 'general'
           ? '<span style="background:rgba(88,166,255,0.2);color:var(--blue);padding:1px 6px;border-radius:3px;font-size:10px;">general</span>'
           : '<span style="background:rgba(63,185,80,0.2);color:var(--green);padding:1px 6px;border-radius:3px;font-size:10px;">repo</span>';
+        var cat = ml.category || 'general';
+        var catBadge = '<span style="background:rgba(139,148,158,0.2);color:var(--text-dim);padding:1px 6px;border-radius:3px;font-size:10px;">' + escapeHtml(cat) + '</span>';
         html += '<div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
           '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-          '<span>' + scopeBadge + ' <strong>' + escapeHtml(ml.key) + '</strong></span>' +
+          '<span>' + scopeBadge + ' ' + catBadge + ' <strong>' + escapeHtml(ml.key) + '</strong></span>' +
           '<button class="btn btn-danger" style="font-size:10px;padding:2px 6px;" onclick="deleteMetaLearning(' + ml.id + ')">×</button>' +
           '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px;">' + escapeHtml(ml.value) + '</div>' +
@@ -835,6 +849,9 @@ async function loadSelfImprovement() {
     } else {
       learnDiv.innerHTML = '<div class="empty">No learnings yet</div>';
     }
+
+    // Curator runs
+    renderCuratorRuns(data.curator_runs);
 
     // Scores table
     var tableDiv = document.getElementById('siScoresTable');
@@ -868,6 +885,72 @@ async function deleteMetaLearning(id) {
   if (!confirm('Delete this meta-learning?')) return;
   await fetchJSON('/api/admin/meta-learnings/' + id, { method: 'DELETE' });
   loadSelfImprovement();
+}
+
+async function triggerCurate() {
+  var repo = document.getElementById('siRepoSelect').value;
+  if (!repo) { alert('Select a specific repo first'); return; }
+  var btn = document.getElementById('curateBtn');
+  var status = document.getElementById('curateStatus');
+  btn.disabled = true;
+  btn.textContent = 'Curating...';
+  status.textContent = 'Running AI curator — this may take 30-60s...';
+  status.style.color = 'var(--yellow)';
+  var resultsDiv = document.getElementById('curateResults');
+  var content = document.getElementById('curateResultsContent');
+  resultsDiv.style.display = 'none';
+  try {
+    var data = await fetchJSON('/api/admin/curate?repo=' + encodeURIComponent(repo), { method: 'POST' });
+    status.textContent = 'Done!';
+    status.style.color = 'var(--green)';
+    var html = '<div style="font-size:12px;">' +
+      '<div style="display:flex;gap:16px;margin-bottom:8px;flex-wrap:wrap;">' +
+      '<span><strong>Before:</strong> ' + data.learnings_before + ' learnings</span>' +
+      '<span><strong>After:</strong> ' + data.learnings_after + ' learnings</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px;">' +
+      '<span style="color:var(--green);">Kept: ' + data.kept + '</span>' +
+      '<span style="color:var(--blue);">Merged: ' + data.merged + '</span>' +
+      '<span style="color:var(--yellow);">Rewritten: ' + data.rewritten + '</span>' +
+      '<span style="color:var(--red);">Deleted: ' + data.deleted + '</span>' +
+      '</div>';
+    var removed = data.learnings_before - data.learnings_after;
+    if (removed > 0) {
+      html += '<div style="color:var(--text-dim);">Reduced by ' + removed + ' learning' + (removed !== 1 ? 's' : '') + '</div>';
+    }
+    html += '</div>';
+    content.innerHTML = html;
+    resultsDiv.style.display = 'block';
+    loadSelfImprovement();
+  } catch(e) {
+    status.textContent = 'Failed: ' + e.message;
+    status.style.color = 'var(--red)';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Curate Now';
+}
+
+function renderCuratorRuns(runs) {
+  var div = document.getElementById('curatorRunsTable');
+  if (!runs || runs.length === 0) {
+    div.innerHTML = '<div class="empty">No curation runs yet</div>';
+    return;
+  }
+  var html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">' +
+    '<tr style="color:var(--text-dim);"><th style="text-align:left;padding:4px;">Date</th><th>Before</th><th>After</th><th>Kept</th><th>Merged</th><th>Rewritten</th><th>Deleted</th></tr>';
+  runs.forEach(function(r) {
+    html += '<tr style="border-top:1px solid var(--border);">' +
+      '<td style="padding:4px;">' + (r.created_at || '').substring(0,16).replace('T',' ') + '</td>' +
+      '<td style="padding:4px;text-align:center;">' + r.learnings_before + '</td>' +
+      '<td style="padding:4px;text-align:center;">' + r.learnings_after + '</td>' +
+      '<td style="padding:4px;text-align:center;color:var(--green);">' + r.kept + '</td>' +
+      '<td style="padding:4px;text-align:center;color:var(--blue);">' + r.merged + '</td>' +
+      '<td style="padding:4px;text-align:center;color:var(--yellow);">' + r.rewritten + '</td>' +
+      '<td style="padding:4px;text-align:center;color:var(--red);">' + r.deleted + '</td>' +
+      '</tr>';
+  });
+  html += '</table>';
+  div.innerHTML = html;
 }
 
 // --- Init ---

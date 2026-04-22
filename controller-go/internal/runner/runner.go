@@ -29,14 +29,22 @@ var collectedRepoMemory = map[string]string{} // accumulated for postResult
 
 // fetchAndFormatMetaLearnings fetches meta-learnings from the controller and formats
 // them as context to inject into agent prompts. Also increments times_applied for each.
+// Uses OPINAI_PR_TITLE to classify PR type and selectively inject relevant learnings.
 func fetchAndFormatMetaLearnings(repo string) string {
 	controllerURL := os.Getenv("OPINAI_CONTROLLER_URL")
 	if controllerURL == "" {
 		return ""
 	}
 
+	prTitle := os.Getenv("OPINAI_PR_TITLE")
+	url := controllerURL + "/api/admin/meta-learnings?repo=" + repo
+	if prTitle != "" {
+		prType := classifyPRType(prTitle)
+		url += "&categories=" + prType + ",general"
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(controllerURL + "/api/admin/meta-learnings?repo=" + repo)
+	resp, err := client.Get(url)
 	if err != nil {
 		slog.Debug("failed to fetch meta-learnings for prompt injection", "error", err)
 		return ""
@@ -48,13 +56,19 @@ func fetchAndFormatMetaLearnings(repo string) string {
 	}
 
 	var learnings []struct {
-		ID    int64  `json:"id"`
-		Key   string `json:"key"`
-		Value string `json:"value"`
-		Scope string `json:"scope"`
+		ID       int64  `json:"id"`
+		Key      string `json:"key"`
+		Value    string `json:"value"`
+		Scope    string `json:"scope"`
+		Category string `json:"category"`
 	}
 	if json.Unmarshal(body, &learnings) != nil || len(learnings) == 0 {
 		return ""
+	}
+
+	const maxInjected = 15
+	if len(learnings) > maxInjected {
+		learnings = learnings[:maxInjected]
 	}
 
 	var sb strings.Builder
@@ -62,7 +76,6 @@ func fetchAndFormatMetaLearnings(repo string) string {
 	sb.WriteString("These are patterns and blind spots identified by the critic in previous reviews. Apply them where relevant:\n\n")
 	for _, l := range learnings {
 		sb.WriteString(fmt.Sprintf("- [%s] %s: %s\n", l.Scope, l.Key, l.Value))
-		// Increment times_applied in background
 		go func(id int64) {
 			payload, _ := json.Marshal(map[string]int64{"id": id})
 			resp, err := client.Post(

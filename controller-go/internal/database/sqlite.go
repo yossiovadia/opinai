@@ -219,6 +219,21 @@ func migrate() error {
 	)`)
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_meta_learnings_repo ON meta_learnings(repo)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_meta_learnings_scope ON meta_learnings(scope)")
+	// Migration: add category column
+	db.Exec("ALTER TABLE meta_learnings ADD COLUMN category TEXT DEFAULT 'general'")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meta_learnings_category ON meta_learnings(category)")
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS curator_runs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		repo TEXT NOT NULL,
+		learnings_before INTEGER DEFAULT 0,
+		learnings_after INTEGER DEFAULT 0,
+		kept INTEGER DEFAULT 0,
+		merged INTEGER DEFAULT 0,
+		rewritten INTEGER DEFAULT 0,
+		deleted INTEGER DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`)
 
 	db.Exec(`CREATE TABLE IF NOT EXISTS critic_scores (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1331,6 +1346,7 @@ type MetaLearning struct {
 	Scope           string `json:"scope"`
 	Key             string `json:"key"`
 	Value           string `json:"value"`
+	Category        string `json:"category"`
 	SourceIssue     int    `json:"source_issue"`
 	ScoreAtCreation int    `json:"score_at_creation"`
 	TimesApplied    int    `json:"times_applied"`
@@ -1342,10 +1358,14 @@ type MetaLearning struct {
 func AddMetaLearning(ml MetaLearning) (int64, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	cat := ml.Category
+	if cat == "" {
+		cat = "general"
+	}
 	res, err := db.Exec(
-		`INSERT INTO meta_learnings (repo, scope, key, value, source_issue, score_at_creation, times_applied)
-		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
-		ml.Repo, ml.Scope, ml.Key, ml.Value, ml.SourceIssue, ml.ScoreAtCreation,
+		`INSERT INTO meta_learnings (repo, scope, key, value, category, source_issue, score_at_creation, times_applied)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0)`,
+		ml.Repo, ml.Scope, ml.Key, ml.Value, cat, ml.SourceIssue, ml.ScoreAtCreation,
 	)
 	if err != nil {
 		return 0, err
@@ -1356,7 +1376,7 @@ func AddMetaLearning(ml MetaLearning) (int64, error) {
 // GetMetaLearnings returns meta-learnings for a specific repo, newest first.
 func GetMetaLearnings(repo string, limit int) ([]MetaLearning, error) {
 	rows, err := db.Query(
-		`SELECT id, repo, scope, key, value, source_issue, score_at_creation, times_applied, created_at, updated_at
+		`SELECT id, repo, scope, key, value, COALESCE(category,'general'), source_issue, score_at_creation, times_applied, created_at, updated_at
 		 FROM meta_learnings WHERE repo = ? ORDER BY id DESC LIMIT ?`,
 		repo, limit,
 	)
@@ -1370,7 +1390,7 @@ func GetMetaLearnings(repo string, limit int) ([]MetaLearning, error) {
 // GetGeneralMetaLearnings returns meta-learnings with scope='general', newest first.
 func GetGeneralMetaLearnings(limit int) ([]MetaLearning, error) {
 	rows, err := db.Query(
-		`SELECT id, repo, scope, key, value, source_issue, score_at_creation, times_applied, created_at, updated_at
+		`SELECT id, repo, scope, key, value, COALESCE(category,'general'), source_issue, score_at_creation, times_applied, created_at, updated_at
 		 FROM meta_learnings WHERE scope = 'general' ORDER BY id DESC LIMIT ?`,
 		limit,
 	)
@@ -1384,7 +1404,7 @@ func GetGeneralMetaLearnings(limit int) ([]MetaLearning, error) {
 // GetAllMetaLearningsForRepo returns both repo-specific and general learnings.
 func GetAllMetaLearningsForRepo(repo string, limit int) ([]MetaLearning, error) {
 	rows, err := db.Query(
-		`SELECT id, repo, scope, key, value, source_issue, score_at_creation, times_applied, created_at, updated_at
+		`SELECT id, repo, scope, key, value, COALESCE(category,'general'), source_issue, score_at_creation, times_applied, created_at, updated_at
 		 FROM meta_learnings WHERE repo = ? OR scope = 'general' ORDER BY id DESC LIMIT ?`,
 		repo, limit,
 	)
@@ -1437,7 +1457,7 @@ func scanMetaLearnings(rows *sql.Rows) ([]MetaLearning, error) {
 	var result []MetaLearning
 	for rows.Next() {
 		var ml MetaLearning
-		err := rows.Scan(&ml.ID, &ml.Repo, &ml.Scope, &ml.Key, &ml.Value,
+		err := rows.Scan(&ml.ID, &ml.Repo, &ml.Scope, &ml.Key, &ml.Value, &ml.Category,
 			&ml.SourceIssue, &ml.ScoreAtCreation, &ml.TimesApplied, &ml.CreatedAt, &ml.UpdatedAt)
 		if err != nil {
 			return nil, err
@@ -1521,4 +1541,131 @@ func GetAverageCriticScore(repo string, limit int) float64 {
 		repo, limit,
 	).Scan(&avg)
 	return avg
+}
+
+// CountCriticScores returns the total number of critic scores for a repo.
+func CountCriticScores(repo string) int {
+	var count int
+	if repo != "" {
+		db.QueryRow("SELECT COUNT(*) FROM critic_scores WHERE repo = ?", repo).Scan(&count)
+	} else {
+		db.QueryRow("SELECT COUNT(*) FROM critic_scores").Scan(&count)
+	}
+	return count
+}
+
+// UpdateMetaLearning updates the key, value, and category of a meta-learning.
+func UpdateMetaLearning(id int64, key, value, category string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	_, err := db.Exec(
+		"UPDATE meta_learnings SET key = ?, value = ?, category = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		key, value, category, id,
+	)
+	return err
+}
+
+// BulkDeleteMetaLearnings deletes multiple meta-learnings by ID.
+func BulkDeleteMetaLearnings(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := "DELETE FROM meta_learnings WHERE id IN (" + strings.Join(placeholders, ",") + ")"
+	_, err := db.Exec(query, args...)
+	return err
+}
+
+// GetMetaLearningsByCategories returns learnings matching any of the given categories for a repo.
+func GetMetaLearningsByCategories(repo string, categories []string, limit int) ([]MetaLearning, error) {
+	if len(categories) == 0 {
+		return GetAllMetaLearningsForRepo(repo, limit)
+	}
+	placeholders := make([]string, len(categories))
+	args := make([]any, 0, len(categories)+2)
+	args = append(args, repo)
+	for i, c := range categories {
+		placeholders[i] = "?"
+		args = append(args, c)
+	}
+	args = append(args, limit)
+	query := `SELECT id, repo, scope, key, value, COALESCE(category,'general'), source_issue, score_at_creation, times_applied, created_at, updated_at
+		FROM meta_learnings
+		WHERE (repo = ? OR scope = 'general')
+		AND COALESCE(category,'general') IN (` + strings.Join(placeholders, ",") + `)
+		ORDER BY times_applied DESC, id DESC LIMIT ?`
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMetaLearnings(rows)
+}
+
+// --- Curator Runs ---
+
+type CuratorRun struct {
+	ID              int64  `json:"id"`
+	Repo            string `json:"repo"`
+	LearningsBefore int    `json:"learnings_before"`
+	LearningsAfter  int    `json:"learnings_after"`
+	Kept            int    `json:"kept"`
+	Merged          int    `json:"merged"`
+	Rewritten       int    `json:"rewritten"`
+	Deleted         int    `json:"deleted"`
+	CreatedAt       string `json:"created_at"`
+}
+
+func AddCuratorRun(cr CuratorRun) (int64, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := db.Exec(
+		`INSERT INTO curator_runs (repo, learnings_before, learnings_after, kept, merged, rewritten, deleted)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		cr.Repo, cr.LearningsBefore, cr.LearningsAfter, cr.Kept, cr.Merged, cr.Rewritten, cr.Deleted,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func GetCuratorRuns(repo string, limit int) ([]CuratorRun, error) {
+	var rows *sql.Rows
+	var err error
+	if repo != "" {
+		rows, err = db.Query(
+			`SELECT id, repo, learnings_before, learnings_after, kept, merged, rewritten, deleted, created_at
+			 FROM curator_runs WHERE repo = ? ORDER BY id DESC LIMIT ?`,
+			repo, limit,
+		)
+	} else {
+		rows, err = db.Query(
+			`SELECT id, repo, learnings_before, learnings_after, kept, merged, rewritten, deleted, created_at
+			 FROM curator_runs ORDER BY id DESC LIMIT ?`,
+			limit,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []CuratorRun
+	for rows.Next() {
+		var cr CuratorRun
+		err := rows.Scan(&cr.ID, &cr.Repo, &cr.LearningsBefore, &cr.LearningsAfter,
+			&cr.Kept, &cr.Merged, &cr.Rewritten, &cr.Deleted, &cr.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, cr)
+	}
+	return result, rows.Err()
 }

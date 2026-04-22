@@ -429,12 +429,16 @@ func (s *Server) buildRouter() chi.Router {
 				// Self-improvement system
 				r.Get("/meta-learnings", s.handleAdminMetaLearnings)
 				r.Post("/meta-learnings", s.handleAdminMetaLearningAdd)
+				r.Put("/meta-learnings/{id}", s.handleAdminMetaLearningUpdate)
 				r.Delete("/meta-learnings", s.handleAdminMetaLearningDeleteRepo)
 				r.Delete("/meta-learnings/{id}", s.handleAdminMetaLearningDelete)
 				r.Post("/meta-learnings/apply", s.handleAdminMetaLearningApply)
 				r.Get("/critic-scores", s.handleAdminCriticScores)
 				r.Post("/critic-scores", s.handleAdminCriticScoreAdd)
 				r.Get("/self-improvement", s.handleAdminSelfImprovement)
+				r.Post("/curate", s.handleAdminCurate)
+				r.Get("/curator-runs", s.handleAdminCuratorRuns)
+				r.Post("/curator-runs", s.handleAdminCuratorRunAdd)
 
 				// Memory journal
 				r.Get("/memory", s.handleAdminMemory)
