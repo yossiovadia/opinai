@@ -708,19 +708,21 @@ func RunPRReview() {
 	prDiff := os.Getenv("OPINAI_PR_DIFF")
 	prAuthor := os.Getenv("OPINAI_PR_AUTHOR")
 	prHeadRef := os.Getenv("OPINAI_PR_HEAD_REF")
+	prBaseRef := os.Getenv("OPINAI_PR_BASE_REF")
 	changedFilesJSON := os.Getenv("OPINAI_PR_CHANGED_FILES")
 
-	slog.Info("starting PR review", "repo", repo, "pr", prNumber, "title", prTitle)
+	slog.Info("starting PR review", "repo", repo, "pr", prNumber, "title", prTitle, "base", prBaseRef)
 
-	// Clone repo and checkout PR branch
+	// Clone repo, targeting the PR's base branch so the working tree reflects
+	// what the PR is being merged into (not necessarily the default branch).
 	cloneDir := "/tmp/opinai-repo"
-	if !cloneRepo(repo) {
+	if !cloneRepoBranch(repo, prBaseRef) {
 		slog.Error("failed to clone repo for PR review")
 		emitPRResult(repo, prNumber, prTitle, prAuthor, "COMMENT", "LOW", "Failed to clone repository", "", "")
 		return
 	}
 
-	// Fetch and checkout the PR branch
+	// Fetch and checkout the PR head branch on top of the base
 	if prHeadRef != "" {
 		slog.Info("checking out PR branch", "ref", prHeadRef)
 		fetchCmd := exec.Command("git", "fetch", "origin", fmt.Sprintf("pull/%d/head:pr-%d", prNumber, prNumber))
@@ -729,7 +731,6 @@ func RunPRReview() {
 		fetchCmd.Stderr = os.Stderr
 		if err := fetchCmd.Run(); err != nil {
 			slog.Warn("failed to fetch PR ref, trying branch name", "error", err)
-			// Fallback: try fetching by branch name
 			fetchCmd2 := exec.Command("git", "fetch", "origin", prHeadRef)
 			fetchCmd2.Dir = cloneDir
 			fetchCmd2.Stdout = os.Stderr
@@ -741,7 +742,7 @@ func RunPRReview() {
 		checkoutCmd.Stdout = os.Stderr
 		checkoutCmd.Stderr = os.Stderr
 		if err := checkoutCmd.Run(); err != nil {
-			slog.Warn("checkout PR branch failed, reviewing from default branch with diff", "error", err)
+			slog.Warn("checkout PR branch failed, reviewing from base branch with diff", "error", err)
 		}
 	}
 
@@ -903,18 +904,40 @@ func emitPRResult(repo string, prNumber int, title, author, verdict, risk, repor
 // cloneRepo clones the repo to /tmp/opinai-repo. Safe to call multiple times
 // (skips if already cloned).
 func cloneRepo(repo string) bool {
+	return cloneRepoBranch(repo, "")
+}
+
+// cloneRepoBranch clones a specific branch of the repo. If branch is empty,
+// clones the default branch.
+func cloneRepoBranch(repo, branch string) bool {
 	cloneDir := "/tmp/opinai-repo"
 	if info, err := os.Stat(cloneDir); err == nil && info.IsDir() {
 		slog.Info("repo already cloned", "dir", cloneDir)
 		return true
 	}
-	slog.Info("cloning repo", "repo", repo)
+	slog.Info("cloning repo", "repo", repo, "branch", branch)
 	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cloneCancel()
-	cmd := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
+	args := []string{"clone", "--depth=1"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, "https://github.com/"+repo+".git", cloneDir)
+	cmd := exec.CommandContext(cloneCtx, "git", args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		if branch != "" {
+			slog.Warn("clone with branch failed, falling back to default branch", "branch", branch, "error", err)
+			cmd2 := exec.CommandContext(cloneCtx, "git", "clone", "--depth=1", "https://github.com/"+repo+".git", cloneDir)
+			cmd2.Stdout = os.Stderr
+			cmd2.Stderr = os.Stderr
+			if err2 := cmd2.Run(); err2 != nil {
+				slog.Warn("clone failed", "error", err2)
+				return false
+			}
+			return true
+		}
 		slog.Warn("clone failed", "error", err)
 		return false
 	}

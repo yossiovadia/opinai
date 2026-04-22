@@ -510,10 +510,12 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 	prBody := ""
 	prAuthor := ""
 	prHeadRef := ""
+	prBaseRef := ""
 	if pr, err := FetchPRDetails(repo, prNumber); err == nil {
 		prBody = pr.Body
 		prAuthor = pr.User.Login
 		prHeadRef = pr.Head.Ref
+		prBaseRef = pr.Base.Ref
 	}
 	if diff, err := FetchPRDiff(repo, prNumber); err == nil {
 		prDiff = diff
@@ -609,6 +611,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 		{Name: "OPINAI_PR_DIFF", Value: prDiff},
 		{Name: "OPINAI_PR_AUTHOR", Value: prAuthor},
 		{Name: "OPINAI_PR_HEAD_REF", Value: prHeadRef},
+		{Name: "OPINAI_PR_BASE_REF", Value: prBaseRef},
 		{Name: "OPINAI_PR_CHANGED_FILES", Value: changedFilesJSON},
 		{Name: "OPINAI_PR_COMMENTS", Value: prCommentsJSON},
 		{Name: "OPINAI_REPO_CONTEXT", Value: repoContext},
