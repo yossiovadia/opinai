@@ -177,6 +177,10 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			if err != nil {
 				return fmt.Errorf("fetch issue %s#%d: %w", repo, issue, err)
 			}
+			if details.PullRequest != nil {
+				slog.Info("issue is actually a PR, routing to PR review", "repo", repo, "pr", issue)
+				return jobMgr.CreatePRReviewJob(repo, details.Number, details.Title)
+			}
 			return jobMgr.CreateReproductionJob(repo, details.Number, details.Title)
 		})
 		srv.SetVerifyFixCallback(func(repo string, issue int) error {
@@ -199,6 +203,10 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			details, err := controller.FetchIssueDetails(repo, issue)
 			if err != nil {
 				return fmt.Errorf("fetch issue %s#%d: %w", repo, issue, err)
+			}
+			if details.PullRequest != nil {
+				slog.Info("rerun: issue is actually a PR, routing to PR review", "repo", repo, "pr", issue)
+				return jobMgr.CreatePRReviewJob(repo, details.Number, details.Title)
 			}
 			return jobMgr.CreateReproductionJob(repo, details.Number, details.Title)
 		})
