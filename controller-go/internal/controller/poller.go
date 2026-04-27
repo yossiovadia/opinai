@@ -196,12 +196,16 @@ func (p *Poller) StartPendingProcessor() {
 			// Remove from pending BEFORE creating job (prevents duplicate triggers during long builds)
 			database.RemovePending(item.Repo, item.Issue)
 			title := item.Title
-			if title == "" {
-				if details, err := FetchIssueDetails(item.Repo, item.Issue); err == nil {
-					title = details.Title
-				}
+			details, detailsErr := FetchIssueDetails(item.Repo, item.Issue)
+			if detailsErr == nil && title == "" {
+				title = details.Title
 			}
-			if err := p.jobs.CreateReproductionJob(item.Repo, item.Issue, title); err != nil {
+			if detailsErr == nil && details.PullRequest != nil {
+				slog.Info("pending processor: issue is a PR, routing to PR review", "repo", item.Repo, "pr", item.Issue)
+				if err := p.jobs.CreatePRReviewJob(item.Repo, item.Issue, title); err != nil {
+					slog.Error("pending processor: failed to create PR review job", "repo", item.Repo, "pr", item.Issue, "error", err)
+				}
+			} else if err := p.jobs.CreateReproductionJob(item.Repo, item.Issue, title); err != nil {
 				slog.Error("pending processor: failed to create job", "repo", item.Repo, "issue", item.Issue, "error", err)
 			}
 			// Process one at a time, then re-check on next cycle
@@ -240,6 +244,17 @@ func (p *Poller) RetryPendingForRepo(repo string) {
 		processed, _ := database.IsProcessed(repo, item.Issue)
 		if !processed {
 			slog.Info("retry pending: creating job for queued issue", "repo", repo, "issue", item.Issue)
+			title := item.Title
+			if details, err := FetchIssueDetails(repo, item.Issue); err == nil && details.PullRequest != nil {
+				if title == "" {
+					title = details.Title
+				}
+				slog.Info("retry pending: issue is a PR, routing to PR review", "repo", repo, "pr", item.Issue)
+				if err := p.jobs.CreatePRReviewJob(repo, item.Issue, title); err != nil {
+					slog.Error("retry pending: failed to create PR review job", "repo", repo, "pr", item.Issue, "error", err)
+				}
+				return
+			}
 			if err := p.jobs.CreateReproductionJob(repo, item.Issue, item.Title); err != nil {
 				slog.Error("retry pending: failed to create job", "repo", repo, "issue", item.Issue, "error", err)
 			}
