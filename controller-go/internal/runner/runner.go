@@ -374,10 +374,11 @@ func Run() {
 	slog.Info("categorized", "category", category)
 	fmt.Printf("--- OPINAI CATEGORY: %s ---\n", category)
 
-	if !verifyFix && (category == "QUESTION" || category == "DOCS") {
+	if !verifyFix && (category == "FEATURE" || category == "QUESTION" || category == "DOCS") {
 		verdictEnum := "FEATURE_REQUEST"
 		fmt.Printf("--- OPINAI VERDICT: %s ---\n", verdictEnum)
 		catLabels := map[string]string{
+			"FEATURE":  "feature request",
 			"QUESTION": "question / help request",
 			"DOCS":     "documentation issue",
 		}
