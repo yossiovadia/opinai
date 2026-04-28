@@ -131,6 +131,10 @@ func (jm *JobManager) ListJobs() []JobInfo {
 			labels = map[string]string{}
 		}
 
+		if labels["opinai/type"] == "pr-review" {
+			continue
+		}
+
 		repo := annotations["opinai/repo-full"]
 		if repo == "" {
 			repo = labels["opinai/repo"]

@@ -1695,6 +1695,10 @@ function connectWebSocket() {
         case 'repo_update':
           loadRepos();
           break;
+        case 'pr_review_created':
+        case 'pr_review_queued':
+          loadPRReviews();
+          break;
         case 'pr_review_completed':
           loadPRReviews();
           loadStatus();
