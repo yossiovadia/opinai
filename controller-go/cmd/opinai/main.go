@@ -172,6 +172,17 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			}
 			return result
 		})
+		srv.SetListPRJobsCallback(func() []dashboard.JobInfo {
+			jobs := jobMgr.ListPRJobs()
+			result := make([]dashboard.JobInfo, len(jobs))
+			for i, j := range jobs {
+				result[i] = dashboard.JobInfo{
+					Repo: j.Repo, Issue: j.Issue, Status: j.Status,
+					CreatedAt: j.CreatedAt, Type: j.Type,
+				}
+			}
+			return result
+		})
 		srv.SetReproduceCallback(func(repo string, issue int) error {
 			details, err := controller.FetchIssueDetails(repo, issue)
 			if err != nil {

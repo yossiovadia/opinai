@@ -917,6 +917,10 @@ function updateRunningCount() {
   items.forEach(function(r) {
     if (r.status === 'Running' || r.status === 'Re-running') count++;
   });
+  // Include running PR review jobs
+  (activePRJobs || []).forEach(function(j) {
+    if (j.status === 'Running' || j.status === 'Pending') count++;
+  });
   var el = document.getElementById('runningIndicator');
   document.getElementById('runningCount').textContent = count;
   if (count > 0) {
@@ -976,11 +980,16 @@ function prRiskBadge(risk) {
   }
 }
 
+var activePRJobs = [];
 async function loadPRReviews() {
   try {
-    allPRReviews = await fetchJSON('/api/pr-reviews');
+    var results = await Promise.all([fetchJSON('/api/pr-reviews'), fetchJSON('/api/pr-jobs')]);
+    allPRReviews = results[0] || [];
+    activePRJobs = (results[1] || []).filter(function(j) {
+      return j.status === 'Running' || j.status === 'Pending';
+    });
     var section = document.getElementById('prReviewsSection');
-    if (allPRReviews && allPRReviews.length > 0) {
+    if (allPRReviews.length > 0 || activePRJobs.length > 0) {
       section.style.display = '';
       renderPRReviews();
     } else {
@@ -1005,7 +1014,7 @@ function togglePRExpand(id) {
 
 function renderPRReviews() {
   var container = document.getElementById('prReviewsContainer');
-  if (!allPRReviews || !allPRReviews.length) {
+  if ((!allPRReviews || !allPRReviews.length) && (!activePRJobs || !activePRJobs.length)) {
     container.innerHTML = '<div class="table-wrap"><div class="empty">No PR reviews yet</div></div>';
     return;
   }
@@ -1013,6 +1022,25 @@ function renderPRReviews() {
   var html = '<div class="table-wrap"><table>' +
     '<thead><tr><th>PR</th><th>Repo</th><th>Title</th><th>Author</th><th>Verdict</th><th>Risk</th><th>Duration</th><th>Reviewed</th><th></th></tr></thead>' +
     '<tbody>';
+
+  // Show running PR jobs at the top
+  (activePRJobs || []).forEach(function(j) {
+    // Skip if already in completed reviews
+    var alreadyDone = (allPRReviews || []).some(function(pr) { return pr.repo === j.repo && pr.pr_number === j.issue; });
+    if (alreadyDone) return;
+    var prUrl = j.repo ? ('https://github.com/' + j.repo + '/pull/' + j.issue) : '#';
+    html += '<tr style="background:rgba(88,166,255,0.05);">' +
+      '<td><a href="' + prUrl + '" target="_blank">#' + j.issue + '</a></td>' +
+      '<td><span class="badge badge-repo">' + escapeHtml(j.repo) + '</span></td>' +
+      '<td class="td-title" style="color:var(--text-dim);">Reviewing...</td>' +
+      '<td>--</td>' +
+      '<td><span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running</span></td>' +
+      '<td>--</td>' +
+      '<td>--</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + timeAgo(j.created_at) + '</td>' +
+      '<td></td>' +
+    '</tr>';
+  });
 
   allPRReviews.forEach(function(pr) {
     var rowId = 'pr-review-' + pr.id;
@@ -1697,10 +1725,10 @@ function connectWebSocket() {
           break;
         case 'pr_review_created':
         case 'pr_review_queued':
-          loadPRReviews();
+          loadPRReviews().then(updateRunningCount);
           break;
         case 'pr_review_completed':
-          loadPRReviews();
+          loadPRReviews().then(updateRunningCount);
           loadStatus();
           if (msg.data) showToast('PR review: ' + (msg.data.repo || '') + '#' + (msg.data.pr_number || '') + ' — ' + (msg.data.verdict || 'done'), 'success');
           break;

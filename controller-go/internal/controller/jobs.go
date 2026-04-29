@@ -177,6 +177,56 @@ func (jm *JobManager) ListJobs() []JobInfo {
 	return result
 }
 
+// ListPRJobs returns active PR review jobs (not yet completed/harvested).
+func (jm *JobManager) ListPRJobs() []JobInfo {
+	ctx := context.Background()
+	jobs, err := jm.client.BatchV1().Jobs(jm.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=opinai-runner,opinai/type=pr-review",
+	})
+	if err != nil {
+		return nil
+	}
+
+	var result []JobInfo
+	for _, job := range jobs.Items {
+		annotations := job.Annotations
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		labels := job.Labels
+
+		repo := annotations["opinai/repo-full"]
+		if repo == "" {
+			repo = labels["opinai/repo"]
+		}
+		prNumber := 0
+		fmt.Sscanf(labels["opinai/pr"], "%d", &prNumber)
+
+		status := "Pending"
+		if job.Status.Active > 0 {
+			status = "Running"
+		} else if job.Status.Succeeded > 0 {
+			status = "Completed"
+		} else if job.Status.Failed > 0 {
+			status = "Failed"
+		}
+
+		createdAt := ""
+		if job.CreationTimestamp.Time.Year() > 2000 {
+			createdAt = job.CreationTimestamp.Format("2006-01-02T15:04:05Z")
+		}
+
+		result = append(result, JobInfo{
+			Repo:      repo,
+			Issue:     prNumber,
+			Status:    status,
+			CreatedAt: createdAt,
+			Type:      "pr-review",
+		})
+	}
+	return result
+}
+
 // MaxConcurrentJobs is the total number of reproduction Jobs that can run simultaneously.
 var MaxConcurrentJobs = 3
 

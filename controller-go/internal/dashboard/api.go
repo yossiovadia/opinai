@@ -87,6 +87,20 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(jobs)
 }
 
+// --- /api/pr-jobs ---
+
+func (s *Server) handlePRJobs(w http.ResponseWriter, r *http.Request) {
+	if s.listPRJobs == nil {
+		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+	jobs := s.listPRJobs()
+	if jobs == nil {
+		jobs = []JobInfo{}
+	}
+	json.NewEncoder(w).Encode(jobs)
+}
+
 // --- /api/check-now ---
 
 func (s *Server) handleCheckNow(w http.ResponseWriter, r *http.Request) {

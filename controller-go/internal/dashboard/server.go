@@ -184,6 +184,9 @@ type JobInfo struct {
 // ListJobsFunc returns active reproduction jobs.
 type ListJobsFunc func() []JobInfo
 
+// ListPRJobsFunc returns active PR review jobs.
+type ListPRJobsFunc func() []JobInfo
+
 // SandboxManagerIface abstracts sandbox operations for the dashboard.
 type SandboxManagerIface interface {
 	ListSandboxes() []SandboxInfo
@@ -233,6 +236,7 @@ type Server struct {
 	markPRRecorded  MarkPRRecordedFunc
 	retryPending  RetryPendingFunc
 	listJobs      ListJobsFunc
+	listPRJobs    ListPRJobsFunc
 	sandbox       SandboxManagerIface
 	infraMgr      InfraManagerIface
 	reviewPR      ReviewPRFunc
@@ -287,6 +291,11 @@ func (s *Server) SetRetryPendingCallback(fn RetryPendingFunc) {
 // SetListJobsCallback sets the function called for /api/jobs.
 func (s *Server) SetListJobsCallback(fn ListJobsFunc) {
 	s.listJobs = fn
+}
+
+// SetListPRJobsCallback sets the function called for /api/pr-jobs.
+func (s *Server) SetListPRJobsCallback(fn ListPRJobsFunc) {
+	s.listPRJobs = fn
 }
 
 // SetSandboxManager sets the sandbox manager for admin endpoints.
@@ -375,6 +384,7 @@ func (s *Server) buildRouter() chi.Router {
 		r.Get("/repos", s.handleRepos)
 		r.Get("/runs", s.handleRuns)
 		r.Get("/jobs", s.handleJobs)
+		r.Get("/pr-jobs", s.handlePRJobs)
 		r.Get("/report/{id}", s.handleReport)
 		r.Get("/run-history", s.handleRunHistory)
 		r.Get("/pr-reviews", s.handlePRReviews)
