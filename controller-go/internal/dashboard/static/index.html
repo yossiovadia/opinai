@@ -953,9 +953,9 @@ function updateRunningCount() {
   items.forEach(function(r) {
     if (r.status === 'Running' || r.status === 'Re-running') count++;
   });
-  // Include running PR review jobs
+  // Include active PR review jobs (running + queued)
   (activePRJobs || []).forEach(function(j) {
-    if (j.status === 'Running' || j.status === 'Pending') count++;
+    if (j.status === 'Running' || j.status === 'Pending' || j.status === 'Queued') count++;
   });
   var el = document.getElementById('runningIndicator');
   document.getElementById('runningCount').textContent = count;
@@ -1022,7 +1022,7 @@ async function loadPRReviews() {
     var results = await Promise.all([fetchJSON('/api/pr-reviews'), fetchJSON('/api/pr-jobs')]);
     allPRReviews = results[0] || [];
     activePRJobs = (results[1] || []).filter(function(j) {
-      return j.status === 'Running' || j.status === 'Pending';
+      return j.status === 'Running' || j.status === 'Pending' || j.status === 'Queued';
     });
     var section = document.getElementById('prReviewsSection');
     if (allPRReviews.length > 0 || activePRJobs.length > 0) {
@@ -1059,21 +1059,25 @@ function renderPRReviews() {
     '<thead><tr><th>PR</th><th>Repo</th><th>Title</th><th>Author</th><th>Verdict</th><th>Risk</th><th>Duration</th><th>Reviewed</th><th></th></tr></thead>' +
     '<tbody>';
 
-  // Show running PR jobs at the top
+  // Show running/queued PR jobs at the top
   (activePRJobs || []).forEach(function(j) {
-    // Skip if already in completed reviews
     var alreadyDone = (allPRReviews || []).some(function(pr) { return pr.repo === j.repo && pr.pr_number === j.issue; });
     if (alreadyDone) return;
     var prUrl = j.repo ? ('https://github.com/' + j.repo + '/pull/' + j.issue) : '#';
+    var isQueued = j.status === 'Queued';
+    var statusBadge = isQueued
+      ? '<span class="verdict" style="color:var(--yellow);">&#x23F3; Queued</span>'
+      : '<span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running</span>';
+    var label = isQueued ? 'Queued...' : 'Reviewing...';
     html += '<tr style="background:rgba(88,166,255,0.05);">' +
       '<td><a href="' + prUrl + '" target="_blank">#' + j.issue + '</a></td>' +
       '<td><span class="badge badge-repo">' + escapeHtml(j.repo) + '</span></td>' +
-      '<td class="td-title" style="color:var(--text-dim);">Reviewing...</td>' +
+      '<td class="td-title" style="color:var(--text-dim);">' + label + '</td>' +
       '<td>--</td>' +
-      '<td><span class="verdict verdict-running"><span class="spin">&#x1F504;</span> Running</span></td>' +
+      '<td>' + statusBadge + '</td>' +
       '<td>--</td>' +
       '<td>--</td>' +
-      '<td style="font-size:11px;color:var(--text-dim)">' + timeAgo(j.created_at) + '</td>' +
+      '<td style="font-size:11px;color:var(--text-dim)">' + (j.created_at ? timeAgo(j.created_at) : 'pending') + '</td>' +
       '<td></td>' +
     '</tr>';
   });

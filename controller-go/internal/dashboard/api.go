@@ -90,14 +90,32 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 // --- /api/pr-jobs ---
 
 func (s *Server) handlePRJobs(w http.ResponseWriter, r *http.Request) {
-	if s.listPRJobs == nil {
-		json.NewEncoder(w).Encode([]any{})
-		return
+	var jobs []JobInfo
+	if s.listPRJobs != nil {
+		jobs = s.listPRJobs()
 	}
-	jobs := s.listPRJobs()
 	if jobs == nil {
 		jobs = []JobInfo{}
 	}
+
+	// Include pending PRs (queued but not yet created as K8s jobs)
+	activeSet := make(map[string]bool)
+	for _, j := range jobs {
+		activeSet[fmt.Sprintf("%s#%d", j.Repo, j.Issue)] = true
+	}
+	for _, p := range database.GetAllPendingPRs() {
+		key := fmt.Sprintf("%s#%d", p.Repo, p.PRNumber)
+		if activeSet[key] {
+			continue
+		}
+		jobs = append(jobs, JobInfo{
+			Repo:   p.Repo,
+			Issue:  p.PRNumber,
+			Status: "Queued",
+			Type:   "pr-review",
+		})
+	}
+
 	json.NewEncoder(w).Encode(jobs)
 }
 
