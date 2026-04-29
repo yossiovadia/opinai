@@ -799,6 +799,17 @@ func RunPRReview() {
 		}
 	}
 
+	// Inject related PR context for stacked/series reviews
+	relatedPRsCtx := os.Getenv("OPINAI_RELATED_PRS")
+	if relatedPRsCtx != "" {
+		richCtx += "\n\n## Related PRs in This Series\n\n" +
+			"This PR is part of a series of related/stacked PRs. " +
+			"Review this PR individually, but DO NOT flag issues that are already addressed in a sibling PR. " +
+			"If a finding in this PR is resolved by another PR in the series, note it (e.g. 'this is handled in PR #X'). " +
+			"Here are the other PRs:\n\n" + relatedPRsCtx
+		slog.Info("injected related PRs context", "bytes", len(relatedPRsCtx))
+	}
+
 	slog.Info("starting PR review agent", "changed_files", len(changedFilesSummary), "diff_bytes", len(truncatedDiff), "existing_comments", len(existingCommentsCtx) > 0)
 
 	// Run agent investigation

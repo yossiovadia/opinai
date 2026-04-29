@@ -54,7 +54,7 @@
   <section class="section">
     <div class="reproduce-bar">
       <input type="text" id="reproduceInput" class="reproduce-input"
-             placeholder="Paste GitHub issue or PR URL...">
+             placeholder="Paste GitHub issue/PR URL (multiple URLs for stacked PR series)...">
       <button class="btn btn-primary" onclick="reproduceFromUrl()">&#x1F50D; Analyze</button>
     </div>
   </section>
@@ -843,58 +843,94 @@ function parseGitHubUrl(url) {
 
 async function reproduceFromUrl() {
   var input = document.getElementById('reproduceInput');
-  var url = input.value.trim();
-  if (!url) { showToast('Paste a GitHub issue or PR URL first', 'error'); return; }
-  var parsed = parseGitHubUrl(url);
-  if (!parsed) { showToast('Invalid URL — expected a GitHub issue or PR link', 'error'); return; }
-  // Check if repo is monitored
+  var raw = input.value.trim();
+  if (!raw) { showToast('Paste a GitHub issue or PR URL first', 'error'); return; }
+
+  // Split on commas, newlines, or whitespace to support multiple URLs
+  var urls = raw.split(/[,\n\s]+/).filter(function(u) { return u.trim().length > 0; });
+  var allParsed = [];
+  for (var i = 0; i < urls.length; i++) {
+    var p = parseGitHubUrl(urls[i].trim());
+    if (p) allParsed.push(p);
+  }
+  if (allParsed.length === 0) { showToast('Invalid URL — expected a GitHub issue or PR link', 'error'); return; }
+
+  // Check if repos are monitored
   try {
     var repos = await fetchJSON('/api/repos');
     var monitored = repos.map(function(r) { return r.name; });
-    if (monitored.indexOf(parsed.repo) === -1) {
-      showToast('This repo is not monitored by OpinAI. Add it first.', 'error');
-      return;
-    }
-  } catch(e) { /* proceed anyway, server will validate */ }
-  input.value = '';
-
-  if (parsed.type === 'pr') {
-    // Trigger PR review
-    showToast('Queuing PR review: ' + parsed.repo + '#' + parsed.number + '...', 'info');
-    try {
-      var resp = await fetch(API + '/api/review-pr', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ repo: parsed.repo, pr_number: parsed.number })
-      });
-      var data = await resp.json();
-      if (!resp.ok) {
-        showToast('Failed: ' + (data.message || resp.status), 'error');
+    for (var i = 0; i < allParsed.length; i++) {
+      if (monitored.indexOf(allParsed[i].repo) === -1) {
+        showToast(allParsed[i].repo + ' is not monitored by OpinAI. Add it first.', 'error');
         return;
       }
-      showToast('PR review queued: ' + parsed.repo + '#' + parsed.number, 'success');
-      setTimeout(loadPRReviews, 3000);
-    } catch(e) {
-      showToast('Failed to queue PR review: ' + (e.message || e), 'error');
     }
-  } else {
-    // Trigger issue reproduction
+  } catch(e) { /* proceed anyway */ }
+  input.value = '';
+
+  // Separate PRs and issues
+  var prs = allParsed.filter(function(p) { return p.type === 'pr'; });
+  var issues = allParsed.filter(function(p) { return p.type === 'issue'; });
+
+  // Queue PR reviews — if multiple PRs from same repo, pass as related series
+  if (prs.length > 0) {
+    var prsByRepo = {};
+    prs.forEach(function(p) {
+      if (!prsByRepo[p.repo]) prsByRepo[p.repo] = [];
+      prsByRepo[p.repo].push(p.number);
+    });
+
+    for (var repo in prsByRepo) {
+      var prNums = prsByRepo[repo];
+      var relatedPRs = prNums.length > 1 ? prNums : [];
+
+      for (var i = 0; i < prNums.length; i++) {
+        var prNum = prNums[i];
+        showToast('Queuing PR review: ' + repo + '#' + prNum + (relatedPRs.length > 1 ? ' (series of ' + relatedPRs.length + ')' : '') + '...', 'info');
+        try {
+          var body = { repo: repo, pr_number: prNum };
+          if (relatedPRs.length > 1) body.related_prs = relatedPRs;
+          var resp = await fetch(API + '/api/review-pr', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+          });
+          var data = await resp.json();
+          if (!resp.ok) {
+            showToast('Failed: ' + (data.message || resp.status), 'error');
+          } else {
+            showToast('PR review queued: ' + repo + '#' + prNum, 'success');
+          }
+        } catch(e) {
+          showToast('Failed to queue PR review: ' + (e.message || e), 'error');
+        }
+      }
+    }
+    setTimeout(loadPRReviews, 3000);
+  }
+
+  // Queue issue reproductions
+  issues.forEach(function(parsed) {
     var rKey = parsed.repo + '#' + parsed.number;
     var isNew = !_lastIssueData || !_lastIssueData.find(function(r) { return (r.repo || '') + '#' + (r.issue || '') === rKey; });
     pendingReRuns[rKey] = { timestamp: Date.now(), repo: parsed.repo, issue: parsed.number, isNew: isNew };
     var rRowId = 'issue-' + parsed.repo.replace(/[^a-zA-Z0-9]/g, '-') + '-' + parsed.number;
     _autoExpandAfterRender.add(rRowId);
+  });
+  if (issues.length > 0) {
     renderIssues();
-    try {
-      await fetchJSON('/api/reproduce', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ repo: parsed.repo, issue_number: parsed.number })
-      });
-      showToast('Queued: ' + parsed.repo + '#' + parsed.number, 'info');
-    } catch(e) {
-      showToast('Failed to queue: ' + (e.message || e), 'error');
-      delete pendingReRuns[rKey];
+    for (var i = 0; i < issues.length; i++) {
+      try {
+        await fetchJSON('/api/reproduce', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ repo: issues[i].repo, issue_number: issues[i].number })
+        });
+        showToast('Queued: ' + issues[i].repo + '#' + issues[i].number, 'info');
+      } catch(e) {
+        showToast('Failed to queue: ' + (e.message || e), 'error');
+        delete pendingReRuns[issues[i].repo + '#' + issues[i].number];
+      }
     }
     loadIssuesImmediate();
   }

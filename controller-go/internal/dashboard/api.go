@@ -151,7 +151,7 @@ func (s *Server) handleReproduce(w http.ResponseWriter, r *http.Request) {
 		}
 		// Fetch PR title from GitHub for better tracking
 		prTitle := fmt.Sprintf("PR #%d", req.IssueNumber)
-		if err := s.reviewPR(req.Repo, req.IssueNumber, prTitle); err != nil {
+		if err := s.reviewPR(req.Repo, req.IssueNumber, prTitle, nil); err != nil {
 			slog.Warn("PR review job creation failed, queueing as pending", "repo", req.Repo, "pr", req.IssueNumber, "error", err)
 			database.AddPendingPR(req.Repo, req.IssueNumber, prTitle)
 		}
@@ -488,8 +488,9 @@ func (s *Server) handlePRReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReviewPR(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Repo     string `json:"repo"`
-		PRNumber int    `json:"pr_number"`
+		Repo       string `json:"repo"`
+		PRNumber   int    `json:"pr_number"`
+		RelatedPRs []int  `json:"related_prs,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		jsonError(w, "invalid request", 400)
@@ -519,9 +520,8 @@ func (s *Server) handleReviewPR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch PR title for the job
 	title := fmt.Sprintf("PR #%d", req.PRNumber)
-	if err := s.reviewPR(req.Repo, req.PRNumber, title); err != nil {
+	if err := s.reviewPR(req.Repo, req.PRNumber, title, req.RelatedPRs); err != nil {
 		jsonError(w, "failed to create PR review job: "+err.Error(), 500)
 		return
 	}

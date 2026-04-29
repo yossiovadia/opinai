@@ -166,7 +166,8 @@ type MarkPRRecordedFunc func(repo string, prNumber int)
 type RetryPendingFunc func(repo string)
 
 // ReviewPRFunc is the callback for creating PR review jobs.
-type ReviewPRFunc func(repo string, prNumber int, title string) error
+// relatedPRs is an optional list of sibling PR numbers for stacked/series reviews.
+type ReviewPRFunc func(repo string, prNumber int, title string, relatedPRs []int) error
 
 // CheckOutcomesFunc is the callback for triggering outcome checks.
 type CheckOutcomesFunc func()

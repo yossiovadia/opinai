@@ -523,7 +523,7 @@ func PRReviewJobName(repo string, prNumber int) string {
 }
 
 // CreatePRReviewJob creates a K8s Job to review a pull request.
-func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string) error {
+func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string, relatedPRs ...[]int) error {
 	name := PRReviewJobName(repo, prNumber)
 	ctx := context.Background()
 
@@ -644,6 +644,41 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 		}
 	}
 
+	// Build related PRs context for stacked/series reviews
+	relatedPRsCtx := ""
+	if len(relatedPRs) > 0 && len(relatedPRs[0]) > 0 {
+		var parts []string
+		for _, rpr := range relatedPRs[0] {
+			if rpr == prNumber {
+				continue
+			}
+			rprDetails, err := FetchPRDetails(repo, rpr)
+			rprTitle := fmt.Sprintf("PR #%d", rpr)
+			rprBody := ""
+			if err == nil {
+				rprTitle = rprDetails.Title
+				rprBody = rprDetails.Body
+			}
+			rprDiff := ""
+			if d, err := FetchPRDiff(repo, rpr); err == nil {
+				if len(d) > 15000 {
+					d = d[:15000] + "\n... (diff truncated)"
+				}
+				rprDiff = d
+			}
+			part := fmt.Sprintf("### PR #%d: %s\n\n**Description:**\n%s\n\n**Diff:**\n```\n%s\n```",
+				rpr, rprTitle, truncateStr(rprBody, 2000), rprDiff)
+			parts = append(parts, part)
+		}
+		if len(parts) > 0 {
+			relatedPRsCtx = strings.Join(parts, "\n\n---\n\n")
+			if len(relatedPRsCtx) > 50000 {
+				relatedPRsCtx = relatedPRsCtx[:50000] + "\n... (related PR context truncated)"
+			}
+			slog.Info("built related PRs context", "pr", prNumber, "related", len(parts), "bytes", len(relatedPRsCtx))
+		}
+	}
+
 	// Select runner image
 	imgSel := jm.selectRunnerImage(repo)
 	runnerImage := jm.image
@@ -673,6 +708,7 @@ func (jm *JobManager) CreatePRReviewJob(repo string, prNumber int, title string)
 		{Name: "OPINAI_CONTROLLER_URL", Value: controllerURL(jm.namespace)},
 		{Name: "OPINAI_RUNNER_IMAGE", Value: runnerImage},
 		{Name: "OPINAI_PR_INVESTIGATION_CONTEXT", Value: investigationContext},
+		{Name: "OPINAI_RELATED_PRS", Value: relatedPRsCtx},
 		{Name: "GOOGLE_APPLICATION_CREDENTIALS", Value: "/var/run/secrets/gcp/credentials.json"},
 	}
 	env = append(env, secretEnvVar("AI_PROVIDER", "opinai-credentials", "AI_PROVIDER")...)

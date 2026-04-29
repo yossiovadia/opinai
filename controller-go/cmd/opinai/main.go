@@ -221,8 +221,8 @@ func runController(httpAddr, httpsAddr, dbPath string, logBuf *dashboard.LogBuff
 			}
 			return jobMgr.CreateReproductionJob(repo, details.Number, details.Title)
 		})
-		srv.SetReviewPRCallback(func(repo string, prNumber int, title string) error {
-			return jobMgr.CreatePRReviewJob(repo, prNumber, title)
+		srv.SetReviewPRCallback(func(repo string, prNumber int, title string, relatedPRs []int) error {
+			return jobMgr.CreatePRReviewJob(repo, prNumber, title, relatedPRs)
 		})
 	}
 
