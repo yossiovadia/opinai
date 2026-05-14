@@ -40,8 +40,12 @@ func (p *Poller) Start() {
 		p.state.SetPollInfo(pollCount, now)
 
 		totalNew := 0
-		// Re-read REPOS each cycle in case admin added/removed repos
-		repos := dashboard.ParseRepos(os.Getenv("REPOS"))
+		// AUTO_POLL_REPOS controls which repos get auto-polled for new issues.
+		// If unset, falls back to REPOS (all monitored repos).
+		repos := dashboard.ParseRepos(os.Getenv("AUTO_POLL_REPOS"))
+		if len(repos) == 0 {
+			repos = dashboard.ParseRepos(os.Getenv("REPOS"))
+		}
 		if len(repos) == 0 {
 			repos = p.repos
 		}
